@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
 import { FileText, Link as LinkIcon, X, Plus, Calendar } from 'lucide-react';
-import { TaskStatus, TaskPriority } from '@/types';
+import { TaskPriority } from '@/types';
 
 const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
   { value: 'none', label: 'None', color: 'text-zinc-600' },
@@ -19,12 +19,12 @@ const priorityColor: Record<string, string> = {
 };
 
 export function TaskEditorPane() {
-  const { tasks, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote } = useTaskStore();
+  const { tasks, columns, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote } = useTaskStore();
   const task = tasks.find((t) => t.id === selectedTaskId);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [status, setStatus] = useState<TaskStatus>('todo');
+  const [status, setStatus] = useState<string>('todo');
   const [priority, setPriority] = useState<TaskPriority>('none');
   const [dueDate, setDueDate] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -81,7 +81,7 @@ export function TaskEditorPane() {
     }
   };
 
-  const handleStatusChange = (newStatus: TaskStatus) => {
+  const handleStatusChange = (newStatus: string) => {
     setStatus(newStatus);
     save({ status: newStatus });
   };
@@ -170,12 +170,12 @@ export function TaskEditorPane() {
             <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
             <select
               value={status}
-              onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
+              onChange={(e) => handleStatusChange(e.target.value)}
               className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
             >
-              <option value="todo">To Do</option>
-              <option value="in_progress">In Progress</option>
-              <option value="done">Done</option>
+              {columns.map((col) => (
+                <option key={col.id} value={col.statusKey}>{col.name}</option>
+              ))}
               <option value="archived">Archived</option>
             </select>
           </div>
@@ -218,7 +218,7 @@ export function TaskEditorPane() {
                 <button
                   type="button"
                   onClick={() => {
-                    const today = new Date().toISOString().split('T')[0];
+                    const today = new Date().toISOString().split('T')[0] ?? '';
                     handleDueDateChange(today);
                   }}
                   className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
@@ -260,7 +260,7 @@ export function TaskEditorPane() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); }
                   if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
-                    handleRemoveTag(tags[tags.length - 1]);
+                    handleRemoveTag(tags[tags.length - 1]!);
                   }
                 }}
                 onBlur={() => { if (tagInput.trim()) handleAddTag(); }}

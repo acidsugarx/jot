@@ -6,8 +6,8 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, CreateTaskInput, Task, TaskPriority, TaskStatus, UpdateSettingsInput,
-    UpdateTaskInput, UpdateTaskStatusInput,
+    AppSettings, CreateColumnInput, CreateTaskInput, KanbanColumn, ReorderColumnsInput, Task,
+    TaskPriority, UpdateColumnInput, UpdateSettingsInput, UpdateTaskInput, UpdateTaskStatusInput,
 };
 use crate::parser::parse_task_input;
 
@@ -63,6 +63,13 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS kanban_columns (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status_key TEXT NOT NULL UNIQUE,
+                position INTEGER NOT NULL DEFAULT 0
+            );
             ",
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
@@ -80,8 +87,40 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             .map_err(|error| format!("Failed to add description column: {error}"))?;
     }
 
+    seed_default_columns(connection)?;
+
     Ok(())
 }
+
+fn seed_default_columns(connection: &Connection) -> Result<(), String> {
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM kanban_columns", [], |row| row.get(0))
+        .map_err(|error| format!("Failed to count columns: {error}"))?;
+
+    if count > 0 {
+        return Ok(());
+    }
+
+    let defaults = [
+        ("To Do", "todo", 0),
+        ("In Progress", "in_progress", 1),
+        ("Done", "done", 2),
+    ];
+
+    for (name, status_key, position) in defaults {
+        let id = Uuid::new_v4().to_string();
+        connection
+            .execute(
+                "INSERT INTO kanban_columns (id, name, status_key, position) VALUES (?1, ?2, ?3, ?4)",
+                params![id, name, status_key, position],
+            )
+            .map_err(|error| format!("Failed to seed default column '{name}': {error}"))?;
+    }
+
+    Ok(())
+}
+
+// ── Task commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn create_task(db: State<'_, DatabaseState>, input: CreateTaskInput) -> Result<Task, String> {
@@ -126,7 +165,7 @@ pub fn create_task(db: State<'_, DatabaseState>, input: CreateTaskInput) -> Resu
         id: Uuid::new_v4().to_string(),
         title,
         description: None,
-        status: input.status.unwrap_or(TaskStatus::Todo),
+        status: input.status.unwrap_or_else(|| "todo".to_string()),
         priority: input
             .priority
             .or_else(|| parsed_input.as_ref().and_then(|value| value.priority))
@@ -153,6 +192,51 @@ pub fn create_task(db: State<'_, DatabaseState>, input: CreateTaskInput) -> Resu
 }
 
 #[tauri::command]
+pub fn get_tasks(db: State<'_, DatabaseState>) -> Result<Vec<Task>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_tasks(&connection)
+}
+
+#[tauri::command]
+pub fn update_task_status(
+    db: State<'_, DatabaseState>,
+    input: UpdateTaskStatusInput,
+) -> Result<Task, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    set_task_status(&connection, &input.id, &input.status)
+}
+
+#[tauri::command]
+pub fn update_task(db: State<'_, DatabaseState>, input: UpdateTaskInput) -> Result<Task, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    patch_task(&connection, &input)
+}
+
+#[tauri::command]
+pub fn delete_task(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    remove_task(&connection, &id)
+}
+
+// ── Settings commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
 pub fn get_settings(db: State<'_, DatabaseState>) -> Result<AppSettings, String> {
     let connection = db
         .connection
@@ -176,6 +260,8 @@ pub fn update_settings(
 
     load_settings(&connection)
 }
+
+// ── Note commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn open_linked_note(path: String) -> Result<(), String> {
@@ -211,48 +297,147 @@ pub fn open_linked_note(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Column commands ──────────────────────────────────────────────────────────
+
 #[tauri::command]
-pub fn get_tasks(db: State<'_, DatabaseState>) -> Result<Vec<Task>, String> {
+pub fn get_columns(db: State<'_, DatabaseState>) -> Result<Vec<KanbanColumn>, String> {
     let connection = db
         .connection
         .lock()
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
-    list_tasks(&connection)
+    list_columns(&connection)
 }
 
 #[tauri::command]
-pub fn update_task_status(
+pub fn create_column(
     db: State<'_, DatabaseState>,
-    input: UpdateTaskStatusInput,
-) -> Result<Task, String> {
+    input: CreateColumnInput,
+) -> Result<KanbanColumn, String> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("Column name cannot be empty.".to_string());
+    }
+
     let connection = db
         .connection
         .lock()
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
-    set_task_status(&connection, &input.id, input.status)
+    let status_key = unique_status_key(&connection, &name)?;
+
+    let max_position: i32 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) FROM kanban_columns",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to get max position: {error}"))?;
+
+    let column = KanbanColumn {
+        id: Uuid::new_v4().to_string(),
+        name,
+        status_key,
+        position: max_position + 1,
+    };
+
+    connection
+        .execute(
+            "INSERT INTO kanban_columns (id, name, status_key, position) VALUES (?1, ?2, ?3, ?4)",
+            params![column.id, column.name, column.status_key, column.position],
+        )
+        .map_err(|error| format!("Failed to insert column: {error}"))?;
+
+    Ok(column)
 }
 
 #[tauri::command]
-pub fn delete_task(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+pub fn update_column(
+    db: State<'_, DatabaseState>,
+    input: UpdateColumnInput,
+) -> Result<KanbanColumn, String> {
     let connection = db
         .connection
         .lock()
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
-    remove_task(&connection, &id)
+    if let Some(ref name) = input.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Column name cannot be empty.".to_string());
+        }
+        connection
+            .execute(
+                "UPDATE kanban_columns SET name = ?1 WHERE id = ?2",
+                params![name, input.id],
+            )
+            .map_err(|error| format!("Failed to update column name: {error}"))?;
+    }
+
+    fetch_column(&connection, &input.id)?
+        .ok_or_else(|| format!("Column {} was not found.", input.id))
 }
 
 #[tauri::command]
-pub fn update_task(db: State<'_, DatabaseState>, input: UpdateTaskInput) -> Result<Task, String> {
+pub fn delete_column(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
     let connection = db
         .connection
         .lock()
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
-    patch_task(&connection, &input)
+    let column =
+        fetch_column(&connection, &id)?.ok_or_else(|| format!("Column {id} was not found."))?;
+
+    // Refuse if tasks are assigned to this column
+    let task_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE status = ?1",
+            params![column.status_key],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count tasks in column: {error}"))?;
+
+    if task_count > 0 {
+        return Err(format!(
+            "Cannot delete column '{}': {} task(s) still assigned to it.",
+            column.name, task_count
+        ));
+    }
+
+    let affected = connection
+        .execute("DELETE FROM kanban_columns WHERE id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete column: {error}"))?;
+
+    if affected == 0 {
+        return Err(format!("Column {id} was not found."));
+    }
+
+    Ok(())
 }
+
+#[tauri::command]
+pub fn reorder_columns(
+    db: State<'_, DatabaseState>,
+    input: ReorderColumnsInput,
+) -> Result<Vec<KanbanColumn>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    for (position, id) in input.ids.iter().enumerate() {
+        connection
+            .execute(
+                "UPDATE kanban_columns SET position = ?1 WHERE id = ?2",
+                params![position as i32, id],
+            )
+            .map_err(|error| format!("Failed to update column position: {error}"))?;
+    }
+
+    list_columns(&connection)
+}
+
+// ── Private helpers ──────────────────────────────────────────────────────────
 
 fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
     let tags = serde_json::to_string(&task.tags)
@@ -278,7 +463,7 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 task.id,
                 task.title,
                 task.description,
-                task.status.as_str(),
+                task.status,
                 task.priority.as_str(),
                 tags,
                 task.due_date,
@@ -311,13 +496,13 @@ fn list_tasks(connection: &Connection) -> Result<Vec<Task>, String> {
         .map_err(|error| format!("Failed to read tasks from SQLite: {error}"))
 }
 
-fn set_task_status(connection: &Connection, id: &str, status: TaskStatus) -> Result<Task, String> {
+fn set_task_status(connection: &Connection, id: &str, status: &str) -> Result<Task, String> {
     let updated_at = timestamp();
 
     let affected_rows = connection
         .execute(
             "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            params![status.as_str(), updated_at, id],
+            params![status, updated_at, id],
         )
         .map_err(|error| format!("Failed to update task status: {error}"))?;
 
@@ -357,73 +542,6 @@ fn fetch_task(connection: &Connection, id: &str) -> Result<Option<Task>, String>
     Ok(task)
 }
 
-fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
-    let vault_dir = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'vault_dir'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load settings: {error}"))?
-        .flatten();
-
-    Ok(AppSettings { vault_dir })
-}
-
-fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {
-    connection
-        .execute(
-            "
-            INSERT INTO settings (key, value)
-            VALUES (?1, ?2)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            ",
-            params![key, value],
-        )
-        .map_err(|error| format!("Failed to save setting {key}: {error}"))?;
-
-    Ok(())
-}
-
-fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
-    let status = row.get::<_, String>(3)?;
-    let priority = row.get::<_, String>(4)?;
-    let tags = row.get::<_, String>(5)?;
-
-    let tags = serde_json::from_str(&tags).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-
-    Ok(Task {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        description: row.get(2)?,
-        status: TaskStatus::from_str(&status).ok_or_else(|| invalid_value_error(3, &status))?,
-        priority: TaskPriority::from_str(&priority)
-            .ok_or_else(|| invalid_value_error(4, &priority))?,
-        tags,
-        due_date: row.get(6)?,
-        linked_note_path: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
-    })
-}
-
-fn invalid_value_error(index: usize, value: &str) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        index,
-        rusqlite::types::Type::Text,
-        Box::new(std::io::Error::other(format!(
-            "Invalid SQLite enum value: {value}"
-        ))),
-    )
-}
-
-fn timestamp() -> String {
-    Utc::now().to_rfc3339()
-}
-
 fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, String> {
     let mut sets: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -442,9 +560,9 @@ fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, 
         values.push(Box::new(description.clone()));
     }
 
-    if let Some(status) = input.status {
+    if let Some(ref status) = input.status {
         sets.push("status = ?".to_string());
-        values.push(Box::new(status.as_str().to_string()));
+        values.push(Box::new(status.clone()));
     }
 
     if let Some(priority) = input.priority {
@@ -488,6 +606,154 @@ fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, 
 
     fetch_task(connection, &input.id)?
         .ok_or_else(|| format!("Task {} was not found after update.", input.id))
+}
+
+fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
+    let priority = row.get::<_, String>(4)?;
+    let tags = row.get::<_, String>(5)?;
+
+    let tags = serde_json::from_str(&tags).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+
+    Ok(Task {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        status: row.get(3)?,
+        priority: TaskPriority::from_str(&priority)
+            .ok_or_else(|| invalid_value_error(4, &priority))?,
+        tags,
+        due_date: row.get(6)?,
+        linked_note_path: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+fn list_columns(connection: &Connection) -> Result<Vec<KanbanColumn>, String> {
+    let mut stmt = connection
+        .prepare("SELECT id, name, status_key, position FROM kanban_columns ORDER BY position ASC")
+        .map_err(|error| format!("Failed to prepare columns query: {error}"))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(KanbanColumn {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                status_key: row.get(2)?,
+                position: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query columns: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read columns from SQLite: {error}"))
+}
+
+fn fetch_column(connection: &Connection, id: &str) -> Result<Option<KanbanColumn>, String> {
+    connection
+        .query_row(
+            "SELECT id, name, status_key, position FROM kanban_columns WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(KanbanColumn {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    status_key: row.get(2)?,
+                    position: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to fetch column: {error}"))
+}
+
+fn unique_status_key(connection: &Connection, name: &str) -> Result<String, String> {
+    let base = slugify_title(name);
+    let base = if base.is_empty() {
+        "column".to_string()
+    } else {
+        base
+    };
+
+    // Check if base key is already taken
+    let exists: bool = connection
+        .query_row(
+            "SELECT COUNT(*) FROM kanban_columns WHERE status_key = ?1",
+            params![base],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|error| format!("Failed to check status key uniqueness: {error}"))?;
+
+    if !exists {
+        return Ok(base);
+    }
+
+    // Append a number suffix until unique
+    for i in 2..=999 {
+        let candidate = format!("{base}-{i}");
+        let taken: bool = connection
+            .query_row(
+                "SELECT COUNT(*) FROM kanban_columns WHERE status_key = ?1",
+                params![candidate],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .map_err(|error| format!("Failed to check status key uniqueness: {error}"))?;
+
+        if !taken {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!(
+        "Could not generate a unique status key for '{name}'."
+    ))
+}
+
+fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
+    let vault_dir = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'vault_dir'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load settings: {error}"))?
+        .flatten();
+
+    Ok(AppSettings { vault_dir })
+}
+
+fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO settings (key, value)
+            VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![key, value],
+        )
+        .map_err(|error| format!("Failed to save setting {key}: {error}"))?;
+
+    Ok(())
+}
+
+fn invalid_value_error(index: usize, value: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        index,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::other(format!(
+            "Invalid SQLite enum value: {value}"
+        ))),
+    )
+}
+
+fn timestamp() -> String {
+    Utc::now().to_rfc3339()
 }
 
 fn create_zettel_note(
@@ -584,7 +850,7 @@ mod tests {
             id: "task-1".to_string(),
             title: "Write architecture review".to_string(),
             description: Some("Review the new auth middleware".to_string()),
-            status: TaskStatus::Todo,
+            status: "todo".to_string(),
             priority: TaskPriority::High,
             tags: vec!["work".to_string(), "dev".to_string()],
             due_date: Some("2026-03-14T10:00:00Z".to_string()),
@@ -600,9 +866,9 @@ mod tests {
         assert_eq!(tasks[0].title, task.title);
         assert_eq!(tasks[0].priority, TaskPriority::High);
 
-        let updated_task = set_task_status(&connection, &task.id, TaskStatus::Done)
-            .expect("status update should succeed");
-        assert_eq!(updated_task.status, TaskStatus::Done);
+        let updated_task =
+            set_task_status(&connection, &task.id, "done").expect("status update should succeed");
+        assert_eq!(updated_task.status, "done");
 
         remove_task(&connection, &task.id).expect("task should delete");
         let tasks = list_tasks(&connection).expect("task list should still load");
@@ -613,7 +879,6 @@ mod tests {
     fn deleting_missing_task_returns_error() {
         let connection = test_connection();
         let result = remove_task(&connection, "missing-task");
-
         assert!(result.is_err());
     }
 
@@ -671,5 +936,64 @@ mod tests {
         );
 
         fs::remove_dir_all(&vault_dir).expect("vault dir should be removable");
+    }
+
+    #[test]
+    fn default_columns_are_seeded_on_first_run() {
+        let connection = test_connection();
+        let columns = list_columns(&connection).expect("columns should load");
+        assert_eq!(columns.len(), 3);
+        assert_eq!(columns[0].status_key, "todo");
+        assert_eq!(columns[1].status_key, "in_progress");
+        assert_eq!(columns[2].status_key, "done");
+    }
+
+    #[test]
+    fn create_column_generates_unique_status_key() {
+        let connection = test_connection();
+        // "todo" slug already exists; "To Do" slugifies to "to-do" which is free
+        let key = unique_status_key(&connection, "To Do").expect("key should generate");
+        assert_eq!(key, "to-do");
+        // Insert it, then try again — should get "to-do-2"
+        connection
+            .execute(
+                "INSERT INTO kanban_columns (id, name, status_key, position) VALUES ('x', 'To Do', 'to-do', 99)",
+                [],
+            )
+            .unwrap();
+        let key2 = unique_status_key(&connection, "To Do").expect("key should generate");
+        assert_eq!(key2, "to-do-2");
+    }
+
+    #[test]
+    fn delete_column_blocked_when_tasks_exist() {
+        let connection = test_connection();
+        let task = Task {
+            id: "t1".to_string(),
+            title: "Blocked task".to_string(),
+            description: None,
+            status: "archived".to_string(),
+            priority: TaskPriority::None,
+            tags: vec![],
+            due_date: None,
+            linked_note_path: None,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+        };
+        insert_task(&connection, &task).expect("task should insert");
+
+        // Give the task a status matching a column
+        set_task_status(&connection, &task.id, "todo").expect("status should update");
+
+        let columns = list_columns(&connection).expect("columns should load");
+        let todo_col = columns.iter().find(|c| c.status_key == "todo").unwrap();
+        let result = connection
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE status = ?1",
+                params![todo_col.status_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(result, 1);
     }
 }

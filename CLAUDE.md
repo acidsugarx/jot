@@ -138,7 +138,7 @@ if (!('__TAURI_INTERNALS__' in window)) { return; }
 const tasks = await invoke<Task[]>('get_tasks');
 ```
 
-Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`.
+Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`, `get_columns`, `create_column`, `update_column`, `delete_column`, `reorder_columns`.
 
 ### UI Layout Pattern
 
@@ -194,6 +194,8 @@ When `@zettel` is in input:
 
 SQLite located at OS AppData directory (`jot.db`):
 
+Task `status` is a free-form string matching a `kanban_columns.status_key`, or the reserved value `"archived"`. `TaskStatus` is `string` in TypeScript; the `TaskStatus` Rust enum has been removed.
+
 ```sql
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
@@ -212,6 +214,14 @@ CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE kanban_columns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status_key TEXT NOT NULL UNIQUE,
+    position INTEGER NOT NULL DEFAULT 0
+);
+-- Seeded with defaults: (To Do/todo), (In Progress/in_progress), (Done/done)
 ```
 
 ## Common Issues

@@ -1,4 +1,5 @@
-export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'archived';
+// status is a free-form string matching a KanbanColumn.statusKey, or "archived"
+export type TaskStatus = string;
 export type TaskPriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 
 export interface Task {
@@ -41,4 +42,24 @@ export interface UpdateTaskInput {
 
 export interface AppSettings {
   vaultDir: string | null;
+}
+
+export interface KanbanColumn {
+  id: string;
+  name: string;
+  statusKey: string;
+  position: number;
+}
+
+export interface CreateColumnInput {
+  name: string;
+}
+
+export interface UpdateColumnInput {
+  id: string;
+  name?: string;
+}
+
+export interface ReorderColumnsInput {
+  ids: string[];
 }

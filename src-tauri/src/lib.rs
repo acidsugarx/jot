@@ -12,8 +12,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use crate::db::{
-    create_task, delete_task, get_settings, get_tasks, init_database, open_linked_note,
-    update_settings, update_task, update_task_status,
+    create_column, create_task, delete_column, delete_task, get_columns, get_settings, get_tasks,
+    init_database, open_linked_note, reorder_columns, update_column, update_settings, update_task,
+    update_task_status,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -249,7 +250,12 @@ pub fn run() {
             update_task_status,
             update_task,
             delete_task,
-            open_linked_note
+            open_linked_note,
+            get_columns,
+            create_column,
+            update_column,
+            delete_column,
+            reorder_columns
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

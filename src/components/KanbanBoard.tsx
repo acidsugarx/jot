@@ -1,36 +1,51 @@
-import { useState, useMemo } from 'react';
-import { 
-  DndContext, 
-  DragOverlay, 
-  closestCorners, 
-  KeyboardSensor, 
-  PointerSensor, 
-  useSensor, 
+import { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
   useSensors,
   DragStartEvent,
-  DragOverEvent,
   DragEndEvent,
 } from '@dnd-kit/core';
-import { SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
+import { SortableContext, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
+import { Plus } from 'lucide-react';
 import { KanbanColumn } from './KanbanColumn';
 import { KanbanTaskCard } from './KanbanTaskCard';
-import { Task } from '@/types';
+import { Task, KanbanColumn as KanbanColumnType } from '@/types';
 import { useTaskStore } from '@/store/use-task-store';
 
-const defaultCols = [
-  { id: 'todo', title: 'To Do' },
-  { id: 'in_progress', title: 'In Progress' },
-  { id: 'done', title: 'Done' }
-];
-
 export function KanbanBoard() {
-  const { tasks, updateTaskStatus } = useTaskStore();
-  const [columns] = useState(defaultCols);
-  
-  // Local state for smooth generic dragging before SQLite commits
-  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const { tasks, columns, fetchColumns, updateTaskStatus, createColumn, reorderColumns } = useTaskStore();
 
-  const columnsId = useMemo(() => columns.map(c => c.id), [columns]);
+  // Local column order for optimistic drag-to-reorder
+  const [localColumns, setLocalColumns] = useState<KanbanColumnType[]>([]);
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [activeColumn, setActiveColumn] = useState<KanbanColumnType | null>(null);
+  const [isAddingColumn, setIsAddingColumn] = useState(false);
+  const [newColumnName, setNewColumnName] = useState('');
+  const addInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void fetchColumns();
+  }, [fetchColumns]);
+
+  // Keep local order in sync when store updates (but not during drag)
+  useEffect(() => {
+    if (!activeColumn && !activeTask) {
+      setLocalColumns(columns);
+    }
+  }, [columns, activeColumn, activeTask]);
+
+  useEffect(() => {
+    if (isAddingColumn) {
+      addInputRef.current?.focus();
+    }
+  }, [isAddingColumn]);
+
+  const columnIds = useMemo(() => localColumns.map((c) => c.id), [localColumns]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -40,63 +55,138 @@ export function KanbanBoard() {
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
     if (active.data.current?.type === 'Task') {
-      setActiveTask(active.data.current.task);
+      setActiveTask(active.data.current.task as Task);
+    } else if (active.data.current?.type === 'Column') {
+      setActiveColumn(active.data.current.column as KanbanColumnType);
     }
   };
 
-  const handleDragOver = (event: DragOverEvent) => {
-    const { over } = event;
-    if (!over) return;
-    
-    // Smooth transition logic will go here
-    // For Kanban, we usually swap the visual state immediately if moving columns
-  };
-
-  const handleDragEnd = async (event: DragEndEvent) => {
-    setActiveTask(null);
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over) return;
+    setActiveTask(null);
+    setActiveColumn(null);
 
-    const activeId = active.id;
-    const overId = over.id;
+    if (!over || active.id === over.id) return;
 
-    if (activeId === overId) return;
+    const activeId = active.id as string;
+    const overId = over.id as string;
 
+    const isActiveColumn = active.data.current?.type === 'Column';
     const isActiveTask = active.data.current?.type === 'Task';
     const isOverColumn = over.data.current?.type === 'Column';
-    
-    // Dropping a task into a completely new column
+
+    // Column reorder
+    if (isActiveColumn && isOverColumn) {
+      const from = localColumns.findIndex((c) => c.id === activeId);
+      const to = localColumns.findIndex((c) => c.id === overId);
+      const reordered = arrayMove(localColumns, from, to);
+      setLocalColumns(reordered);
+      void reorderColumns(reordered.map((c) => c.id));
+      return;
+    }
+
+    // Task dropped onto a column header
     if (isActiveTask && isOverColumn) {
       const draggedTask = active.data.current?.task as Task;
-      if (draggedTask.status !== overId) {
-         void updateTaskStatus({ id: draggedTask.id, status: overId as 'todo' | 'in_progress' | 'done' });
+      const targetCol = localColumns.find((c) => c.id === overId);
+      if (targetCol && draggedTask.status !== targetCol.statusKey) {
+        void updateTaskStatus({ id: draggedTask.id, status: targetCol.statusKey });
       }
     }
   };
 
+  const handleAddColumn = async () => {
+    const name = newColumnName.trim();
+    if (name) {
+      await createColumn(name);
+    }
+    setNewColumnName('');
+    setIsAddingColumn(false);
+  };
+
+  if (localColumns.length === 0) {
+    return (
+      <div className="flex h-48 items-center justify-center">
+        <span className="font-mono text-[10px] text-zinc-700">Loading columns…</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex w-full overflow-x-auto overflow-y-hidden px-6 py-4">
+    <div className="flex h-full w-full overflow-x-auto overflow-y-hidden px-6 py-4">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
         <div className="flex gap-3">
-          <SortableContext items={columnsId}>
-            {columns.map(col => (
-               <KanbanColumn 
-                  key={col.id} 
-                  column={col} 
-                  tasks={tasks.filter(t => t.status === col.id)} 
-               />
+          <SortableContext items={columnIds}>
+            {localColumns.map((col) => (
+              <KanbanColumn
+                key={col.id}
+                column={col}
+                tasks={tasks.filter((t) => t.status === col.statusKey)}
+              />
             ))}
           </SortableContext>
+
+          {/* Add column */}
+          {isAddingColumn ? (
+            <div className="flex w-[260px] shrink-0 flex-col rounded-md border border-zinc-700/40 bg-[#141414] p-2">
+              <input
+                ref={addInputRef}
+                type="text"
+                value={newColumnName}
+                onChange={(e) => setNewColumnName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { void handleAddColumn(); }
+                  if (e.key === 'Escape') { setIsAddingColumn(false); setNewColumnName(''); }
+                }}
+                onBlur={() => void handleAddColumn()}
+                placeholder="Column name…"
+                className="rounded bg-zinc-900/60 px-2 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-700 outline-none focus:ring-1 focus:ring-cyan-500/30"
+              />
+              <div className="mt-1.5 flex gap-1">
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); void handleAddColumn(); }}
+                  className="rounded px-2 py-1 text-xs text-cyan-400 hover:bg-zinc-800 transition-colors"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setIsAddingColumn(false); setNewColumnName(''); }}
+                  className="rounded px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-800 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsAddingColumn(true)}
+              className="flex h-9 w-[260px] shrink-0 items-center gap-2 rounded-md border border-dashed border-zinc-800 px-3 text-zinc-600 hover:border-zinc-700 hover:text-zinc-400 transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="text-sm">Add column</span>
+            </button>
+          )}
         </div>
-        
+
         <DragOverlay>
-           {activeTask && <KanbanTaskCard task={activeTask} isOverlay />}
+          {activeTask && <KanbanTaskCard task={activeTask} isOverlay />}
+          {activeColumn && (
+            <div className="w-[260px] rounded-md border border-cyan-500/30 bg-[#141414] opacity-80">
+              <div className="flex h-8 items-center px-3">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                  {activeColumn.name}
+                </span>
+              </div>
+            </div>
+          )}
         </DragOverlay>
       </DndContext>
     </div>

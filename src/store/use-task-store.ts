@@ -1,11 +1,18 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import type { AppSettings, CreateTaskInput, Task, UpdateTaskInput, UpdateTaskStatusInput } from '@/types';
+import type {
+  AppSettings,
+  CreateTaskInput,
+  KanbanColumn,
+  Task,
+  UpdateColumnInput,
+  UpdateTaskInput,
+  UpdateTaskStatusInput,
+} from '@/types';
 
 const TASKS_UPDATED_EVENT = 'tasks-updated';
 
-/** Notify other windows that tasks have changed */
 function notifyTasksChanged() {
   if ('__TAURI_INTERNALS__' in window) {
     void emit(TASKS_UPDATED_EVENT);
@@ -14,6 +21,7 @@ function notifyTasksChanged() {
 
 interface TaskState {
   tasks: Task[];
+  columns: KanbanColumn[];
   isLoading: boolean;
   error: string | null;
   settings: AppSettings | null;
@@ -26,6 +34,13 @@ interface TaskState {
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   openLinkedNote: (path: string) => Promise<void>;
+
+  fetchColumns: () => Promise<void>;
+  createColumn: (name: string) => Promise<KanbanColumn>;
+  updateColumn: (input: UpdateColumnInput) => Promise<KanbanColumn>;
+  deleteColumn: (id: string) => Promise<void>;
+  reorderColumns: (ids: string[]) => Promise<void>;
+
   fetchSettings: () => Promise<void>;
   updateSettings: (vaultDir: string | null) => Promise<void>;
   selectTask: (id: string | null) => void;
@@ -36,6 +51,7 @@ interface TaskState {
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
+  columns: [],
   isLoading: false,
   error: null,
   settings: null,
@@ -44,85 +60,62 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   fetchTasks: async () => {
     if (!('__TAURI_INTERNALS__' in window)) return;
-
     set({ isLoading: true, error: null });
     try {
       const tasks = await invoke<Task[]>('get_tasks');
       set({ tasks, isLoading: false });
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch tasks',
-        isLoading: false,
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to fetch tasks', isLoading: false });
     }
   },
 
   createTask: async (input) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     set({ isLoading: true, error: null });
     try {
       const task = await invoke<Task>('create_task', { input });
-      set((state) => ({
-        tasks: [task, ...state.tasks],
-        isLoading: false,
-      }));
+      set((state) => ({ tasks: [task, ...state.tasks], isLoading: false }));
       notifyTasksChanged();
       return task;
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to create task',
-        isLoading: false,
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to create task', isLoading: false });
       throw error;
     }
   },
 
   updateTask: async (input) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     try {
       const updatedTask = await invoke<Task>('update_task', { input });
       set((state) => ({
-        tasks: state.tasks.map((task) =>
-          task.id === updatedTask.id ? updatedTask : task
-        ),
+        tasks: state.tasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)),
       }));
       notifyTasksChanged();
       return updatedTask;
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to update task',
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to update task' });
       throw error;
     }
   },
 
   updateTaskStatus: async (input) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     set({ isLoading: true, error: null });
     try {
       const updatedTask = await invoke<Task>('update_task_status', { input });
       set((state) => ({
-        tasks: state.tasks.map((task) =>
-          task.id === updatedTask.id ? updatedTask : task
-        ),
+        tasks: state.tasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)),
         isLoading: false,
       }));
       notifyTasksChanged();
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to update task',
-        isLoading: false,
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to update task', isLoading: false });
       throw error;
     }
   },
 
   deleteTask: async (id) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     set({ isLoading: true, error: null });
     try {
       await invoke('delete_task', { id });
@@ -134,54 +127,101 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       }));
       notifyTasksChanged();
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to delete task',
-        isLoading: false,
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to delete task', isLoading: false });
       throw error;
     }
   },
 
   openLinkedNote: async (path) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     try {
       await invoke('open_linked_note', { path });
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to open linked note',
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to open linked note' });
       throw error;
     }
   },
 
+  // ── Column actions ───────────────────────────────────────────────────────
+
+  fetchColumns: async () => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    try {
+      const columns = await invoke<KanbanColumn[]>('get_columns');
+      set({ columns });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to fetch columns' });
+    }
+  },
+
+  createColumn: async (name) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      const column = await invoke<KanbanColumn>('create_column', { input: { name } });
+      set((state) => ({ columns: [...state.columns, column] }));
+      return column;
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to create column' });
+      throw error;
+    }
+  },
+
+  updateColumn: async (input) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      const updated = await invoke<KanbanColumn>('update_column', { input });
+      set((state) => ({
+        columns: state.columns.map((c) => (c.id === updated.id ? updated : c)),
+      }));
+      return updated;
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to update column' });
+      throw error;
+    }
+  },
+
+  deleteColumn: async (id) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('delete_column', { id });
+      set((state) => ({ columns: state.columns.filter((c) => c.id !== id) }));
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to delete column' });
+      throw error;
+    }
+  },
+
+  reorderColumns: async (ids) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      const columns = await invoke<KanbanColumn[]>('reorder_columns', { input: { ids } });
+      set({ columns });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to reorder columns' });
+      throw error;
+    }
+  },
+
+  // ── Settings ─────────────────────────────────────────────────────────────
+
   fetchSettings: async () => {
     if (!('__TAURI_INTERNALS__' in window)) return;
-
     try {
       const settings = await invoke<AppSettings>('get_settings');
       set({ settings });
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to fetch settings',
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to fetch settings' });
     }
   },
 
   updateSettings: async (vaultDir) => {
     if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
-
     set({ isLoading: true, error: null });
     try {
-      const settings = await invoke<AppSettings>('update_settings', {
-        input: { vaultDir: vaultDir },
-      });
+      const settings = await invoke<AppSettings>('update_settings', { input: { vaultDir } });
       set({ settings, isLoading: false });
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to update settings',
-        isLoading: false,
-      });
+      set({ error: error instanceof Error ? error.message : 'Failed to update settings', isLoading: false });
       throw error;
     }
   },
@@ -190,14 +230,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   setIsEditorOpen: (isOpen) => set({ isEditorOpen: isOpen }),
   clearError: () => set({ error: null }),
 
-  /** Subscribe to cross-window task update events. Returns cleanup function. */
   listenForUpdates: () => {
     if (!('__TAURI_INTERNALS__' in window)) return () => {};
-
-    const unlisten = listen(TASKS_UPDATED_EVENT, () => {
-      void get().fetchTasks();
-    });
-
+    const unlisten = listen(TASKS_UPDATED_EVENT, () => { void get().fetchTasks(); });
     return () => { unlisten.then((fn) => fn()); };
   },
 }));

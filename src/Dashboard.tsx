@@ -17,7 +17,7 @@ import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { useTaskStore } from '@/store/use-task-store';
-import { Task, TaskPriority, TaskStatus } from '@/types';
+import { Task, TaskPriority } from '@/types';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
 
@@ -31,20 +31,18 @@ const priorityDot = (p: TaskPriority) => {
   }
 };
 
-const statusMeta = (s: string) => {
+const statusMeta = (s: string, label?: string) => {
+  const text = (label ?? s).slice(0, 4).toLowerCase();
   switch (s) {
     case 'in_progress': return { text: 'wip', color: 'text-yellow-500/70' };
     case 'done': return { text: 'done', color: 'text-zinc-600' };
     case 'archived': return { text: 'arch', color: 'text-zinc-700' };
-    default: return { text: 'todo', color: 'text-zinc-700' };
+    default: return { text, color: 'text-zinc-700' };
   }
 };
 
-const nextStatus: Record<string, TaskStatus> = {
-  todo: 'in_progress',
-  in_progress: 'done',
-  done: 'todo',
-};
+
+
 
 type Tab = 'list' | 'kanban' | 'calendar';
 const tabDefs: { id: Tab; label: string; icon: typeof LayoutList }[] = [
@@ -76,7 +74,9 @@ export default function Dashboard() {
 
   const {
     tasks,
+    columns,
     fetchTasks,
+    fetchColumns,
     listenForUpdates,
     selectedTaskId,
     selectTask,
@@ -87,11 +87,21 @@ export default function Dashboard() {
     openLinkedNote,
   } = useTaskStore();
 
+  // Cycle to next column's statusKey, wrapping around
+  const getNextStatus = (currentStatus: string): string => {
+    const nonArchived = columns.filter((c) => c.statusKey !== 'archived');
+    if (nonArchived.length === 0) return currentStatus;
+    const idx = nonArchived.findIndex((c) => c.statusKey === currentStatus);
+    const next = nonArchived[(idx + 1) % nonArchived.length];
+    return next?.statusKey ?? currentStatus;
+  };
+
   useVimBindings(activeTab as ViewMode);
 
   useEffect(() => {
     void fetchTasks();
-  }, [fetchTasks]);
+    void fetchColumns();
+  }, [fetchTasks, fetchColumns]);
 
   // Re-fetch when other windows mutate tasks
   useEffect(() => {
@@ -157,10 +167,13 @@ export default function Dashboard() {
       })
     : sidebarFiltered;
 
-  // Group for list view (preserving order: wip → todo → done)
-  const wipTasks = filtered.filter((t) => t.status === 'in_progress');
-  const todoTasks = filtered.filter((t) => t.status === 'todo');
-  const doneTasks = filtered.filter((t) => t.status === 'done');
+  // Group for list view — ordered by column position, archived tasks last
+  const groupedByColumn = useMemo(() => {
+    return columns.map((col) => ({
+      col,
+      items: filtered.filter((t) => t.status === col.statusKey),
+    }));
+  }, [columns, filtered]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, taskId: string) => {
     e.preventDefault();
@@ -174,7 +187,8 @@ export default function Dashboard() {
     const isSelected = selectedTaskId === t.id;
     const isDone = t.status === 'done';
     const dot = priorityDot(t.priority);
-    const sl = statusMeta(t.status);
+    const colName = columns.find((c) => c.statusKey === t.status)?.name ?? t.status;
+    const sl = statusMeta(t.status, colName);
 
     return (
       <div
@@ -224,10 +238,10 @@ export default function Dashboard() {
           {/* Cycle status */}
           <button
             type="button"
-            title={`Move to ${nextStatus[t.status]}`}
+            title={`Move to ${columns.find((c) => c.statusKey === getNextStatus(t.status))?.name ?? getNextStatus(t.status)}`}
             onClick={(e) => {
               e.stopPropagation();
-              void updateTaskStatus({ id: t.id, status: nextStatus[t.status] });
+              void updateTaskStatus({ id: t.id, status: getNextStatus(t.status) });
             }}
             className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
           >
@@ -456,9 +470,9 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {renderSection('In Progress', wipTasks)}
-                  {renderSection('To Do', todoTasks)}
-                  {renderSection('Done', doneTasks)}
+                  {groupedByColumn.map(({ col, items }) =>
+                    renderSection(col.name, items)
+                  )}
                 </div>
               )}
             </div>
@@ -521,13 +535,13 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => {
-              void updateTaskStatus({ id: contextTask.id, status: nextStatus[contextTask.status] });
+              void updateTaskStatus({ id: contextTask.id, status: getNextStatus(contextTask.status) });
               setContextMenu(null);
             }}
             className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
           >
             <ArrowRightLeft className="h-3 w-3 text-zinc-500" />
-            Move to {nextStatus[contextTask.status].replace('_', ' ')}
+            Move to {columns.find((c) => c.statusKey === getNextStatus(contextTask.status))?.name ?? getNextStatus(contextTask.status)}
             <kbd className="ml-auto font-mono text-[10px] text-zinc-700">s</kbd>
           </button>
 
