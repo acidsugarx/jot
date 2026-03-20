@@ -40,13 +40,13 @@ export function useVimBindings(viewMode: ViewMode) {
         const currentIndex = ordered.findIndex((t) => t.id === selectedTaskId);
 
         if (currentIndex < 0) {
-          selectTask(ordered[0].id);
+          selectTask(ordered[0]!.id);
         } else if (direction === 'down') {
           const next = Math.min(currentIndex + 1, ordered.length - 1);
-          selectTask(ordered[next].id);
+          selectTask(ordered[next]!.id);
         } else {
           const prev = Math.max(currentIndex - 1, 0);
-          selectTask(ordered[prev].id);
+          selectTask(ordered[prev]!.id);
         }
         scrollSelectedIntoView();
       } else if (viewMode === 'kanban') {
@@ -148,7 +148,7 @@ export function useVimBindings(viewMode: ViewMode) {
       // g — go to first
       if (e.key === 'g') {
         const ordered = viewMode === 'list' ? getOrderedTasks() : tasks;
-        if (ordered.length) selectTask(ordered[0].id);
+        if (ordered.length) selectTask(ordered[0]!.id);
         scrollSelectedIntoView();
         return;
       }
@@ -156,7 +156,7 @@ export function useVimBindings(viewMode: ViewMode) {
       // G — go to last
       if (e.key === 'G') {
         const ordered = viewMode === 'list' ? getOrderedTasks() : tasks;
-        if (ordered.length) selectTask(ordered[ordered.length - 1].id);
+        if (ordered.length) selectTask(ordered[ordered.length - 1]!.id);
         scrollSelectedIntoView();
         return;
       }

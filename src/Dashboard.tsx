@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
   LayoutList,
   Columns,
@@ -9,8 +9,12 @@ import {
   ArrowRightLeft,
   PenLine,
   Search,
+  Inbox,
+  Sun,
+  Tag,
 } from 'lucide-react';
 import { KanbanBoard } from '@/components/KanbanBoard';
+import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { useTaskStore } from '@/store/use-task-store';
 import { Task, TaskPriority, TaskStatus } from '@/types';
@@ -56,9 +60,17 @@ interface ContextMenu {
   taskId: string;
 }
 
+type SidebarFilter = 'inbox' | 'today' | `tag:${string}`;
+
+function todayDateKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('list');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('inbox');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -106,9 +118,36 @@ export default function Dashboard() {
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId);
 
-  // Filter tasks
+  // All unique tags across active tasks
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of tasks) {
+      if (t.status !== 'archived') t.tags.forEach((tag) => set.add(tag));
+    }
+    return [...set].sort();
+  }, [tasks]);
+
+  // Apply sidebar filter first, then search query
+  const sidebarFiltered = useMemo(() => {
+    if (sidebarFilter === 'inbox') {
+      return tasks.filter((t) => t.status !== 'archived');
+    }
+    if (sidebarFilter === 'today') {
+      const key = todayDateKey();
+      return tasks.filter((t) => {
+        if (t.status === 'archived') return false;
+        if (!t.dueDate) return false;
+        const d = new Date(t.dueDate);
+        const dKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        return dKey === key;
+      });
+    }
+    const tag = sidebarFilter.slice(4); // strip "tag:"
+    return tasks.filter((t) => t.status !== 'archived' && t.tags.includes(tag));
+  }, [tasks, sidebarFilter]);
+
   const filtered = searchQuery.trim()
-    ? tasks.filter((t) => {
+    ? sidebarFiltered.filter((t) => {
         const q = searchQuery.toLowerCase();
         return (
           t.title.toLowerCase().includes(q) ||
@@ -116,7 +155,7 @@ export default function Dashboard() {
           t.status.includes(q)
         );
       })
-    : tasks;
+    : sidebarFiltered;
 
   // Group for list view (preserving order: wip → todo → done)
   const wipTasks = filtered.filter((t) => t.status === 'in_progress');
@@ -336,6 +375,67 @@ export default function Dashboard() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar — list view only */}
+        {activeTab === 'list' && (
+          <div className="flex w-40 shrink-0 flex-col border-r border-zinc-800/40 py-2">
+            {/* Fixed filters */}
+            {(
+              [
+                { id: 'inbox' as SidebarFilter, label: 'Inbox', Icon: Inbox, count: tasks.filter((t) => t.status !== 'archived').length },
+                { id: 'today' as SidebarFilter, label: 'Today', Icon: Sun, count: tasks.filter((t) => t.status !== 'archived' && !!t.dueDate && (() => { const d = new Date(t.dueDate!); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` === todayDateKey(); })()).length },
+              ] as const
+            ).map(({ id, label, Icon, count }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setSidebarFilter(id)}
+                className={`flex h-8 w-full items-center gap-2 px-3 text-left transition-colors ${
+                  sidebarFilter === id
+                    ? 'bg-zinc-800/60 text-zinc-200'
+                    : 'text-zinc-500 hover:bg-zinc-900/40 hover:text-zinc-300'
+                }`}
+              >
+                <Icon className="h-3 w-3 shrink-0" />
+                <span className="flex-1 truncate text-xs">{label}</span>
+                {count > 0 && (
+                  <span className="font-mono text-[10px] text-zinc-600">{count}</span>
+                )}
+              </button>
+            ))}
+
+            {/* Tags section */}
+            {allTags.length > 0 && (
+              <>
+                <div className="mt-2 flex h-6 items-center px-3">
+                  <span className="font-mono text-[9px] font-medium uppercase tracking-wider text-zinc-700">Tags</span>
+                </div>
+                {allTags.map((tag) => {
+                  const filterId: SidebarFilter = `tag:${tag}`;
+                  const count = tasks.filter((t) => t.status !== 'archived' && t.tags.includes(tag)).length;
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setSidebarFilter(filterId)}
+                      className={`flex h-7 w-full items-center gap-2 px-3 text-left transition-colors ${
+                        sidebarFilter === filterId
+                          ? 'bg-zinc-800/60 text-zinc-200'
+                          : 'text-zinc-500 hover:bg-zinc-900/40 hover:text-zinc-300'
+                      }`}
+                    >
+                      <Tag className="h-2.5 w-2.5 shrink-0" />
+                      <span className="flex-1 truncate font-mono text-[10px]">#{tag}</span>
+                      {count > 0 && (
+                        <span className="font-mono text-[10px] text-zinc-600">{count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+
         {/* Main content */}
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'list' && (
@@ -371,9 +471,8 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'calendar' && (
-            <div className="flex h-48 flex-col items-center justify-center gap-1">
-              <span className="text-sm text-zinc-600">Calendar view</span>
-              <span className="font-mono text-[10px] text-zinc-700">coming soon</span>
+            <div className="h-full w-full">
+              <CalendarView tasks={tasks} />
             </div>
           )}
         </div>
