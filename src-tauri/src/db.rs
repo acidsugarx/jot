@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::models::{
     AppSettings, CreateTaskInput, Task, TaskPriority, TaskStatus, UpdateSettingsInput,
-    UpdateTaskStatusInput,
+    UpdateTaskInput, UpdateTaskStatusInput,
 };
 use crate::parser::parse_task_input;
 
@@ -49,6 +49,7 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                description TEXT,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'none',
                 tags TEXT NOT NULL DEFAULT '[]',
@@ -65,6 +66,19 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             ",
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
+
+    // Add description column to existing databases
+    let has_description: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'description'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_description {
+        connection
+            .execute_batch("ALTER TABLE tasks ADD COLUMN description TEXT")
+            .map_err(|error| format!("Failed to add description column: {error}"))?;
+    }
 
     Ok(())
 }
@@ -111,6 +125,7 @@ pub fn create_task(db: State<'_, DatabaseState>, input: CreateTaskInput) -> Resu
     let task = Task {
         id: Uuid::new_v4().to_string(),
         title,
+        description: None,
         status: input.status.unwrap_or(TaskStatus::Todo),
         priority: input
             .priority
@@ -229,6 +244,16 @@ pub fn delete_task(db: State<'_, DatabaseState>, id: String) -> Result<(), Strin
     remove_task(&connection, &id)
 }
 
+#[tauri::command]
+pub fn update_task(db: State<'_, DatabaseState>, input: UpdateTaskInput) -> Result<Task, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    patch_task(&connection, &input)
+}
+
 fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
     let tags = serde_json::to_string(&task.tags)
         .map_err(|error| format!("Failed to serialize task tags: {error}"))?;
@@ -239,6 +264,7 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
             INSERT INTO tasks (
                 id,
                 title,
+                description,
                 status,
                 priority,
                 tags,
@@ -246,11 +272,12 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 linked_note_path,
                 created_at,
                 updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ",
             params![
                 task.id,
                 task.title,
+                task.description,
                 task.status.as_str(),
                 task.priority.as_str(),
                 tags,
@@ -269,7 +296,7 @@ fn list_tasks(connection: &Connection) -> Result<Vec<Task>, String> {
     let mut statement = connection
         .prepare(
             "
-            SELECT id, title, status, priority, tags, due_date, linked_note_path, created_at, updated_at
+            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at
             FROM tasks
             ORDER BY created_at DESC
             ",
@@ -317,7 +344,7 @@ fn fetch_task(connection: &Connection, id: &str) -> Result<Option<Task>, String>
     let task = connection
         .query_row(
             "
-            SELECT id, title, status, priority, tags, due_date, linked_note_path, created_at, updated_at
+            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at
             FROM tasks
             WHERE id = ?1
             ",
@@ -360,25 +387,26 @@ fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Resu
 }
 
 fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
-    let status = row.get::<_, String>(2)?;
-    let priority = row.get::<_, String>(3)?;
-    let tags = row.get::<_, String>(4)?;
+    let status = row.get::<_, String>(3)?;
+    let priority = row.get::<_, String>(4)?;
+    let tags = row.get::<_, String>(5)?;
 
     let tags = serde_json::from_str(&tags).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
     })?;
 
     Ok(Task {
         id: row.get(0)?,
         title: row.get(1)?,
-        status: TaskStatus::from_str(&status).ok_or_else(|| invalid_value_error(2, &status))?,
+        description: row.get(2)?,
+        status: TaskStatus::from_str(&status).ok_or_else(|| invalid_value_error(3, &status))?,
         priority: TaskPriority::from_str(&priority)
-            .ok_or_else(|| invalid_value_error(3, &priority))?,
+            .ok_or_else(|| invalid_value_error(4, &priority))?,
         tags,
-        due_date: row.get(5)?,
-        linked_note_path: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        due_date: row.get(6)?,
+        linked_note_path: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 
@@ -394,6 +422,72 @@ fn invalid_value_error(index: usize, value: &str) -> rusqlite::Error {
 
 fn timestamp() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, String> {
+    let mut sets: Vec<String> = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(ref title) = input.title {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err("Task title cannot be empty.".to_string());
+        }
+        sets.push("title = ?".to_string());
+        values.push(Box::new(trimmed.to_string()));
+    }
+
+    if let Some(ref description) = input.description {
+        sets.push("description = ?".to_string());
+        values.push(Box::new(description.clone()));
+    }
+
+    if let Some(status) = input.status {
+        sets.push("status = ?".to_string());
+        values.push(Box::new(status.as_str().to_string()));
+    }
+
+    if let Some(priority) = input.priority {
+        sets.push("priority = ?".to_string());
+        values.push(Box::new(priority.as_str().to_string()));
+    }
+
+    if let Some(ref tags) = input.tags {
+        let tags_json = serde_json::to_string(tags)
+            .map_err(|error| format!("Failed to serialize tags: {error}"))?;
+        sets.push("tags = ?".to_string());
+        values.push(Box::new(tags_json));
+    }
+
+    if let Some(ref due_date) = input.due_date {
+        sets.push("due_date = ?".to_string());
+        values.push(Box::new(due_date.clone()));
+    }
+
+    if sets.is_empty() {
+        return fetch_task(connection, &input.id)?
+            .ok_or_else(|| format!("Task {} was not found.", input.id));
+    }
+
+    let updated_at = timestamp();
+    sets.push("updated_at = ?".to_string());
+    values.push(Box::new(updated_at));
+    values.push(Box::new(input.id.clone()));
+
+    let sql = format!("UPDATE tasks SET {} WHERE id = ?", sets.join(", "));
+
+    let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+
+    let affected_rows = connection
+        .execute(&sql, params.as_slice())
+        .map_err(|error| format!("Failed to update task: {error}"))?;
+
+    if affected_rows == 0 {
+        return Err(format!("Task {} was not found.", input.id));
+    }
+
+    fetch_task(connection, &input.id)?
+        .ok_or_else(|| format!("Task {} was not found after update.", input.id))
 }
 
 fn create_zettel_note(
@@ -489,6 +583,7 @@ mod tests {
         let task = Task {
             id: "task-1".to_string(),
             title: "Write architecture review".to_string(),
+            description: Some("Review the new auth middleware".to_string()),
             status: TaskStatus::Todo,
             priority: TaskPriority::High,
             tags: vec!["work".to_string(), "dev".to_string()],

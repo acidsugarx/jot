@@ -13,7 +13,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 use crate::db::{
     create_task, delete_task, get_settings, get_tasks, init_database, open_linked_note,
-    update_settings, update_task_status,
+    update_settings, update_task, update_task_status,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -110,12 +110,11 @@ fn setup_main_window_behavior(app: &AppHandle) -> tauri::Result<()> {
     let window = main_window(app)?;
     let window_handle = window.clone();
 
-    window.on_window_event(move |event| match event {
-        WindowEvent::CloseRequested { api, .. } => {
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = window_handle.hide();
         }
-        _ => {}
     });
 
     Ok(())
@@ -248,6 +247,7 @@ pub fn run() {
             get_settings,
             update_settings,
             update_task_status,
+            update_task,
             delete_task,
             open_linked_note
         ])

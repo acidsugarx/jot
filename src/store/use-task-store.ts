@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import type { AppSettings, CreateTaskInput, Task, UpdateTaskStatusInput } from '@/types';
+import type { AppSettings, CreateTaskInput, Task, UpdateTaskInput, UpdateTaskStatusInput } from '@/types';
 
 const TASKS_UPDATED_EVENT = 'tasks-updated';
 
@@ -22,6 +22,7 @@ interface TaskState {
 
   fetchTasks: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task>;
+  updateTask: (input: UpdateTaskInput) => Promise<Task>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   openLinkedNote: (path: string) => Promise<void>;
@@ -72,6 +73,26 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : 'Failed to create task',
         isLoading: false,
+      });
+      throw error;
+    }
+  },
+
+  updateTask: async (input) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+
+    try {
+      const updatedTask = await invoke<Task>('update_task', { input });
+      set((state) => ({
+        tasks: state.tasks.map((task) =>
+          task.id === updatedTask.id ? updatedTask : task
+        ),
+      }));
+      notifyTasksChanged();
+      return updatedTask;
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : 'Failed to update task',
       });
       throw error;
     }

@@ -77,7 +77,7 @@ Located in `src/`. Uses `@` path alias mapped to `src/` (configured in `vite.con
 | `store/use-task-store.ts` | Zustand store for state management and IPC calls |
 | `hooks/use-vim-bindings.ts` | Vim-style keyboard navigation (j/k/h/l, e/x/d/o) |
 | `components/KanbanBoard.tsx` | Drag-and-drop kanban using @dnd-kit |
-| `components/TaskEditorPane.tsx` | Slide-in panel for editing selected task |
+| `components/TaskEditorPane.tsx` | Slide-in panel for inline editing (title, description, status, priority, due date, tags) |
 | `types.ts` | TypeScript interfaces matching Rust backend |
 | `components/ui/` | shadcn/ui components (Badge, Button, ScrollArea, Tabs) |
 
@@ -138,7 +138,7 @@ if (!('__TAURI_INTERNALS__' in window)) { return; }
 const tasks = await invoke<Task[]>('get_tasks');
 ```
 
-Available commands: `create_task`, `get_tasks`, `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`.
+Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`.
 
 ### UI Layout Pattern
 
@@ -198,6 +198,7 @@ SQLite located at OS AppData directory (`jot.db`):
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    description TEXT,
     status TEXT NOT NULL DEFAULT 'todo',
     priority TEXT NOT NULL DEFAULT 'none',
     tags TEXT NOT NULL DEFAULT '[]',

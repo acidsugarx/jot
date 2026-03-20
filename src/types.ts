@@ -4,6 +4,7 @@ export type TaskPriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 export interface Task {
   id: string;
   title: string;
+  description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
@@ -26,6 +27,16 @@ export interface CreateTaskInput {
 export interface UpdateTaskStatusInput {
   id: string;
   status: TaskStatus;
+}
+
+export interface UpdateTaskInput {
+  id: string;
+  title?: string;
+  description?: string | null;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  tags?: string[];
+  dueDate?: string | null;
 }
 
 export interface AppSettings {

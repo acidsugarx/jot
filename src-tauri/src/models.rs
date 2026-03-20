@@ -68,6 +68,7 @@ impl TaskPriority {
 pub struct Task {
     pub id: String,
     pub title: String,
+    pub description: Option<String>,
     pub status: TaskStatus,
     pub priority: TaskPriority,
     pub tags: Vec<String>,
@@ -94,6 +95,18 @@ pub struct CreateTaskInput {
 pub struct UpdateTaskStatusInput {
     pub id: String,
     pub status: TaskStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskInput {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<Option<String>>,
+    pub status: Option<TaskStatus>,
+    pub priority: Option<TaskPriority>,
+    pub tags: Option<Vec<String>>,
+    pub due_date: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

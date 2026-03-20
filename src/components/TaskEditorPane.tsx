@@ -1,6 +1,15 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
-import { FileText, Link as LinkIcon, X } from 'lucide-react';
-import { TaskStatus } from '@/types';
+import { FileText, Link as LinkIcon, X, Plus, Calendar } from 'lucide-react';
+import { TaskStatus, TaskPriority } from '@/types';
+
+const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
+  { value: 'none', label: 'None', color: 'text-zinc-600' },
+  { value: 'low', label: 'Low', color: 'text-blue-400' },
+  { value: 'medium', label: 'Medium', color: 'text-yellow-400' },
+  { value: 'high', label: 'High', color: 'text-orange-400' },
+  { value: 'urgent', label: 'Urgent', color: 'text-red-400' },
+];
 
 const priorityColor: Record<string, string> = {
   urgent: 'text-red-400',
@@ -10,17 +19,105 @@ const priorityColor: Record<string, string> = {
 };
 
 export function TaskEditorPane() {
-  const { tasks, selectedTaskId, setIsEditorOpen, updateTaskStatus, openLinkedNote } = useTaskStore();
+  const { tasks, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote } = useTaskStore();
   const task = tasks.find((t) => t.id === selectedTaskId);
+
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<TaskStatus>('todo');
+  const [priority, setPriority] = useState<TaskPriority>('none');
+  const [dueDate, setDueDate] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+
+  // Sync local state when task changes
+  const taskId = task?.id;
+  const taskUpdatedAt = task?.updatedAt;
+  useEffect(() => {
+    if (!task) return;
+    setTitle(task.title);
+    setDescription(task.description || '');
+    setStatus(task.status);
+    setPriority(task.priority);
+    setDueDate(task.dueDate ? toDateInputValue(task.dueDate) : '');
+    setTags([...task.tags]);
+    setTagInput('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, taskUpdatedAt]);
+
+  // Auto-resize textareas
+  const autoResize = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }, []);
+
+  useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
+  useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
 
   if (!task) return null;
 
+  const save = (patch: Record<string, unknown>) => {
+    void updateTask({ id: task.id, ...patch });
+  };
+
+  const handleTitleBlur = () => {
+    const trimmed = title.trim();
+    if (trimmed && trimmed !== task.title) {
+      save({ title: trimmed });
+    } else {
+      setTitle(task.title);
+    }
+  };
+
+  const handleDescriptionBlur = () => {
+    const val = description.trim();
+    const current = task.description || '';
+    if (val !== current) {
+      save({ description: val || null });
+    }
+  };
+
+  const handleStatusChange = (newStatus: TaskStatus) => {
+    setStatus(newStatus);
+    save({ status: newStatus });
+  };
+
+  const handlePriorityChange = (newPriority: TaskPriority) => {
+    setPriority(newPriority);
+    save({ priority: newPriority });
+  };
+
+  const handleDueDateChange = (value: string) => {
+    setDueDate(value);
+    save({ dueDate: value ? new Date(value + 'T00:00:00').toISOString() : null });
+  };
+
+  const handleAddTag = () => {
+    const tag = tagInput.trim().replace(/^#/, '').trim();
+    if (tag && !tags.includes(tag)) {
+      const newTags = [...tags, tag];
+      setTags(newTags);
+      setTagInput('');
+      save({ tags: newTags });
+    }
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    const newTags = tags.filter((t) => t !== tag);
+    setTags(newTags);
+    save({ tags: newTags });
+  };
+
   return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-zinc-800/40 bg-[#141414]">
+    <div className="flex h-full w-[360px] shrink-0 flex-col border-l border-zinc-800/40 bg-[#141414]">
       {/* Header */}
       <div className="flex h-11 items-center justify-between border-b border-zinc-800/40 px-4">
         <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-          Details
+          Editor
         </span>
         <button
           onClick={() => setIsEditorOpen(false)}
@@ -32,20 +129,48 @@ export function TaskEditorPane() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {/* Title */}
+        {/* Title — editable textarea */}
         <div className="border-b border-zinc-800/30 px-4 py-3">
-          <p className="text-sm font-medium leading-relaxed text-zinc-200">
-            {task.title}
-          </p>
+          <textarea
+            ref={titleRef}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={handleTitleBlur}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+            }}
+            rows={1}
+            className="w-full resize-none overflow-hidden bg-transparent text-sm font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 selection:bg-cyan-500/30"
+            placeholder="Task title..."
+          />
+        </div>
+
+        {/* Description — editable textarea */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <div className="mb-1.5">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+              Description
+            </span>
+          </div>
+          <textarea
+            ref={descRef}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onBlur={handleDescriptionBlur}
+            rows={2}
+            className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
+            placeholder="Add a description..."
+          />
         </div>
 
         {/* Fields — flat rows */}
         <div className="border-b border-zinc-800/30">
+          {/* Status */}
           <div className="flex h-9 items-center justify-between px-4">
             <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
             <select
-              value={task.status}
-              onChange={(e) => void updateTaskStatus({ id: task.id, status: e.target.value as TaskStatus })}
+              value={status}
+              onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
               className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
             >
               <option value="todo">To Do</option>
@@ -55,41 +180,105 @@ export function TaskEditorPane() {
             </select>
           </div>
 
+          {/* Priority */}
           <div className="flex h-9 items-center justify-between px-4">
             <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Priority</span>
-            <span className={`text-sm ${priorityColor[task.priority] || 'text-zinc-600'}`}>
-              {task.priority === 'none' ? '—' : task.priority}
-            </span>
+            <select
+              value={priority}
+              onChange={(e) => handlePriorityChange(e.target.value as TaskPriority)}
+              className={`bg-transparent text-right text-sm focus:outline-none cursor-pointer ${priorityColor[priority] || 'text-zinc-600'}`}
+            >
+              {priorityOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
 
+          {/* Due Date */}
           <div className="flex h-9 items-center justify-between px-4">
             <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Due</span>
-            <span className="font-mono text-sm text-zinc-400">
-              {task.dueDate
-                ? new Date(task.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-                : '—'}
-            </span>
+            <div className="flex items-center gap-1.5">
+              {dueDate ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) => handleDueDateChange(e.target.value)}
+                    className="bg-transparent font-mono text-sm text-zinc-400 focus:outline-none cursor-pointer [color-scheme:dark]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleDueDateChange('')}
+                    className="rounded p-0.5 text-zinc-700 hover:text-zinc-400 transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const today = new Date().toISOString().split('T')[0];
+                    handleDueDateChange(today);
+                  }}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+                >
+                  <Calendar className="h-3 w-3" />
+                  <span className="font-mono text-xs">Set date</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Tags */}
-        {task.tags.length > 0 && (
-          <div className="border-b border-zinc-800/30 px-4 py-3">
-            <div className="mb-2">
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Tags</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {task.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
+        {/* Tags — editable */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <div className="mb-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Tags</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="group/tag flex items-center gap-0.5 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
+              >
+                #{tag}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveTag(tag)}
+                  className="ml-0.5 opacity-0 group-hover/tag:opacity-100 text-zinc-600 hover:text-zinc-300 transition-opacity"
                 >
-                  #{tag}
-                </span>
-              ))}
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))}
+            <div className="flex items-center">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); }
+                  if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
+                    handleRemoveTag(tags[tags.length - 1]);
+                  }
+                }}
+                onBlur={() => { if (tagInput.trim()) handleAddTag(); }}
+                placeholder="add tag"
+                className="h-5 w-16 bg-transparent font-mono text-[10px] text-zinc-500 placeholder:text-zinc-700 outline-none"
+              />
+              {tagInput.trim() && (
+                <button
+                  type="button"
+                  onClick={handleAddTag}
+                  className="rounded p-0.5 text-zinc-700 hover:text-cyan-400 transition-colors"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              )}
             </div>
           </div>
-        )}
+        </div>
 
         {/* Linked Note */}
         {task.linkedNotePath && (
@@ -123,4 +312,16 @@ export function TaskEditorPane() {
       </div>
     </div>
   );
+}
+
+function toDateInputValue(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch {
+    return '';
+  }
 }

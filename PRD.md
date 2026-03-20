@@ -66,6 +66,7 @@ When the @zettel flag is used:
 CREATE TABLE tasks (
 id TEXT PRIMARY KEY,               -- UUID
 title TEXT NOT NULL,               -- Parsed task name
+description TEXT,                  -- Free-form markdown description
 status TEXT DEFAULT 'todo',        -- 'todo', 'in_progress', 'done', 'archived'
 priority TEXT DEFAULT 'none',      -- 'low', 'medium', 'high', 'urgent', 'none'
 tags TEXT,                         -- JSON array of strings ["work", "dev"]
@@ -74,6 +75,33 @@ linked_note_path TEXT,             -- Absolute path to the .md file (if @zettel 
 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+---
+
+## 4.1. Task Editor Pane
+
+The editor is a slide-in panel (right side, 360px) that provides full inline editing of any task. It opens via `e` key, double-click, or context menu.
+
+### Current Capabilities (Implemented)
+* **Title** — editable textarea, auto-resizing, saves on blur or Enter
+* **Description** — free-form text field for notes, context, or subtask breakdowns
+* **Status** — dropdown selector (todo / in_progress / done / archived)
+* **Priority** — dropdown selector (none / low / medium / high / urgent), color-coded
+* **Due Date** — native date picker with set/clear controls
+* **Tags** — inline add/remove, type + Enter to add, backspace to remove last, hover × to delete
+* **Linked Note** — clickable to open in OS default app (Obsidian, etc.)
+* All fields auto-save on change via `update_task` IPC (partial patch, only changed fields sent)
+
+### Future Enhancements (Roadmap)
+* **Subtasks / Checklists** — nested todo items within a task description (markdown checkboxes)
+* **Custom Fields** — user-defined fields per task (e.g., "effort", "sprint", "assignee")
+* **Kanban Column Customization** — add/rename/remove/reorder columns beyond the default three (todo, in_progress, done). Columns map to custom statuses stored in settings.
+* **Task Templates** — predefined task shapes (e.g., "Bug Report" with description template, priority=high, tags=["bug"])
+* **Time Tracking** — optional start/stop timer per task, accumulated duration field
+* **Markdown Description** — render description as markdown with preview toggle
+* **Drag-to-Reorder** — manual sort order within status groups (requires `sort_order` column)
+* **Batch Editing** — multi-select tasks and bulk-update status, priority, tags, or delete
+* **Activity Log** — timestamp trail of status changes and edits per task
 
 ---
 
