@@ -6,6 +6,6 @@ describe('App', () => {
   it('renders the popup shell', () => {
     render(<App />);
 
-    expect(screen.getByPlaceholderText(/capture task/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/type a task/i)).toBeInTheDocument();
   });
 });

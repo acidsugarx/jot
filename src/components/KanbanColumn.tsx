@@ -21,37 +21,38 @@ export function KanbanColumn({ column, tasks }: ColumnProps) {
 
   if (isDragging) {
     return (
-      <div 
-        ref={setNodeRef} 
-        style={style} 
-        className="flex w-[350px] flex-col rounded-lg border-2 border-cyan-500/50 bg-zinc-900/40 opacity-40 shrink-0" 
+      <div
+        ref={setNodeRef}
+        style={style}
+        className="flex w-[260px] shrink-0 flex-col rounded-md border border-cyan-500/20 bg-zinc-900/10 opacity-30"
       />
     );
   }
 
   return (
-    <div 
+    <div
       ref={setNodeRef}
       style={style}
-      className="flex w-[350px] flex-col rounded-xl border border-zinc-700/50 bg-[#18181A] shrink-0 self-start max-h-full"
+      className="flex w-[260px] shrink-0 flex-col self-start rounded-md border border-zinc-800/40 bg-[#141414]"
     >
-      <div 
+      <div
         {...attributes}
         {...listeners}
-        className="flex h-[50px] items-center justify-between rounded-t-xl border-b border-zinc-700/50 bg-zinc-800/20 px-4 font-medium text-zinc-100 cursor-grab active:cursor-grabbing hover:bg-zinc-700/30 transition-colors"
+        className="flex h-8 items-center justify-between border-b border-zinc-800/30 px-3 cursor-grab active:cursor-grabbing"
       >
-        <div className="flex items-center gap-2">
-          <span>{column.title}</span>
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-xs font-medium text-zinc-400">
-            {tasks.length}
-          </span>
-        </div>
+        <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">{column.title}</span>
+        <span className="font-mono text-[10px] text-zinc-700">{tasks.length}</span>
       </div>
-      
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-3">
+
+      <div className="flex flex-col gap-px overflow-y-auto p-1">
         {tasks.map((task) => (
           <KanbanTaskCard key={task.id} task={task} />
         ))}
+        {tasks.length === 0 && (
+          <div className="flex h-16 items-center justify-center">
+            <span className="font-mono text-[10px] text-zinc-800">empty</span>
+          </div>
+        )}
       </div>
     </div>
   );

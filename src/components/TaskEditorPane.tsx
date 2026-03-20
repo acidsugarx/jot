@@ -1,111 +1,126 @@
 import { useTaskStore } from '@/store/use-task-store';
-import { Calendar, FileText, Hash, Link as LinkIcon, Network, Save, X } from 'lucide-react';
+import { FileText, Link as LinkIcon, X } from 'lucide-react';
 import { TaskStatus } from '@/types';
+
+const priorityColor: Record<string, string> = {
+  urgent: 'text-red-400',
+  high: 'text-orange-400',
+  medium: 'text-yellow-400',
+  low: 'text-blue-400',
+};
 
 export function TaskEditorPane() {
   const { tasks, selectedTaskId, setIsEditorOpen, updateTaskStatus, openLinkedNote } = useTaskStore();
-
   const task = tasks.find((t) => t.id === selectedTaskId);
 
-  if (!task) {
-    return null;
-  }
+  if (!task) return null;
 
   return (
-    <div className="flex h-full w-[400px] shrink-0 flex-col border-l border-zinc-800 bg-[#161616] shadow-2xl transition-all">
+    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-zinc-800/40 bg-[#141414]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800/60 p-5">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
-          Task Details
-        </h2>
+      <div className="flex h-11 items-center justify-between border-b border-zinc-800/40 px-4">
+        <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+          Details
+        </span>
         <button
           onClick={() => setIsEditorOpen(false)}
-          className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
-        
-        {/* Title Editor */}
-        <div>
-          <label className="text-xs font-medium text-zinc-500 mb-2 block uppercase">Title</label>
-          <textarea
-            className="w-full resize-none rounded-md bg-zinc-900 border border-zinc-800 p-3 text-sm text-zinc-100 focus:border-cyan-500/50 focus:outline-none transition-colors"
-            rows={3}
-            value={task.title}
-            readOnly
-            // Future: Implement title edit dispatch
-          />
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        {/* Title */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <p className="text-sm font-medium leading-relaxed text-zinc-200">
+            {task.title}
+          </p>
         </div>
 
-        {/* Action Panel */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-md border border-zinc-800/60 bg-[#1e1e20] p-3">
-            <div className="text-[10px] font-medium text-zinc-500 uppercase mb-1 flex items-center gap-1.5">
-              <Hash className="h-3 w-3" /> Status
-            </div>
+        {/* Fields — flat rows */}
+        <div className="border-b border-zinc-800/30">
+          <div className="flex h-9 items-center justify-between px-4">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
             <select
-                value={task.status}
-                onChange={(e) => updateTaskStatus({ id: task.id, status: e.target.value as TaskStatus })}
-                className="w-full bg-transparent text-sm font-medium text-zinc-200 focus:outline-none"
+              value={task.status}
+              onChange={(e) => void updateTaskStatus({ id: task.id, status: e.target.value as TaskStatus })}
+              className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
             >
-                <option value="todo">To Do</option>
-                <option value="in_progress">In Progress</option>
-                <option value="done">Done</option>
+              <option value="todo">To Do</option>
+              <option value="in_progress">In Progress</option>
+              <option value="done">Done</option>
+              <option value="archived">Archived</option>
             </select>
           </div>
 
-          <div className="rounded-md border border-zinc-800/60 bg-[#1e1e20] p-3">
-            <div className="text-[10px] font-medium text-zinc-500 uppercase mb-1 flex items-center gap-1.5">
-              <Calendar className="h-3 w-3" /> Due Date
-            </div>
-            <div className="text-sm font-medium text-zinc-200">
-                {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None'}
-            </div>
+          <div className="flex h-9 items-center justify-between px-4">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Priority</span>
+            <span className={`text-sm ${priorityColor[task.priority] || 'text-zinc-600'}`}>
+              {task.priority === 'none' ? '—' : task.priority}
+            </span>
+          </div>
+
+          <div className="flex h-9 items-center justify-between px-4">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Due</span>
+            <span className="font-mono text-sm text-zinc-400">
+              {task.dueDate
+                ? new Date(task.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+                : '—'}
+            </span>
           </div>
         </div>
 
-        {/* Zettelkasten Link */}
-        {task.linkedNotePath && (
-            <div 
-                onClick={() => openLinkedNote(task.linkedNotePath!)}
-                className="rounded-lg border border-cyan-900/40 bg-cyan-950/20 p-4 cursor-pointer hover:bg-cyan-900/30 transition shadow-inner group"
-            >
-                <div className="flex items-center gap-2 mb-1">
-                    <FileText className="h-4 w-4 text-cyan-400" />
-                    <h3 className="text-sm font-medium text-cyan-50">Zettelkasten Note</h3>
-                </div>
-                <div className="flex items-center gap-2 mt-2">
-                    <LinkIcon className="h-3 w-3 text-cyan-600 group-hover:text-cyan-400" />
-                    <span className="text-xs text-cyan-600/80 font-mono truncate group-hover:text-cyan-400/80">
-                        {task.linkedNotePath}
-                    </span>
-                </div>
+        {/* Tags */}
+        {task.tags.length > 0 && (
+          <div className="border-b border-zinc-800/30 px-4 py-3">
+            <div className="mb-2">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Tags</span>
             </div>
+            <div className="flex flex-wrap gap-1.5">
+              {task.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          </div>
         )}
 
-        {/* Advanced Logic Placeholder */}
-        <div className="pt-4 border-t border-zinc-800/60">
-            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mb-4">
-                <Network className="h-4 w-4" /> Relations
-            </h3>
-            
-            <div className="rounded border border-dashed border-zinc-700 p-4 text-center">
-                <p className="text-xs text-zinc-500">Parent/Child Subtask mapping not yet wired to SQLite.</p>
+        {/* Linked Note */}
+        {task.linkedNotePath && (
+          <div className="border-b border-zinc-800/30 px-4 py-3">
+            <div className="mb-2">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Linked Note</span>
             </div>
-        </div>
-      </div>
-      
-      {/* Footer */}
-      <div className="border-t border-zinc-800/60 p-4 bg-[#111111] flex items-center justify-between">
-          <span className="text-[10px] font-mono text-zinc-600">ID: {task.id.slice(0,8)}</span>
-          <button className="flex items-center gap-2 rounded bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-400 hover:bg-cyan-500/20 transition">
-              <Save className="h-3 w-3" /> Save Changes
-          </button>
+            <button
+              type="button"
+              onClick={() => void openLinkedNote(task.linkedNotePath!)}
+              className="group flex w-full items-center gap-2 rounded-md border border-zinc-800/40 bg-[#111111] px-3 py-2 text-left transition-colors hover:border-cyan-500/30"
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0 text-cyan-500/60 group-hover:text-cyan-400" />
+              <div className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-[11px] text-zinc-500 group-hover:text-zinc-300">
+                  {task.linkedNotePath.split('/').pop()}
+                </span>
+              </div>
+              <LinkIcon className="h-3 w-3 shrink-0 text-zinc-700 group-hover:text-cyan-500/60" />
+            </button>
+          </div>
+        )}
       </div>
 
+      {/* Footer */}
+      <div className="border-t border-zinc-800/40 px-4 py-1.5">
+        <div className="flex items-center justify-between font-mono text-[10px] text-zinc-700">
+          <span>{task.id.slice(0, 8)}</span>
+          <span>{new Date(task.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+        </div>
+      </div>
     </div>
   );
 }

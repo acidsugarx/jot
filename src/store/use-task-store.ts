@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { emit, listen } from '@tauri-apps/api/event';
 import type { AppSettings, CreateTaskInput, Task, UpdateTaskStatusInput } from '@/types';
+
+const TASKS_UPDATED_EVENT = 'tasks-updated';
+
+/** Notify other windows that tasks have changed */
+function notifyTasksChanged() {
+  if ('__TAURI_INTERNALS__' in window) {
+    void emit(TASKS_UPDATED_EVENT);
+  }
+}
 
 interface TaskState {
   tasks: Task[];
@@ -10,7 +20,6 @@ interface TaskState {
   selectedTaskId: string | null;
   isEditorOpen: boolean;
 
-  // Actions
   fetchTasks: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
@@ -21,9 +30,10 @@ interface TaskState {
   selectTask: (id: string | null) => void;
   setIsEditorOpen: (isOpen: boolean) => void;
   clearError: () => void;
+  listenForUpdates: () => () => void;
 }
 
-export const useTaskStore = create<TaskState>((set) => ({
+export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   isLoading: false,
   error: null,
@@ -32,9 +42,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   isEditorOpen: false,
 
   fetchTasks: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      return;
-    }
+    if (!('__TAURI_INTERNALS__' in window)) return;
 
     set({ isLoading: true, error: null });
     try {
@@ -49,9 +57,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   createTask: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      throw new Error('Tauri not available');
-    }
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
 
     set({ isLoading: true, error: null });
     try {
@@ -60,6 +66,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         tasks: [task, ...state.tasks],
         isLoading: false,
       }));
+      notifyTasksChanged();
       return task;
     } catch (error) {
       set({
@@ -71,9 +78,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   updateTaskStatus: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      throw new Error('Tauri not available');
-    }
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
 
     set({ isLoading: true, error: null });
     try {
@@ -84,6 +89,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         ),
         isLoading: false,
       }));
+      notifyTasksChanged();
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : 'Failed to update task',
@@ -94,9 +100,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   deleteTask: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      throw new Error('Tauri not available');
-    }
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
 
     set({ isLoading: true, error: null });
     try {
@@ -107,6 +111,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         isEditorOpen: state.selectedTaskId === id ? false : state.isEditorOpen,
         isLoading: false,
       }));
+      notifyTasksChanged();
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : 'Failed to delete task',
@@ -117,9 +122,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   openLinkedNote: async (path) => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      throw new Error('Tauri not available');
-    }
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
 
     try {
       await invoke('open_linked_note', { path });
@@ -132,9 +135,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   fetchSettings: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      return;
-    }
+    if (!('__TAURI_INTERNALS__' in window)) return;
 
     try {
       const settings = await invoke<AppSettings>('get_settings');
@@ -147,9 +148,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   },
 
   updateSettings: async (vaultDir) => {
-    if (!('__TAURI_INTERNALS__' in window)) {
-      throw new Error('Tauri not available');
-    }
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
 
     set({ isLoading: true, error: null });
     try {
@@ -166,15 +165,18 @@ export const useTaskStore = create<TaskState>((set) => ({
     }
   },
 
-  selectTask: (id) => {
-    set({ selectedTaskId: id });
-  },
+  selectTask: (id) => set({ selectedTaskId: id }),
+  setIsEditorOpen: (isOpen) => set({ isEditorOpen: isOpen }),
+  clearError: () => set({ error: null }),
 
-  setIsEditorOpen: (isOpen) => {
-    set({ isEditorOpen: isOpen });
-  },
+  /** Subscribe to cross-window task update events. Returns cleanup function. */
+  listenForUpdates: () => {
+    if (!('__TAURI_INTERNALS__' in window)) return () => {};
 
-  clearError: () => {
-    set({ error: null });
+    const unlisten = listen(TASKS_UPDATED_EVENT, () => {
+      void get().fetchTasks();
+    });
+
+    return () => { unlisten.then((fn) => fn()); };
   },
 }));

@@ -1,16 +1,79 @@
-import { useEffect, useState } from 'react';
-import { LayoutList, Columns, Calendar as CalendarIcon } from 'lucide-react';
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useEffect, useState, useRef, useCallback } from 'react';
+import {
+  LayoutList,
+  Columns,
+  Calendar as CalendarIcon,
+  Check,
+  FileText,
+  Trash2,
+  ArrowRightLeft,
+  PenLine,
+  Search,
+} from 'lucide-react';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { useTaskStore } from '@/store/use-task-store';
-import { Task } from '@/types';
+import { Task, TaskPriority, TaskStatus } from '@/types';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
 
+const priorityDot = (p: TaskPriority) => {
+  switch (p) {
+    case 'urgent': return 'bg-red-400';
+    case 'high': return 'bg-orange-400';
+    case 'medium': return 'bg-yellow-400';
+    case 'low': return 'bg-blue-400';
+    default: return null;
+  }
+};
+
+const statusMeta = (s: string) => {
+  switch (s) {
+    case 'in_progress': return { text: 'wip', color: 'text-yellow-500/70' };
+    case 'done': return { text: 'done', color: 'text-zinc-600' };
+    case 'archived': return { text: 'arch', color: 'text-zinc-700' };
+    default: return { text: 'todo', color: 'text-zinc-700' };
+  }
+};
+
+const nextStatus: Record<string, TaskStatus> = {
+  todo: 'in_progress',
+  in_progress: 'done',
+  done: 'todo',
+};
+
+type Tab = 'list' | 'kanban' | 'calendar';
+const tabDefs: { id: Tab; label: string; icon: typeof LayoutList }[] = [
+  { id: 'list', label: 'List', icon: LayoutList },
+  { id: 'kanban', label: 'Board', icon: Columns },
+  { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
+];
+
+// Context menu state
+interface ContextMenu {
+  x: number;
+  y: number;
+  taskId: string;
+}
+
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState('list');
-  const { tasks, fetchTasks, selectedTaskId, selectTask, isEditorOpen, setIsEditorOpen } = useTaskStore();
+  const [activeTab, setActiveTab] = useState<Tab>('list');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const {
+    tasks,
+    fetchTasks,
+    listenForUpdates,
+    selectedTaskId,
+    selectTask,
+    updateTaskStatus,
+    deleteTask,
+    isEditorOpen,
+    setIsEditorOpen,
+    openLinkedNote,
+  } = useTaskStore();
 
   useVimBindings(activeTab as ViewMode);
 
@@ -18,92 +81,401 @@ export default function Dashboard() {
     void fetchTasks();
   }, [fetchTasks]);
 
+  // Re-fetch when other windows mutate tasks
+  useEffect(() => {
+    return listenForUpdates();
+  }, [listenForUpdates]);
+
+  // Close context menu on any click
+  useEffect(() => {
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
+
+  // Close context menu on escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && contextMenu) {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [contextMenu]);
+
+  const selectedTask = tasks.find((t) => t.id === selectedTaskId);
+
+  // Filter tasks
+  const filtered = searchQuery.trim()
+    ? tasks.filter((t) => {
+        const q = searchQuery.toLowerCase();
+        return (
+          t.title.toLowerCase().includes(q) ||
+          t.tags.some((tag) => tag.toLowerCase().includes(q)) ||
+          t.status.includes(q)
+        );
+      })
+    : tasks;
+
+  // Group for list view (preserving order: wip → todo → done)
+  const wipTasks = filtered.filter((t) => t.status === 'in_progress');
+  const todoTasks = filtered.filter((t) => t.status === 'todo');
+  const doneTasks = filtered.filter((t) => t.status === 'done');
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, taskId: string) => {
+    e.preventDefault();
+    selectTask(taskId);
+    setContextMenu({ x: e.clientX, y: e.clientY, taskId });
+  }, [selectTask]);
+
+  const contextTask = contextMenu ? tasks.find((t) => t.id === contextMenu.taskId) : null;
+
+  const renderTaskRow = (t: Task) => {
+    const isSelected = selectedTaskId === t.id;
+    const isDone = t.status === 'done';
+    const dot = priorityDot(t.priority);
+    const sl = statusMeta(t.status);
+
+    return (
+      <div
+        key={t.id}
+        data-task-selected={isSelected ? 'true' : undefined}
+        onClick={() => selectTask(t.id)}
+        onDoubleClick={() => setIsEditorOpen(true)}
+        onContextMenu={(e) => handleContextMenu(e, t.id)}
+        className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
+          isSelected
+            ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
+            : 'border-l-transparent hover:bg-zinc-900/40'
+        }`}
+      >
+        {/* Checkbox */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void updateTaskStatus({ id: t.id, status: isDone ? 'todo' : 'done' });
+          }}
+          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
+            isDone
+              ? 'border-cyan-500/40 bg-cyan-500/20'
+              : 'border-zinc-700 hover:border-zinc-500'
+          }`}
+        >
+          {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+        </button>
+
+        {/* Priority dot */}
+        {dot ? (
+          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+        ) : (
+          <div className="w-1.5 shrink-0" />
+        )}
+
+        {/* Title */}
+        <span className={`min-w-0 flex-1 truncate text-sm ${
+          isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
+        }`}>
+          {t.title}
+        </span>
+
+        {/* Hover actions (mouse users) */}
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          {/* Cycle status */}
+          <button
+            type="button"
+            title={`Move to ${nextStatus[t.status]}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void updateTaskStatus({ id: t.id, status: nextStatus[t.status] });
+            }}
+            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+          >
+            <ArrowRightLeft className="h-3 w-3" />
+          </button>
+          {/* Edit */}
+          <button
+            type="button"
+            title="Edit (e)"
+            onClick={(e) => {
+              e.stopPropagation();
+              selectTask(t.id);
+              setIsEditorOpen(true);
+            }}
+            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+          >
+            <PenLine className="h-3 w-3" />
+          </button>
+          {/* Delete */}
+          <button
+            type="button"
+            title="Delete (d)"
+            onClick={(e) => {
+              e.stopPropagation();
+              void deleteTask(t.id);
+            }}
+            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+
+        {/* Right metadata (hidden when hover actions show) */}
+        <div className="flex shrink-0 items-center gap-2 group-hover:hidden">
+          {t.linkedNotePath && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void openLinkedNote(t.linkedNotePath!); }}
+              className="text-cyan-600/40 hover:text-cyan-400 transition-colors"
+            >
+              <FileText className="h-3 w-3" />
+            </button>
+          )}
+          {t.tags.map((tag) => (
+            <span key={tag} className="font-mono text-[10px] text-zinc-600">#{tag}</span>
+          ))}
+          {t.dueDate && (
+            <span className="font-mono text-[10px] text-zinc-600">
+              {new Date(t.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            </span>
+          )}
+          <span className={`w-8 text-right font-mono text-[10px] ${sl.color}`}>
+            {sl.text}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSection = (label: string, items: Task[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div>
+        <div className="flex h-7 items-center px-4">
+          <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+            {label}
+          </span>
+          <span className="ml-1.5 font-mono text-[10px] text-zinc-700">{items.length}</span>
+        </div>
+        {items.map(renderTaskRow)}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen w-screen flex-col bg-[#111111] font-sans text-zinc-100 selection:bg-cyan-500/30">
-      
-      {/* Header Overlay */}
-      <div 
-        data-tauri-drag-region 
+
+      {/* Header */}
+      <div
+        data-tauri-drag-region
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) {
             void getCurrentWindow().startDragging();
           }
         }}
-        className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/80 px-6 shadow-sm backdrop-blur-md pl-[80px]"
+        className="flex h-11 shrink-0 items-center justify-between border-b border-zinc-800/60 bg-[#161616]/80 px-4 backdrop-blur-md pl-[80px]"
       >
-        <div data-tauri-drag-region className="flex items-center gap-4 pointer-events-none">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full mt-2 pointer-events-auto">
-            <TabsList className="bg-transparent h-10 border border-zinc-700/50 rounded-md">
-              <TabsTrigger value="list" className="data-[state=active]:bg-zinc-800">
-                <LayoutList className="h-4 w-4 mr-2" />
-                List
-              </TabsTrigger>
-              <TabsTrigger value="kanban" className="data-[state=active]:bg-zinc-800">
-                <Columns className="h-4 w-4 mr-2" />
-                Kanban
-              </TabsTrigger>
-              <TabsTrigger value="calendar" className="data-[state=active]:bg-zinc-800">
-                <CalendarIcon className="h-4 w-4 mr-2" />
-                Calendar
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+        <div data-tauri-drag-region className="flex items-center gap-1 pointer-events-none">
+          {tabDefs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`pointer-events-auto flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${
+                  isActive
+                    ? 'bg-zinc-800 text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <Icon className={`h-3 w-3 ${isActive ? 'text-cyan-400' : ''}`} />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
-        
-        <div className="flex items-center text-zinc-400">
-          <span className="text-xs bg-zinc-800/80 px-2.5 py-1 rounded-md font-medium tracking-wider cursor-pointer hover:bg-zinc-700 transition-colors text-zinc-300">
-            {tasks.length} {tasks.length === 1 ? 'Task' : 'Tasks'} Loaded
+
+        {/* Search */}
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 items-center gap-1.5 rounded-md border border-zinc-800/60 bg-[#111111] px-2">
+            <Search className="h-3 w-3 text-zinc-600" />
+            <input
+              ref={searchRef}
+              data-search-input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchQuery('');
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder="Filter…"
+              className="h-7 w-28 bg-transparent text-xs text-zinc-300 placeholder:text-zinc-700 outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => { setSearchQuery(''); searchRef.current?.blur(); }}
+                className="text-zinc-600 hover:text-zinc-400"
+              >
+                <span className="text-[10px]">×</span>
+              </button>
+            )}
+            <kbd className="font-mono text-[9px] text-zinc-700">/</kbd>
+          </div>
+
+          <span className="font-mono text-[10px] text-zinc-600">
+            {filtered.length}{searchQuery ? `/${tasks.length}` : ''} {tasks.length === 1 ? 'task' : 'tasks'}
           </span>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden relative">
-        {/* Main Content Pane */}
-        <div className="flex-1 overflow-y-auto w-full relative z-0">
-            {activeTab === 'list' && (
-              <div className="p-8 pb-32">
-                  <h2 className="text-xl font-semibold mb-6">List View</h2>
-                  <div className="flex flex-col gap-2">
-                      {tasks.map((t: Task) => (
-                          <div 
-                            key={t.id} 
-                            onClick={() => selectTask(t.id)}
-                            onDoubleClick={() => setIsEditorOpen(true)}
-                            className={`p-4 rounded-lg border shadow-sm hover:border-zinc-500 transition-colors cursor-pointer flex justify-between items-center group ${
-                              selectedTaskId === t.id ? 'border-cyan-500/50 bg-[#1e1e1a]' : 'border-zinc-700/60 bg-[#27272A] hover:bg-[#2e2e33]'
-                            }`}
-                          >
-                            <span className="font-medium text-zinc-100 tracking-tight">{t.title}</span>
-                            <span className="text-xs font-mono px-2 py-1 bg-zinc-900 rounded text-zinc-400 group-hover:text-cyan-400 transition-colors">
-                              {t.status}
-                            </span>
-                          </div>
-                      ))}
-                  </div>
-              </div>
-            )}
-            {activeTab === 'kanban' && (
-              <div className="h-full w-full">
-                  <KanbanBoard />
-              </div>
-            )}
-            {activeTab === 'calendar' && (
-              <div className="p-8">
-                  <h2 className="text-xl font-semibold mb-6">Calendar / Gantt</h2>
-                  <p className="text-zinc-500">Timeline view based on `due_date` loading...</p>
-              </div>
-            )}
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Main content */}
+        <div className="flex-1 overflow-y-auto">
+          {activeTab === 'list' && (
+            <div className="mx-auto w-full max-w-3xl py-2">
+              {tasks.length === 0 ? (
+                <div className="flex h-48 flex-col items-center justify-center gap-1">
+                  <span className="text-sm text-zinc-600">No tasks</span>
+                  <span className="font-mono text-[10px] text-zinc-700">
+                    press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">Opt+Space</kbd> to capture
+                  </span>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="flex h-48 flex-col items-center justify-center gap-1">
+                  <span className="text-sm text-zinc-600">No matches</span>
+                  <span className="font-mono text-[10px] text-zinc-700">
+                    press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">esc</kbd> to clear
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {renderSection('In Progress', wipTasks)}
+                  {renderSection('To Do', todoTasks)}
+                  {renderSection('Done', doneTasks)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'kanban' && (
+            <div className="h-full w-full">
+              <KanbanBoard />
+            </div>
+          )}
+
+          {activeTab === 'calendar' && (
+            <div className="flex h-48 flex-col items-center justify-center gap-1">
+              <span className="text-sm text-zinc-600">Calendar view</span>
+              <span className="font-mono text-[10px] text-zinc-700">coming soon</span>
+            </div>
+          )}
         </div>
 
-        {/* TaskEditorPane Slide-in Overlay Logic */}
-        <div 
-          className={`absolute right-0 top-0 h-full transform transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] z-10 ${
-            selectedTaskId && isEditorOpen ? 'translate-x-0 shadow-2xl' : 'translate-x-full'
-          }`}
-        >
+        {/* Editor pane */}
+        {selectedTaskId && isEditorOpen && selectedTask && (
           <TaskEditorPane />
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-1">
+        <div className="flex items-center justify-center gap-3 font-mono text-[10px] text-zinc-700">
+          <span>j/k navigate</span>
+          <span className="text-zinc-800">·</span>
+          <span>e edit</span>
+          <span className="text-zinc-800">·</span>
+          <span>x done</span>
+          <span className="text-zinc-800">·</span>
+          <span>s cycle</span>
+          <span className="text-zinc-800">·</span>
+          <span>d delete</span>
+          <span className="text-zinc-800">·</span>
+          <span>/ search</span>
+          <span className="text-zinc-800">·</span>
+          <span>o note</span>
         </div>
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && contextTask && (
+        <div
+          className="fixed z-50 min-w-[180px] rounded-md border border-zinc-800/60 bg-[#1a1a1a] py-1 shadow-xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            onClick={() => { setIsEditorOpen(true); setContextMenu(null); }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
+          >
+            <PenLine className="h-3 w-3 text-zinc-500" />
+            Edit
+            <kbd className="ml-auto font-mono text-[10px] text-zinc-700">e</kbd>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              void updateTaskStatus({ id: contextTask.id, status: nextStatus[contextTask.status] });
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
+          >
+            <ArrowRightLeft className="h-3 w-3 text-zinc-500" />
+            Move to {nextStatus[contextTask.status].replace('_', ' ')}
+            <kbd className="ml-auto font-mono text-[10px] text-zinc-700">s</kbd>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              void updateTaskStatus({ id: contextTask.id, status: contextTask.status === 'done' ? 'todo' : 'done' });
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
+          >
+            <Check className="h-3 w-3 text-zinc-500" />
+            {contextTask.status === 'done' ? 'Mark undone' : 'Mark done'}
+            <kbd className="ml-auto font-mono text-[10px] text-zinc-700">x</kbd>
+          </button>
+
+          {contextTask.linkedNotePath && (
+            <button
+              type="button"
+              onClick={() => {
+                void openLinkedNote(contextTask.linkedNotePath!);
+                setContextMenu(null);
+              }}
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
+            >
+              <FileText className="h-3 w-3 text-cyan-500/60" />
+              Open note
+              <kbd className="ml-auto font-mono text-[10px] text-zinc-700">o</kbd>
+            </button>
+          )}
+
+          <div className="my-1 border-t border-zinc-800/40" />
+
+          <button
+            type="button"
+            onClick={() => {
+              void deleteTask(contextTask.id);
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-red-400/80 hover:bg-zinc-800/60"
+          >
+            <Trash2 className="h-3 w-3" />
+            Delete
+            <kbd className="ml-auto font-mono text-[10px] text-zinc-700">d</kbd>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

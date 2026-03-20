@@ -12,7 +12,7 @@
 
 * **Tasks belong to Jot:** Stored locally in a high-speed SQLite database. Jot handles filtering, queries, statuses, and deadlines.
 * **Notes belong to the File System:** Stored as standard .md files in an external Obsidian Vault.
-* **The Bridge:** Jot links tasks to notes via absolute file paths and can trigger the OS to open these notes in Obsidian (via URI) or Neovim (via CLI/Nushell scripts).
+* **The Bridge:** Jot links tasks to notes via absolute file paths and can trigger the OS to open these notes in Obsidian (via URI) or Neovim (via a configurable shell command).
 
 ## 2. Tech Stack
 
@@ -54,7 +54,7 @@ When the @zettel flag is used:
 3. **Path Linking:** Saves the absolute path of the generated .md file to the linked_note_path column in SQLite.
 4. **Opening Mechanism (Dual-Engine):**
 * *GUI Mode:* Execute system open via obsidian://open?file=...
-* *CLI Mode:* Execute a shell command/Nushell script (e.g., nu open_nvim.nu <path>) opening the file in Alacritty/WezTerm + Neovim.
+* *CLI Mode:* Execute a configurable shell command (e.g., `nvim <path>` or a custom script) opening the file in the user's preferred editor/terminal.
 
 
 
@@ -114,7 +114,7 @@ When assisting with building this application, strictly follow these phases sequ
 2. Build the Raycast-like popup interface.
 3. Connect the cmdk input to the Rust create_task IPC command.
 4. Implement optimistic UI updates using Zustand.
-5. Add Action Menu (Cmd+K) on selected items to trigger status changes or open the linked Neovim/Obsidian file.
+5. Add Action Menu (Cmd+K) on selected items to trigger status changes or open the linked note file.
 
 ### Phase 5: Dashboard & Vim Bindings
 

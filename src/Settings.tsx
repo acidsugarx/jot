@@ -1,12 +1,17 @@
 import { useEffect, useState, useRef } from 'react';
-import { FolderOpen, Settings as SettingsIcon, Database, Layout } from 'lucide-react';
+import { FolderOpen, Keyboard, Database, Palette } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event';
-import { Button } from '@/components/ui/button';
 import { useTaskStore } from '@/store/use-task-store';
 
 type Tab = 'general' | 'vault' | 'ui';
+
+const tabs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
+  { id: 'general', label: 'General', icon: Keyboard },
+  { id: 'vault', label: 'Vault', icon: Database },
+  { id: 'ui', label: 'Appearance', icon: Palette },
+];
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('general');
@@ -45,9 +50,7 @@ export default function Settings() {
       isDialogOpenRef.current = false;
 
       const win = getCurrentWindow();
-      if (win) {
-        void win.setFocus();
-      }
+      if (win) void win.setFocus();
 
       if (typeof selected === 'string') {
         setVaultDirInput(selected);
@@ -59,131 +62,180 @@ export default function Settings() {
     }
   };
 
-  const tabs = [
-    { id: 'general', label: 'General', icon: SettingsIcon },
-    { id: 'vault', label: 'Vault', icon: Database },
-    { id: 'ui', label: 'Appearance', icon: Layout },
-  ];
-
   return (
-    <div className="flex h-screen w-screen flex-col bg-zinc-900 font-sans text-zinc-100 selection:bg-cyan-500/30">
-      
-      {/* 
-        Native Titlebar Region 
-        Padding top allows macOS traffic lights to overlay cleanly.
-        data-tauri-drag-region lets the user click-and-drag the window.
-      */}
-      <div 
-        data-tauri-drag-region 
+    <div className="flex h-screen w-screen flex-col bg-[#111111] font-sans text-zinc-100 selection:bg-cyan-500/30">
+      {/* Header — matches dashboard style */}
+      <div
+        data-tauri-drag-region
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) {
             void getCurrentWindow().startDragging();
           }
         }}
-        className="flex shrink-0 flex-col items-center border-b border-zinc-800 bg-zinc-900/80 pt-8 shadow-sm backdrop-blur-md"
+        className="flex h-11 shrink-0 items-center justify-between border-b border-zinc-800/60 bg-[#161616]/80 px-4 backdrop-blur-md pl-[80px]"
       >
-        <div data-tauri-drag-region className="flex gap-2 pb-4 pointer-events-none">
+        <div data-tauri-drag-region className="flex items-center gap-1 pointer-events-none">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as Tab)}
-                className={`flex pointer-events-auto flex-col items-center justify-center gap-1.5 rounded-lg px-4 py-2 transition-all ${
+                onClick={() => setActiveTab(tab.id)}
+                className={`pointer-events-auto flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${
                   isActive
-                    ? 'bg-zinc-800/80 text-zinc-100 shadow-sm'
-                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                    ? 'bg-zinc-800 text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-300'
                 }`}
               >
-                <Icon className={`h-5 w-5 ${isActive ? 'text-cyan-400' : ''}`} />
-                <span className="text-xs font-medium">{tab.label}</span>
+                <Icon className={`h-3 w-3 ${isActive ? 'text-cyan-400' : ''}`} />
+                {tab.label}
               </button>
             );
           })}
         </div>
+
+        <span className="font-mono text-[10px] text-zinc-600">settings</span>
       </div>
 
-      {/* Content Area */}
-      <div className="flex-1 overflow-y-auto px-12 py-8 bg-zinc-900">
-        <div className="mx-auto max-w-2xl space-y-8">
-          
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-xl py-6 px-6">
+
           {activeTab === 'general' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-[140px_1fr] items-center gap-6">
-                <span className="text-right text-sm font-medium text-zinc-400">Toggle Bar</span>
-                <div className="flex">
-                  <span className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-mono tracking-wider text-zinc-300 shadow-inner">
-                    Opt + Space
-                  </span>
-                </div>
+            <div className="space-y-1">
+              <div className="mb-3">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Shortcuts
+                </span>
               </div>
-              
-              <div className="grid grid-cols-[140px_1fr] items-center gap-6">
-                <span className="text-right text-sm font-medium text-zinc-400">Settings</span>
-                <div className="flex">
-                  <span className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-mono tracking-wider text-zinc-300 shadow-inner">
-                    Cmd + ,
+
+              <div className="flex h-9 items-center justify-between px-3">
+                <span className="text-sm text-zinc-300">Quick Capture</span>
+                <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+                  Opt+Space
+                </kbd>
+              </div>
+
+              <div className="flex h-9 items-center justify-between px-3">
+                <span className="text-sm text-zinc-300">Dashboard</span>
+                <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+                  ⌘⇧Space
+                </kbd>
+              </div>
+
+              <div className="flex h-9 items-center justify-between px-3">
+                <span className="text-sm text-zinc-300">Settings</span>
+                <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+                  ⌘,
+                </kbd>
+              </div>
+
+              <div className="border-t border-zinc-800/40 mt-4 pt-4">
+                <div className="mb-3">
+                  <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                    Vim Bindings (Dashboard)
                   </span>
                 </div>
+                {[
+                  ['j / k', 'Navigate up/down'],
+                  ['h / l', 'Navigate columns'],
+                  ['e', 'Open editor'],
+                  ['x', 'Toggle done'],
+                  ['d', 'Delete task'],
+                  ['o', 'Open linked note'],
+                  ['esc', 'Close / deselect'],
+                ].map(([key, desc]) => (
+                  <div key={key} className="flex h-8 items-center justify-between px-3">
+                    <span className="text-sm text-zinc-400">{desc}</span>
+                    <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-600">
+                      {key}
+                    </kbd>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
           {activeTab === 'vault' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-[140px_1fr] items-baseline gap-6">
-                <span className="text-right text-sm font-medium text-zinc-400">Vault Path</span>
-                <div className="flex flex-col gap-2">
+            <div>
+              <div className="mb-3">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Zettelkasten Vault
+                </span>
+              </div>
+
+              <div className="rounded-md border border-zinc-800/40 bg-[#161616] p-4 space-y-3">
+                <div>
+                  <label className="mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                    Vault Directory
+                  </label>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
                       value={vaultDirInput}
                       onChange={(e) => setVaultDirInput(e.target.value)}
                       onBlur={() => void saveVaultPath(vaultDirInput)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void saveVaultPath(vaultDirInput);
-                      }}
-                      placeholder="/Users/you/Documents/Obsidian/MyVault"
-                      className="flex h-9 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveVaultPath(vaultDirInput); }}
+                      placeholder="/path/to/obsidian/vault"
+                      className="h-8 min-w-0 flex-1 rounded-md border border-zinc-800 bg-[#111111] px-3 font-mono text-sm text-zinc-200 placeholder:text-zinc-700 focus:border-cyan-500/40 focus:outline-none"
                     />
-                    <Button
+                    <button
                       type="button"
                       onClick={() => void handleChooseVaultDir()}
-                      variant="outline"
-                      className="h-9 shrink-0 gap-2 border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
+                      className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-zinc-800 bg-[#111111] px-3 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200"
                     >
-                      <FolderOpen className="h-4 w-4" />
+                      <FolderOpen className="h-3 w-3" />
                       Browse
-                    </Button>
+                    </button>
                   </div>
-                  <p className="text-xs text-zinc-500">
-                    Target directory used by the `@zettel` command. Changes save automatically.
-                  </p>
                 </div>
+
+                <p className="font-mono text-[10px] text-zinc-700">
+                  Used by the <span className="text-cyan-600">@zettel</span> command to create linked notes. Auto-saves on blur.
+                </p>
               </div>
             </div>
           )}
 
           {activeTab === 'ui' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-[140px_1fr] items-center gap-6">
-                <span className="text-right text-sm font-medium text-zinc-400">Theme</span>
-                <div className="flex items-center gap-4">
-                  {/* Mock options for Raycast aesthetic */}
-                  <div className="flex flex-col items-center gap-2 cursor-pointer opacity-50">
-                    <div className="h-12 w-16 rounded-md border border-zinc-700 bg-zinc-100"></div>
-                    <span className="text-xs text-zinc-500">Light</span>
-                  </div>
-                  <div className="flex flex-col items-center gap-2 cursor-pointer">
-                    <div className="h-12 w-16 rounded-md border-2 border-cyan-500 bg-zinc-950"></div>
-                    <span className="text-xs font-medium text-zinc-200">Dark</span>
-                  </div>
-                </div>
+            <div>
+              <div className="mb-3">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Theme
+                </span>
               </div>
+
+              <div className="flex items-center gap-3 px-3">
+                <button
+                  type="button"
+                  className="flex flex-col items-center gap-1.5 rounded-md border-2 border-cyan-500/40 p-2 transition-colors"
+                >
+                  <div className="h-8 w-12 rounded border border-zinc-800 bg-[#111111]" />
+                  <span className="font-mono text-[10px] text-zinc-200">Dark</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex flex-col items-center gap-1.5 rounded-md border border-zinc-800 p-2 opacity-30 cursor-not-allowed"
+                >
+                  <div className="h-8 w-12 rounded border border-zinc-300 bg-zinc-100" />
+                  <span className="font-mono text-[10px] text-zinc-600">Light</span>
+                </button>
+              </div>
+
+              <p className="mt-3 px-3 font-mono text-[10px] text-zinc-700">
+                Light theme coming soon.
+              </p>
             </div>
           )}
-          
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-1.5">
+        <div className="flex items-center justify-between font-mono text-[10px] text-zinc-700">
+          <span>jot v0.1.0</span>
+          <span>changes save automatically</span>
         </div>
       </div>
     </div>

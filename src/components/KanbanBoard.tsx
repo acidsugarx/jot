@@ -75,7 +75,7 @@ export function KanbanBoard() {
   };
 
   return (
-    <div className="flex w-full overflow-x-auto overflow-y-hidden px-12 py-8 min-h-[500px]">
+    <div className="flex w-full overflow-x-auto overflow-y-hidden px-6 py-4">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -83,7 +83,7 @@ export function KanbanBoard() {
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex gap-6">
+        <div className="flex gap-3">
           <SortableContext items={columnsId}>
             {columns.map(col => (
                <KanbanColumn 
