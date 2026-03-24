@@ -1,4 +1,6 @@
-use chrono::{DateTime, Duration, Local, LocalResult, NaiveDate, NaiveTime, TimeZone};
+use chrono::{
+    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Weekday,
+};
 
 use crate::models::TaskPriority;
 
@@ -83,6 +85,7 @@ fn parse_due_date_tokens(tokens: &[&str]) -> Option<(String, usize)> {
     let first = *tokens.first()?;
     let today = Local::now().date_naive();
 
+    // "today"
     if first.eq_ignore_ascii_case("today") {
         return Some((
             build_due_date(today, extract_time_token(tokens, 1))?,
@@ -90,6 +93,7 @@ fn parse_due_date_tokens(tokens: &[&str]) -> Option<(String, usize)> {
         ));
     }
 
+    // "tomorrow"
     if first.eq_ignore_ascii_case("tomorrow") {
         return Some((
             build_due_date(today + Duration::days(1), extract_time_token(tokens, 1))?,
@@ -97,7 +101,129 @@ fn parse_due_date_tokens(tokens: &[&str]) -> Option<(String, usize)> {
         ));
     }
 
+    // "next week" / "next monday" / etc.
+    if first.eq_ignore_ascii_case("next") {
+        if let Some(second) = tokens.get(1) {
+            if second.eq_ignore_ascii_case("week") {
+                return Some((
+                    build_due_date(today + Duration::weeks(1), extract_time_token(tokens, 2))?,
+                    consumed_tokens(tokens, 2),
+                ));
+            }
+            if let Some(weekday) = parse_weekday(&clean_token(second)) {
+                let target = next_weekday(today, weekday);
+                return Some((
+                    build_due_date(target, extract_time_token(tokens, 2))?,
+                    consumed_tokens(tokens, 2),
+                ));
+            }
+        }
+    }
+
+    // "in N days/weeks"
+    if first.eq_ignore_ascii_case("in") {
+        if let (Some(second), Some(third)) = (tokens.get(1), tokens.get(2)) {
+            if let Ok(n) = second.parse::<i64>() {
+                let unit = clean_token(third).to_lowercase();
+                let target = match unit.as_str() {
+                    "day" | "days" => Some(today + Duration::days(n)),
+                    "week" | "weeks" => Some(today + Duration::weeks(n)),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    return Some((
+                        build_due_date(target, extract_time_token(tokens, 3))?,
+                        consumed_tokens(tokens, 3),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Only try weekday/month names if token starts with a letter
+    if first
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        // Weekday name: "monday", "fri", etc.
+        if let Some(weekday) = parse_weekday(&clean_token(first)) {
+            let target = next_weekday(today, weekday);
+            return Some((
+                build_due_date(target, extract_time_token(tokens, 1))?,
+                consumed_tokens(tokens, 1),
+            ));
+        }
+
+        // Month + day: "Mar 25", "December 3"
+        if let Some(month_num) = parse_month_name(&clean_token(first)) {
+            if let Some(second) = tokens.get(1) {
+                if let Ok(day) = clean_token(second).parse::<u32>() {
+                    if (1..=31).contains(&day) {
+                        let year = if NaiveDate::from_ymd_opt(today.year(), month_num, day)
+                            .map(|d| d >= today)
+                            .unwrap_or(false)
+                        {
+                            today.year()
+                        } else {
+                            today.year() + 1
+                        };
+
+                        if let Some(date) = NaiveDate::from_ymd_opt(year, month_num, day) {
+                            return Some((
+                                build_due_date(date, extract_time_token(tokens, 2))?,
+                                consumed_tokens(tokens, 2),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     None
+}
+
+fn parse_weekday(s: &str) -> Option<Weekday> {
+    match s.to_lowercase().as_str() {
+        "monday" | "mon" => Some(Weekday::Mon),
+        "tuesday" | "tue" | "tues" => Some(Weekday::Tue),
+        "wednesday" | "wed" => Some(Weekday::Wed),
+        "thursday" | "thu" | "thurs" => Some(Weekday::Thu),
+        "friday" | "fri" => Some(Weekday::Fri),
+        "saturday" | "sat" => Some(Weekday::Sat),
+        "sunday" | "sun" => Some(Weekday::Sun),
+        _ => None,
+    }
+}
+
+fn next_weekday(from: NaiveDate, target: Weekday) -> NaiveDate {
+    let current = from.weekday().num_days_from_monday();
+    let target_num = target.num_days_from_monday();
+    let days_ahead = if target_num <= current {
+        7 - (current - target_num)
+    } else {
+        target_num - current
+    };
+    from + Duration::days(days_ahead as i64)
+}
+
+fn parse_month_name(s: &str) -> Option<u32> {
+    match s.to_lowercase().as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
 }
 
 fn extract_time_token<'a>(tokens: &'a [&'a str], offset: usize) -> Option<&'a str> {
@@ -236,5 +362,64 @@ mod tests {
         assert_eq!(parsed.title, "Plan sprint");
         assert_eq!(parsed.tags, vec!["planning"]);
         assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_weekday_names() {
+        let parsed = parse_task_input("Review PR friday #code");
+
+        assert_eq!(parsed.title, "Review PR");
+        assert_eq!(parsed.tags, vec!["code"]);
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_next_weekday() {
+        let parsed = parse_task_input("Team standup next monday");
+
+        assert_eq!(parsed.title, "Team standup");
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_next_week() {
+        let parsed = parse_task_input("Plan roadmap next week");
+
+        assert_eq!(parsed.title, "Plan roadmap");
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_relative_days() {
+        let parsed = parse_task_input("Ship feature in 3 days !high");
+
+        assert_eq!(parsed.title, "Ship feature");
+        assert_eq!(parsed.priority, Some(TaskPriority::High));
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_relative_weeks() {
+        let parsed = parse_task_input("Deploy v2 in 2 weeks");
+
+        assert_eq!(parsed.title, "Deploy v2");
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn parses_month_day() {
+        let parsed = parse_task_input("Conference talk Mar 25 #speaking");
+
+        assert_eq!(parsed.title, "Conference talk");
+        assert_eq!(parsed.tags, vec!["speaking"]);
+        assert!(parsed.due_date.is_some());
+    }
+
+    #[test]
+    fn next_weekday_always_returns_future_date() {
+        let today = Local::now().date_naive();
+        let target = next_weekday(today, today.weekday());
+
+        assert_eq!((target - today).num_days(), 7);
     }
 }

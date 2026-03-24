@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use crate::db::{
     create_column, create_task, delete_column, delete_task, get_columns, get_settings, get_tasks,
     init_database, open_linked_note, reorder_columns, update_column, update_settings, update_task,
-    update_task_status,
+    update_task_status, update_theme, DatabaseState,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -26,26 +26,58 @@ fn main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .ok_or_else(|| to_tauri_error("Main window is not available"))
 }
 
+// ── macOS: NSPanel for quick-capture window ─────────────────────────────────
+
+#[cfg(target_os = "macos")]
+tauri_nspanel::tauri_panel! {
+    panel!(CapturePanel {
+        config: {
+            can_become_key_window: true
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
+    use tauri_nspanel::ManagerExt;
+    let panel = app
+        .get_webview_panel("main")
+        .map_err(|_| to_tauri_error("Panel not found"))?;
+    panel.show();
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn hide_main_window(app: &AppHandle) -> tauri::Result<()> {
+    use tauri_nspanel::ManagerExt;
+    let panel = app
+        .get_webview_panel("main")
+        .map_err(|_| to_tauri_error("Panel not found"))?;
+    panel.hide();
+    Ok(())
+}
+
+// ── Non-macOS: standard Tauri window ────────────────────────────────────────
+
+#[cfg(not(target_os = "macos"))]
 fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     let window = main_window(app)?;
-
     if window.is_minimized()? {
         window.unminimize()?;
     }
-
     window.show()?;
     window.set_focus()?;
-
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn hide_main_window(app: &AppHandle) -> tauri::Result<()> {
     let window = main_window(app)?;
-
     window.hide()?;
-
     Ok(())
 }
+
+// ── Shortcuts, tray, window behavior ────────────────────────────────────────
 
 #[cfg(desktop)]
 fn register_main_shortcut(app: &AppHandle) -> tauri::Result<()> {
@@ -68,7 +100,8 @@ fn register_main_shortcut(app: &AppHandle) -> tauri::Result<()> {
 #[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, "show", "Show Jot", true, None::<&str>)?;
-    let dashboard_item = MenuItem::with_id(app, "dashboard", "Open Dashboard", true, None::<&str>)?;
+    let dashboard_item =
+        MenuItem::with_id(app, "dashboard", "Open Dashboard", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide Jot", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu =
@@ -121,6 +154,37 @@ fn setup_main_window_behavior(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Convert the main window to an NSPanel so it can overlay fullscreen apps.
+#[cfg(target_os = "macos")]
+fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
+    use tauri_nspanel::{CollectionBehavior, PanelLevel, StyleMask, WebviewWindowExt};
+
+    let window = main_window(app)?;
+    let panel = window
+        .to_panel::<CapturePanel>()
+        .map_err(|e| to_tauri_error(format!("{e:?}")))?;
+
+    // NonactivatingPanel = won't steal activation from the fullscreen app
+    panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+
+    // CanJoinAllSpaces + FullScreenAuxiliary = appear over fullscreen apps on all spaces
+    panel.set_collection_behavior(
+        CollectionBehavior::new()
+            .can_join_all_spaces()
+            .full_screen_auxiliary()
+            .into(),
+    );
+
+    // PopUpMenu level (101) — high enough to render above fullscreen app content
+    panel.set_level(PanelLevel::PopUpMenu.value());
+
+    // Panel behaviors
+    panel.set_floating_panel(true);
+    panel.set_hides_on_deactivate(false);
+
+    Ok(())
+}
+
 #[tauri::command]
 fn show_window(app: AppHandle) -> Result<String, String> {
     show_main_window(&app).map_err(|error| error.to_string())?;
@@ -143,6 +207,8 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    let theme = app.state::<DatabaseState>().current_theme();
+
     let mut builder = WebviewWindowBuilder::new(
         &app,
         "settings",
@@ -153,6 +219,10 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
     .center()
     .resizable(false)
     .hidden_title(true);
+
+    if let Some(theme) = theme {
+        builder = builder.theme(Some(theme));
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -174,6 +244,8 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    let theme = app.state::<DatabaseState>().current_theme();
+
     let mut builder = WebviewWindowBuilder::new(
         &app,
         "dashboard",
@@ -184,6 +256,10 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     .center()
     .resizable(true)
     .hidden_title(true);
+
+    if let Some(theme) = theme {
+        builder = builder.theme(Some(theme));
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -199,7 +275,7 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -217,7 +293,14 @@ pub fn run() {
                     }
                 })
                 .build(),
-        )
+        );
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -229,6 +312,9 @@ pub fn run() {
 
             init_database(app.handle()).map_err(to_tauri_error)?;
             setup_main_window_behavior(app.handle())?;
+
+            #[cfg(target_os = "macos")]
+            setup_capture_panel(app.handle()).map_err(|e| to_tauri_error(e.to_string()))?;
 
             #[cfg(desktop)]
             {
@@ -255,7 +341,8 @@ pub fn run() {
             create_column,
             update_column,
             delete_column,
-            reorder_columns
+            reorder_columns,
+            update_theme
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

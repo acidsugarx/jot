@@ -78,18 +78,19 @@ export function useVimBindings(viewMode: ViewMode) {
   const handleColumnNav = useCallback(
     (direction: 'left' | 'right') => {
       if (viewMode !== 'kanban') return;
-      const columns = ['todo', 'in_progress', 'done'];
+      const { columns } = useTaskStore.getState();
+      const colKeys = columns.map((c) => c.statusKey);
       const currentTask = tasks.find((t) => t.id === selectedTaskId);
       if (!currentTask) return;
 
-      const colIdx = columns.indexOf(currentTask.status);
+      const colIdx = colKeys.indexOf(currentTask.status);
       const tasksInCurrent = tasks.filter((t) => t.status === currentTask.status);
       const idxInCol = tasksInCurrent.findIndex((t) => t.id === currentTask.id);
 
       const targetColIdx = direction === 'left' ? colIdx - 1 : colIdx + 1;
-      if (targetColIdx < 0 || targetColIdx >= columns.length) return;
+      if (targetColIdx < 0 || targetColIdx >= colKeys.length) return;
 
-      const targetTasks = tasks.filter((t) => t.status === columns[targetColIdx]);
+      const targetTasks = tasks.filter((t) => t.status === colKeys[targetColIdx]);
       const targetTask = targetTasks[Math.min(idxInCol, Math.max(0, targetTasks.length - 1))];
       if (targetTask) selectTask(targetTask.id);
       scrollSelectedIntoView();
@@ -176,15 +177,22 @@ export function useVimBindings(viewMode: ViewMode) {
         return;
       }
 
-      // s — cycle status: todo → in_progress → done → todo
+      // s — cycle status through columns
       if (e.key === 's') {
-        const cycle: Record<string, 'todo' | 'in_progress' | 'done'> = {
-          todo: 'in_progress',
-          in_progress: 'done',
-          done: 'todo',
-        };
-        const next = cycle[currentTask.status] || 'todo';
-        void updateTaskStatus({ id: currentTask.id, status: next });
+        const { columns } = useTaskStore.getState();
+        const colKeys = columns.map((c) => c.statusKey);
+        if (colKeys.length > 0) {
+          const idx = colKeys.indexOf(currentTask.status);
+          const next = colKeys[(idx + 1) % colKeys.length] ?? colKeys[0] ?? 'todo';
+          void updateTaskStatus({ id: currentTask.id, status: next });
+        }
+        return;
+      }
+
+      // a — toggle archive
+      if (e.key === 'a') {
+        const newStatus = currentTask.status === 'archived' ? 'todo' : 'archived';
+        void updateTaskStatus({ id: currentTask.id, status: newStatus });
         return;
       }
 

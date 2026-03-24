@@ -18,7 +18,7 @@ export default function Settings() {
   const [vaultDirInput, setVaultDirInput] = useState('');
   const isDialogOpenRef = useRef(false);
 
-  const { settings, fetchSettings, updateSettings } = useTaskStore();
+  const { settings, fetchSettings, updateSettings, updateTheme } = useTaskStore();
 
   useEffect(() => {
     void fetchSettings();
@@ -142,8 +142,11 @@ export default function Settings() {
                   ['h / l', 'Navigate columns'],
                   ['e', 'Open editor'],
                   ['x', 'Toggle done'],
+                  ['s', 'Cycle status'],
+                  ['a', 'Archive / unarchive'],
                   ['d', 'Delete task'],
                   ['o', 'Open linked note'],
+                  ['/', 'Focus search'],
                   ['esc', 'Close / deselect'],
                 ].map(([key, desc]) => (
                   <div key={key} className="flex h-8 items-center justify-between px-3">
@@ -209,22 +212,28 @@ export default function Settings() {
               <div className="flex items-center gap-3 px-3">
                 <button
                   type="button"
-                  className="flex flex-col items-center gap-1.5 rounded-md border-2 border-cyan-500/40 p-2 transition-colors"
+                  onClick={() => void updateTheme('dark')}
+                  className={`flex flex-col items-center gap-1.5 rounded-md border-2 p-2 transition-colors ${
+                    settings?.theme !== 'light' ? 'border-cyan-500/40' : 'border-zinc-800 hover:border-zinc-700'
+                  }`}
                 >
-                  <div className="h-8 w-12 rounded border border-zinc-800 bg-[#111111]" />
+                  <div className="h-8 w-12 rounded border" style={{ backgroundColor: '#111111', borderColor: '#27272a' }} />
                   <span className="font-mono text-[10px] text-zinc-200">Dark</span>
                 </button>
                 <button
                   type="button"
-                  className="flex flex-col items-center gap-1.5 rounded-md border border-zinc-800 p-2 opacity-30 cursor-not-allowed"
+                  onClick={() => void updateTheme('light')}
+                  className={`flex flex-col items-center gap-1.5 rounded-md border-2 p-2 transition-colors ${
+                    settings?.theme === 'light' ? 'border-cyan-500/40' : 'border-zinc-800 hover:border-zinc-700'
+                  }`}
                 >
-                  <div className="h-8 w-12 rounded border border-zinc-300 bg-zinc-100" />
+                  <div className="h-8 w-12 rounded border" style={{ backgroundColor: '#f4f4f5', borderColor: '#d4d4d8' }} />
                   <span className="font-mono text-[10px] text-zinc-600">Light</span>
                 </button>
               </div>
 
               <p className="mt-3 px-3 font-mono text-[10px] text-zinc-700">
-                Light theme coming soon.
+                Theme applies to all windows instantly.
               </p>
             </div>
           )}

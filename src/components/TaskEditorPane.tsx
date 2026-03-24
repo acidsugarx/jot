@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
-import { FileText, Link as LinkIcon, X, Plus, Calendar } from 'lucide-react';
+import { FileText, Link as LinkIcon, X, Plus, Calendar, Eye, PenLine } from 'lucide-react';
 import { TaskPriority } from '@/types';
 
 const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
@@ -29,6 +29,7 @@ export function TaskEditorPane() {
   const [dueDate, setDueDate] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [descPreview, setDescPreview] = useState(false);
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
@@ -145,22 +146,39 @@ export function TaskEditorPane() {
           />
         </div>
 
-        {/* Description — editable textarea */}
+        {/* Description — editable textarea with markdown preview */}
         <div className="border-b border-zinc-800/30 px-4 py-3">
-          <div className="mb-1.5">
+          <div className="mb-1.5 flex items-center justify-between">
             <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
               Description
             </span>
+            {description && (
+              <button
+                type="button"
+                onClick={() => setDescPreview(!descPreview)}
+                className="flex items-center gap-1 font-mono text-[10px] text-zinc-700 hover:text-zinc-400 transition-colors"
+              >
+                {descPreview ? <PenLine className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
+                {descPreview ? 'Edit' : 'Preview'}
+              </button>
+            )}
           </div>
-          <textarea
-            ref={descRef}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onBlur={handleDescriptionBlur}
-            rows={2}
-            className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
-            placeholder="Add a description..."
-          />
+          {descPreview ? (
+            <div
+              className="prose-jot min-h-[2.5rem]"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(description) }}
+            />
+          ) : (
+            <textarea
+              ref={descRef}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              onBlur={handleDescriptionBlur}
+              rows={2}
+              className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
+              placeholder="Add a description…  (supports **bold**, *italic*, `code`, [links](url), - lists)"
+            />
+          )}
         </div>
 
         {/* Fields — flat rows */}
@@ -312,6 +330,81 @@ export function TaskEditorPane() {
       </div>
     </div>
   );
+}
+
+function renderMarkdown(text: string): string {
+  // Escape HTML
+  const html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  const lines = html.split('\n');
+  const result: string[] = [];
+  let inCodeBlock = false;
+  let inList = false;
+
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      inCodeBlock = !inCodeBlock;
+      result.push(inCodeBlock ? '<pre><code>' : '</code></pre>');
+      continue;
+    }
+    if (inCodeBlock) {
+      result.push(line);
+      continue;
+    }
+
+    let processed = line;
+
+    // Headers
+    if (processed.startsWith('### ')) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = `<h3>${inlineFormat(processed.slice(4))}</h3>`;
+    } else if (processed.startsWith('## ')) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = `<h2>${inlineFormat(processed.slice(3))}</h2>`;
+    } else if (processed.startsWith('# ')) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = `<h1>${inlineFormat(processed.slice(2))}</h1>`;
+    }
+    // Blockquotes
+    else if (processed.startsWith('&gt; ')) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = `<blockquote>${inlineFormat(processed.slice(5))}</blockquote>`;
+    }
+    // List items
+    else if (/^[-*] /.test(processed)) {
+      if (!inList) { result.push('<ul>'); inList = true; }
+      processed = `<li>${inlineFormat(processed.slice(2))}</li>`;
+    }
+    // Blank line
+    else if (processed.trim() === '') {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = '<br/>';
+    }
+    // Regular text
+    else {
+      if (inList) { result.push('</ul>'); inList = false; }
+      processed = `<p>${inlineFormat(processed)}</p>`;
+    }
+
+    result.push(processed);
+  }
+
+  if (inList) result.push('</ul>');
+  if (inCodeBlock) result.push('</code></pre>');
+
+  return result.join('\n');
+}
+
+function inlineFormat(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
 function toDateInputValue(isoString: string): string {

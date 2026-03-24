@@ -42,6 +42,7 @@ export interface UpdateTaskInput {
 
 export interface AppSettings {
   vaultDir: string | null;
+  theme: string;
 }
 
 export interface KanbanColumn {

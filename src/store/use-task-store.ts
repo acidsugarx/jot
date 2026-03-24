@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AppSettings,
   CreateTaskInput,
@@ -12,10 +13,18 @@ import type {
 } from '@/types';
 
 const TASKS_UPDATED_EVENT = 'tasks-updated';
+const THEME_CHANGED_EVENT = 'theme-changed';
 
 function notifyTasksChanged() {
   if ('__TAURI_INTERNALS__' in window) {
     void emit(TASKS_UPDATED_EVENT);
+  }
+}
+
+function applyTheme(theme: string) {
+  document.documentElement.setAttribute('data-theme', theme);
+  if ('__TAURI_INTERNALS__' in window) {
+    void getCurrentWindow().setTheme(theme === 'light' ? 'light' : 'dark');
   }
 }
 
@@ -43,6 +52,7 @@ interface TaskState {
 
   fetchSettings: () => Promise<void>;
   updateSettings: (vaultDir: string | null) => Promise<void>;
+  updateTheme: (theme: string) => Promise<void>;
   selectTask: (id: string | null) => void;
   setIsEditorOpen: (isOpen: boolean) => void;
   clearError: () => void;
@@ -226,13 +236,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  updateTheme: async (theme) => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    try {
+      const settings = await invoke<AppSettings>('update_theme', { theme });
+      set({ settings });
+      applyTheme(settings.theme);
+      void emit('theme-changed', settings.theme);
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to update theme' });
+    }
+  },
+
   selectTask: (id) => set({ selectedTaskId: id }),
   setIsEditorOpen: (isOpen) => set({ isEditorOpen: isOpen }),
   clearError: () => set({ error: null }),
 
   listenForUpdates: () => {
     if (!('__TAURI_INTERNALS__' in window)) return () => {};
-    const unlisten = listen(TASKS_UPDATED_EVENT, () => { void get().fetchTasks(); });
-    return () => { unlisten.then((fn) => fn()); };
+    const unlistenTasks = listen(TASKS_UPDATED_EVENT, () => { void get().fetchTasks(); });
+    const unlistenTheme = listen<string>(THEME_CHANGED_EVENT, (event) => { applyTheme(event.payload); });
+    return () => {
+      unlistenTasks.then((fn) => fn());
+      unlistenTheme.then((fn) => fn());
+    };
   },
 }));

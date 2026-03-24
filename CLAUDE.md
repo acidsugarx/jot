@@ -75,8 +75,9 @@ Located in `src/`. Uses `@` path alias mapped to `src/` (configured in `vite.con
 | `Dashboard.tsx` | Multi-view workspace with List/Kanban/Calendar tabs |
 | `Settings.tsx` | Settings window for vault configuration |
 | `store/use-task-store.ts` | Zustand store for state management and IPC calls |
-| `hooks/use-vim-bindings.ts` | Vim-style keyboard navigation (j/k/h/l, e/x/d/o) |
+| `hooks/use-vim-bindings.ts` | Vim-style keyboard navigation (j/k/h/l, e/x/s/a/d/o) |
 | `components/KanbanBoard.tsx` | Drag-and-drop kanban using @dnd-kit |
+| `components/CalendarView.tsx` | Month-view calendar with task dots and day detail |
 | `components/TaskEditorPane.tsx` | Slide-in panel for inline editing (title, description, status, priority, due date, tags) |
 | `types.ts` | TypeScript interfaces matching Rust backend |
 | `components/ui/` | shadcn/ui components (Badge, Button, ScrollArea, Tabs) |
@@ -94,9 +95,9 @@ All windows share a single `index.html` entry point. Routing happens in `main.ts
 New windows are created from Rust via `WebviewWindowBuilder` in `lib.rs` (see `open_dashboard_window()`, `open_settings_window()`). Each gets the same `index.html` URL but a different label, which the frontend uses to pick the right component.
 
 **Window properties:**
-- **Quick Capture** (`main`): Defined in `tauri.conf.json`. Transparent, always-on-top, no decorations, hidden by default. Auto-hides on blur. Close is intercepted to hide instead.
-- **Dashboard** (`dashboard`): Created dynamically. 1000x700, resizable, macOS overlay title bar. Single instance (reuses if open).
-- **Settings** (`settings`): Created dynamically. 850x600, non-resizable, macOS overlay title bar. Single instance.
+- **Quick Capture** (`main`): Defined in `tauri.conf.json`. Transparent, no decorations, hidden by default. On macOS, converted to an **NSPanel** via `tauri-nspanel` at startup so it can overlay fullscreen apps (like Raycast/Spotlight). Uses `NonactivatingPanel` style mask, `CanJoinAllSpaces | FullScreenAuxiliary` collection behavior, and `PopUpMenu` window level (101). Auto-hides on blur. Close is intercepted to hide instead.
+- **Dashboard** (`dashboard`): Created dynamically. 1000x700, resizable, macOS overlay title bar. Single instance (reuses if open). Normal window (not NSPanel).
+- **Settings** (`settings`): Created dynamically. 850x600, non-resizable, macOS overlay title bar. Single instance. Normal window (not NSPanel).
 
 ### Vim Keybindings (Dashboard only)
 
@@ -109,8 +110,11 @@ The dashboard uses `useVimBindings()` hook for keyboard navigation:
 | `Enter` | Select first task |
 | `e` | Open task editor pane |
 | `x` | Toggle task status (todo ↔ done) |
+| `s` | Cycle status through columns |
+| `a` | Archive / unarchive task |
 | `d` | Delete selected task |
 | `o` | Open linked note (if exists) |
+| `/` | Focus search input |
 | `Escape` | Close editor or deselect task |
 
 Bindings are ignored when typing in input fields.
@@ -125,6 +129,11 @@ Tasks are created from natural language input. Format:
 Examples:
 - `Write docs #work !high` → task with tag "work", high priority
 - `Meeting tomorrow at 2pm #sales` → task with due date
+- `Review PR friday` → due next Friday
+- `Deploy next monday` → due next Monday
+- `Ship feature in 3 days !high` → due in 3 days
+- `Conference Mar 25 #speaking` → due March 25
+- `Plan next week` → due in 1 week
 - `Research topic @zettel` → creates linked .md file in vault
 
 Parsed by `parser.rs::parse_task_input()`.
@@ -138,7 +147,7 @@ if (!('__TAURI_INTERNALS__' in window)) { return; }
 const tasks = await invoke<Task[]>('get_tasks');
 ```
 
-Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`, `get_columns`, `create_column`, `update_column`, `delete_column`, `reorder_columns`.
+Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `update_theme`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`, `get_columns`, `create_column`, `update_column`, `delete_column`, `reorder_columns`.
 
 ### UI Layout Pattern
 
@@ -160,22 +169,45 @@ The capture window uses a strict flex layout to prevent overflow issues:
 </Command>
 ```
 
-### Styling: Brutalist Dark Mode
+### Styling: Dark/Light Theme
 
+The app supports dark (default) and light themes. Theme preference is stored in the `settings` table (`key = 'theme'`).
+
+**Dark mode (default):**
 - Background: `bg-[#111111]` (dashboard), `bg-zinc-950` (capture window)
 - Borders: `border-zinc-800` (subtle)
 - Text: `text-zinc-200` (primary), `text-zinc-400` (muted)
 - Accent: `text-cyan-400` / `bg-cyan-500/10` for interactive elements
+
+**Light mode:**
+- Implemented via CSS-only overrides in `styles.css` scoped to `[data-theme="light"]`
+- Overrides Tailwind utility classes and hex background colors
+- No component code changes needed for theme — all in `styles.css`
+- Theme is applied by setting `data-theme` attribute on `<html>` element
+
+**Common rules:**
 - Selection: `selection:bg-cyan-500/30`
 - Font: Sans-serif for UI, monospace (font-mono) for metadata/tags
 - Rounded: `rounded-lg` for containers, minimal radius for badges
 - No shadows, minimal borders, high information density
 - Dashboard uses `backdrop-blur-md` on header; **do not use `backdrop-blur` on the capture window** — it causes black-square rendering on the transparent main window
 
+### Markdown Description Preview
+
+The task editor pane has a preview toggle for the description field. The renderer (`renderMarkdown()` in `TaskEditorPane.tsx`) supports:
+- **bold**, *italic*, `inline code`
+- [links](url)
+- `- ` list items
+- `# ` / `## ` / `### ` headers
+- ` ``` ` code blocks
+- `> ` blockquotes
+
+Styled with `.prose-jot` classes in `styles.css`. Light theme variants included.
+
 ### Kanban Board
 
 Located in `components/KanbanBoard.tsx`:
-- Three columns: todo, in_progress, done
+- Dynamic columns from `kanban_columns` table (default: todo, in_progress, done)
 - Uses @dnd-kit for drag-and-drop (sortable columns, draggable tasks)
 - `activationConstraint: { distance: 5 }` prevents accidental drags
 - Drag overlay shows task being moved
@@ -214,6 +246,7 @@ CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Known keys: 'vault_dir' (string path), 'theme' ('dark' | 'light')
 
 CREATE TABLE kanban_columns (
     id TEXT PRIMARY KEY,

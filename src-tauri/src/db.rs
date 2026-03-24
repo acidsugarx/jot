@@ -21,6 +21,21 @@ impl DatabaseState {
             connection: Mutex::new(connection),
         }
     }
+
+    pub fn current_theme(&self) -> Option<tauri::Theme> {
+        let conn = self.connection.lock().ok()?;
+        let theme: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'theme'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()?;
+        match theme.as_str() {
+            "light" => Some(tauri::Theme::Light),
+            _ => Some(tauri::Theme::Dark),
+        }
+    }
 }
 
 pub fn init_database(app: &AppHandle) -> Result<(), String> {
@@ -257,6 +272,18 @@ pub fn update_settings(
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
     save_setting(&connection, "vault_dir", input.vault_dir.as_deref())?;
+
+    load_settings(&connection)
+}
+
+#[tauri::command]
+pub fn update_theme(db: State<'_, DatabaseState>, theme: String) -> Result<AppSettings, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    save_setting(&connection, "theme", Some(&theme))?;
 
     load_settings(&connection)
 }
@@ -724,7 +751,18 @@ fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
         .map_err(|error| format!("Failed to load settings: {error}"))?
         .flatten();
 
-    Ok(AppSettings { vault_dir })
+    let theme = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'theme'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load theme setting: {error}"))?
+        .flatten()
+        .unwrap_or_else(|| "dark".to_string());
+
+    Ok(AppSettings { vault_dir, theme })
 }
 
 fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {

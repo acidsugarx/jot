@@ -12,6 +12,7 @@ import {
   Inbox,
   Sun,
   Tag,
+  Archive,
 } from 'lucide-react';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
@@ -58,7 +59,7 @@ interface ContextMenu {
   taskId: string;
 }
 
-type SidebarFilter = 'inbox' | 'today' | `tag:${string}`;
+type SidebarFilter = 'inbox' | 'today' | 'archived' | `tag:${string}`;
 
 function todayDateKey() {
   const d = new Date();
@@ -151,6 +152,9 @@ export default function Dashboard() {
         const dKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         return dKey === key;
       });
+    }
+    if (sidebarFilter === 'archived') {
+      return tasks.filter((t) => t.status === 'archived');
     }
     const tag = sidebarFilter.slice(4); // strip "tag:"
     return tasks.filter((t) => t.status !== 'archived' && t.tags.includes(tag));
@@ -397,6 +401,7 @@ export default function Dashboard() {
               [
                 { id: 'inbox' as SidebarFilter, label: 'Inbox', Icon: Inbox, count: tasks.filter((t) => t.status !== 'archived').length },
                 { id: 'today' as SidebarFilter, label: 'Today', Icon: Sun, count: tasks.filter((t) => t.status !== 'archived' && !!t.dueDate && (() => { const d = new Date(t.dueDate!); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` === todayDateKey(); })()).length },
+                { id: 'archived' as SidebarFilter, label: 'Archived', Icon: Archive, count: tasks.filter((t) => t.status === 'archived').length },
               ] as const
             ).map(({ id, label, Icon, count }) => (
               <button
@@ -468,6 +473,10 @@ export default function Dashboard() {
                     press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">esc</kbd> to clear
                   </span>
                 </div>
+              ) : sidebarFilter === 'archived' ? (
+                <div className="space-y-2">
+                  {renderSection('Archived', filtered)}
+                </div>
               ) : (
                 <div className="space-y-2">
                   {groupedByColumn.map(({ col, items }) =>
@@ -509,6 +518,8 @@ export default function Dashboard() {
           <span>s cycle</span>
           <span className="text-zinc-800">·</span>
           <span>d delete</span>
+          <span className="text-zinc-800">·</span>
+          <span>a archive</span>
           <span className="text-zinc-800">·</span>
           <span>/ search</span>
           <span className="text-zinc-800">·</span>
@@ -572,6 +583,19 @@ export default function Dashboard() {
               <kbd className="ml-auto font-mono text-[10px] text-zinc-700">o</kbd>
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={() => {
+              void updateTaskStatus({ id: contextTask.id, status: contextTask.status === 'archived' ? 'todo' : 'archived' });
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800/60"
+          >
+            <Archive className="h-3 w-3 text-zinc-500" />
+            {contextTask.status === 'archived' ? 'Unarchive' : 'Archive'}
+            <kbd className="ml-auto font-mono text-[10px] text-zinc-700">a</kbd>
+          </button>
 
           <div className="my-1 border-t border-zinc-800/40" />
 

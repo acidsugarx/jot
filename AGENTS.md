@@ -14,6 +14,7 @@ Keep it updated as commands, configs, and architectural boundaries evolve.
 - Phase 3 foundation now includes raw-input parsing for tags/priority/dates, `@zettel` note generation via `JOT_VAULT_DIR`, and `open_linked_note`
 - Phase 4 foundation includes a completely native standalone Settings Window (Raycast-style overlay), a Zustand store, task list display, and CmdK popup capture.
 - **Phase 5 (Next)**: We are moving to the expanded Dashboard View (Board/List), robust Vim-centric bindings (j/k, x, o), and routing between the transient popup and deep management.
+- GitHub Actions now include CI validation (`.github/workflows/ci.yml`) and tagged release publishing (`.github/workflows/release.yml`)
 - No Cursor rules found in `.cursor/rules/` or `.cursorrules`
 - No Copilot instructions found in `.github/copilot-instructions.md`
 - The git repo currently has no commits
@@ -85,6 +86,10 @@ When both stacks exist, prefer:
 7. `npm run build`
 
 If a wrapper is added later, prefer a single `npm run ci` or `just ci` target and document it here.
+
+### GitHub Automation
+- CI workflow: `.github/workflows/ci.yml` (runs on PR + push to `main`)
+- Release workflow: `.github/workflows/release.yml` (runs on `v*` tags and publishes release assets)
 
 ## Single-Test Guidance
 When the user asks for one test, run the narrowest target first.

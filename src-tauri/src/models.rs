@@ -84,6 +84,7 @@ pub struct UpdateTaskInput {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub vault_dir: Option<String>,
+    pub theme: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
