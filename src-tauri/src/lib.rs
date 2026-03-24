@@ -43,7 +43,7 @@ fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     let panel = app
         .get_webview_panel("main")
         .map_err(|_| to_tauri_error("Panel not found"))?;
-    panel.show();
+    panel.show_and_make_key();
     Ok(())
 }
 
@@ -155,17 +155,26 @@ fn setup_main_window_behavior(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Convert the main window to an NSPanel so it can overlay fullscreen apps.
+/// Falls back to a normal window if panel conversion fails (e.g. unsupported macOS version).
 #[cfg(target_os = "macos")]
 fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
-    use tauri_nspanel::{CollectionBehavior, PanelLevel, StyleMask, WebviewWindowExt};
+    use tauri_nspanel::{CollectionBehavior, PanelLevel, WebviewWindowExt};
 
     let window = main_window(app)?;
-    let panel = window
-        .to_panel::<CapturePanel>()
-        .map_err(|e| to_tauri_error(format!("{e:?}")))?;
+    let panel = match window.to_panel::<CapturePanel>() {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("Failed to convert capture window to NSPanel, falling back to normal window: {e:?}");
+            return Ok(());
+        }
+    };
 
-    // NonactivatingPanel = won't steal activation from the fullscreen app
-    panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+    // Preserve existing style mask, add NonactivatingPanel so it won't steal
+    // activation from the fullscreen app
+    let existing_mask = panel.as_panel().styleMask();
+    panel.set_style_mask(
+        existing_mask | tauri_nspanel::objc2_app_kit::NSWindowStyleMask::NonactivatingPanel,
+    );
 
     // CanJoinAllSpaces + FullScreenAuxiliary = appear over fullscreen apps on all spaces
     panel.set_collection_behavior(
@@ -189,7 +198,7 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
 fn show_window(app: AppHandle) -> Result<String, String> {
     show_main_window(&app).map_err(|error| error.to_string())?;
 
-    Ok("Window is visible and focused.".to_string())
+    Ok("Window is visible.".to_string())
 }
 
 #[tauri::command]
@@ -314,7 +323,9 @@ pub fn run() {
             setup_main_window_behavior(app.handle())?;
 
             #[cfg(target_os = "macos")]
-            setup_capture_panel(app.handle()).map_err(|e| to_tauri_error(e.to_string()))?;
+            if let Err(e) = setup_capture_panel(app.handle()) {
+                log::warn!("NSPanel setup failed, using normal window: {e}");
+            }
 
             #[cfg(desktop)]
             {

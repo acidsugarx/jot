@@ -391,14 +391,20 @@ function App() {
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (focused) {
         void fetchTasks();
       } else if (!isDialogOpenRef.current) {
-        void invoke('hide_window');
+        // Small delay to avoid hiding during NSPanel focus transitions
+        hideTimer = setTimeout(() => void invoke('hide_window'), 50);
       }
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      if (hideTimer) clearTimeout(hideTimer);
+      unlisten.then((fn) => fn());
+    };
   }, [fetchTasks]);
 
   // Dynamic window sizing based on actual content
