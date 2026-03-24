@@ -1,55 +1,77 @@
-# Jot
+# jot
 
 [![CI](https://github.com/acidsugarx/jot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/acidsugarx/jot/actions/workflows/ci.yml)
 [![Release](https://github.com/acidsugarx/jot/actions/workflows/release.yml/badge.svg)](https://github.com/acidsugarx/jot/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 
-Jot is a keyboard-first desktop task manager built with Tauri (Rust) and React (TypeScript).
-It is designed for quick capture, fast task flow, and optional Zettelkasten note linking.
+Keyboard-first task manager and Zettelkasten bridge. Runs as a system tray daemon with a Raycast-style capture bar that overlays fullscreen apps.
 
-## Current Status
+Built with Tauri v2 (Rust) + React + TypeScript.
 
-- Foundation, tray behavior, and global shortcuts are implemented.
-- SQLite persistence and task CRUD are implemented.
-- Raw-input parser (`#tags`, `!priority`, dates, `@zettel`) is implemented.
-- Settings window + dashboard foundation are implemented.
-- Phase 5 (expanded dashboard + Vim-centric navigation) is in progress.
+## Features
 
-## Tech Stack
+- **Quick Capture** (`Opt+Space`) — command palette for rapid task entry with NLP parsing
+- **Dashboard** (`Cmd+Shift+Space`) — list, kanban, and calendar views with vim bindings
+- **Natural Language Input** — `Meeting friday #work !high @zettel` just works
+- **Fullscreen Overlay** — capture window appears over fullscreen apps via NSPanel
+- **Dark / Light Theme** — instant sync across all windows
+- **Zettelkasten Bridge** — `@zettel` creates linked markdown notes in your Obsidian vault
+- **Vim Navigation** — `j/k/h/l`, `e` edit, `x` toggle, `s` cycle status, `d` delete
 
-- Rust + Tauri v2
-- React 18 + TypeScript + Vite
-- Zustand
-- SQLite (rusqlite)
-- Tailwind CSS + cmdk
+## Install
 
-## Local Development
-
-Prerequisites:
-
-- Node.js 20+
-- Rust stable (1.77.2+)
-- Tauri OS dependencies (see the official Tauri prerequisites docs for your platform)
-
-Install dependencies:
+Download the latest release from [Releases](https://github.com/acidsugarx/jot/releases), or build from source:
 
 ```bash
 npm install
+npm run tauri build
 ```
 
-Run app in development mode:
+## Development
+
+**Prerequisites:** Node.js 20+, Rust 1.77.2+, [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ```bash
-cargo tauri dev
+npm install
+npm run tauri dev
 ```
 
-## Useful Commands
+### Commands
 
-- Frontend dev: `npm run dev`
-- Frontend build: `npm run build`
-- Frontend lint: `npm run lint`
-- Frontend typecheck: `npm run typecheck`
-- Frontend tests (watch): `npm run test`
-- Frontend tests (CI): `npm run test -- --run`
-- Rust fmt check: `cargo fmt --check` (run in `src-tauri/`)
-- Rust clippy: `cargo clippy --all-targets --all-features -- -D warnings` (run in `src-tauri/`)
-- Rust tests: `cargo test` (run in `src-tauri/`)
+| Command | Description |
+|---------|-------------|
+| `npm run tauri dev` | Run app in development mode |
+| `npm run lint` | Lint frontend |
+| `npm run typecheck` | Type-check frontend |
+| `npm test -- --run` | Run frontend tests |
+| `cargo test` | Run Rust tests (from `src-tauri/`) |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Lint Rust (from `src-tauri/`) |
+
+### Full validation
+
+```bash
+cd src-tauri && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test && cd ..
+npm run lint && npm run typecheck && npm test -- --run && npm run build
+```
+
+## Architecture
+
+```
+src-tauri/src/
+  lib.rs      Tauri setup, system tray, global shortcuts, NSPanel, IPC handlers
+  db.rs       SQLite CRUD, migrations, zettel note creation
+  models.rs   Type definitions
+  parser.rs   NLP parser (tags, priority, dates, @zettel)
+
+src/
+  App.tsx              Quick capture window (cmdk palette + inline editor)
+  Dashboard.tsx        Multi-view workspace (list/kanban/calendar)
+  Settings.tsx         Configuration (vault path, theme)
+  store/               Zustand store + Tauri IPC
+  hooks/               Vim keybindings
+  components/          Kanban board, calendar, task editor, shadcn/ui
+```
+
+## License
+
+MIT License &copy; 2026 [Ilya Gilev](https://github.com/acidsugarx)
