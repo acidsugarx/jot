@@ -37,6 +37,29 @@ jobs:
         run: cargo check --all-targets
         working-directory: src-tauri
 
+  rust-windows-check:
+    name: Rust Check (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri -> target
+
+      - name: Run Rust check on Windows
+        run: cargo check --all-targets
+        working-directory: src-tauri
+
   validate:
     name: Validate App
     runs-on: macos-latest
