@@ -100,8 +100,7 @@ fn register_main_shortcut(app: &AppHandle) -> tauri::Result<()> {
 #[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, "show", "Show Jot", true, None::<&str>)?;
-    let dashboard_item =
-        MenuItem::with_id(app, "dashboard", "Open Dashboard", true, None::<&str>)?;
+    let dashboard_item = MenuItem::with_id(app, "dashboard", "Open Dashboard", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide Jot", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu =
@@ -164,7 +163,9 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
     let panel = match window.to_panel::<CapturePanel>() {
         Ok(p) => p,
         Err(e) => {
-            log::warn!("Failed to convert capture window to NSPanel, falling back to normal window: {e:?}");
+            log::warn!(
+                "Failed to convert capture window to NSPanel, falling back to normal window: {e:?}"
+            );
             return Ok(());
         }
     };
@@ -197,11 +198,7 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
     unsafe {
         use tauri_nspanel::objc2::runtime::{AnyObject, Sel};
 
-        extern "C" fn noop_cancel(
-            _this: *mut AnyObject,
-            _sel: Sel,
-            _sender: *mut AnyObject,
-        ) {
+        extern "C" fn noop_cancel(_this: *mut AnyObject, _sel: Sel, _sender: *mut AnyObject) {
             // Intentionally empty
         }
 
@@ -210,7 +207,12 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
         let class = tauri_nspanel::objc2::ffi::object_getClass(obj_ptr.cast());
         let sel = Sel::register(c"cancelOperation:");
         let imp: unsafe extern "C-unwind" fn() = std::mem::transmute(noop_cancel as *const ());
-        tauri_nspanel::objc2::ffi::class_replaceMethod(class.cast_mut(), sel, imp, c"v@:@".as_ptr());
+        tauri_nspanel::objc2::ffi::class_replaceMethod(
+            class.cast_mut(),
+            sel,
+            imp,
+            c"v@:@".as_ptr(),
+        );
     }
 
     Ok(())
