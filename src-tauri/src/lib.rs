@@ -250,8 +250,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
     .title("Jot Settings")
     .inner_size(850.0, 600.0)
     .center()
-    .resizable(false)
-    .hidden_title(true);
+    .resizable(false);
 
     if let Some(theme) = theme {
         builder = builder.theme(Some(theme));
@@ -287,8 +286,7 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     .title("Jot Dashboard")
     .inner_size(1000.0, 700.0)
     .center()
-    .resizable(true)
-    .hidden_title(true);
+    .resizable(true);
 
     if let Some(theme) = theme {
         builder = builder.theme(Some(theme));
@@ -308,7 +306,7 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -329,9 +327,10 @@ pub fn run() {
         );
 
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.plugin(tauri_nspanel::init());
-    }
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder;
 
     builder
         .setup(|app| {

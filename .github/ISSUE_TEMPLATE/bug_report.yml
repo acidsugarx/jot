@@ -1,0 +1,54 @@
+name: Bug report
+description: Report something broken or unexpected
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Short and concrete is perfect.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+      placeholder: Pressed Esc in the capture bar, expected NAV mode, window closed instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Jot
+        2. Press ...
+        3. See issue
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Jot version
+      placeholder: v0.1.0
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, or extra context if useful.

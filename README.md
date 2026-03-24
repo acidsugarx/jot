@@ -8,6 +8,14 @@ Keyboard-first task manager and Zettelkasten bridge. Runs as a system tray daemo
 
 Built with Tauri v2 (Rust) + React + TypeScript.
 
+## Platform Support
+
+Jot is primarily built and tested on macOS right now.
+Windows and Linux builds are configured, but they have not been tested yet.
+
+If you try Jot on Windows or Linux and hit a bug, missing behavior, or packaging issue, please open an issue in `acidsugarx/jot`.
+Bug reports and fix requests are very welcome.
+
 ## Features
 
 - **Quick Capture** (`Opt+Space`) — command palette for rapid task entry with NLP parsing

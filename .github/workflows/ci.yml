@@ -7,6 +7,36 @@ on:
   pull_request:
 
 jobs:
+  rust-linux-check:
+    name: Rust Check (Linux)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libgtk-3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libayatana-appindicator3-dev || sudo apt-get install -y libappindicator3-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri -> target
+
+      - name: Run Rust check on Linux
+        run: cargo check --all-targets
+        working-directory: src-tauri
+
   validate:
     name: Validate App
     runs-on: macos-latest
