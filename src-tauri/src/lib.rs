@@ -191,6 +191,28 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
     panel.set_floating_panel(true);
     panel.set_hides_on_deactivate(false);
 
+    // Override cancelOperation: with a no-op so that pressing Esc in the webview
+    // doesn't trigger the NSPanel's native "cancel → hide" behavior.
+    // JavaScript handles Esc itself (insert→normal mode, or hide via IPC).
+    unsafe {
+        use tauri_nspanel::objc2::runtime::{AnyObject, Sel};
+
+        extern "C" fn noop_cancel(
+            _this: *mut AnyObject,
+            _sel: Sel,
+            _sender: *mut AnyObject,
+        ) {
+            // Intentionally empty
+        }
+
+        let obj_ptr =
+            (panel.as_panel() as *const tauri_nspanel::objc2_app_kit::NSPanel).cast::<AnyObject>();
+        let class = tauri_nspanel::objc2::ffi::object_getClass(obj_ptr.cast());
+        let sel = Sel::register(c"cancelOperation:");
+        let imp: unsafe extern "C-unwind" fn() = std::mem::transmute(noop_cancel as *const ());
+        tauri_nspanel::objc2::ffi::class_replaceMethod(class.cast_mut(), sel, imp, c"v@:@".as_ptr());
+    }
+
     Ok(())
 }
 

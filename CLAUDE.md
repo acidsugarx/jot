@@ -99,16 +99,49 @@ New windows are created from Rust via `WebviewWindowBuilder` in `lib.rs` (see `o
 - **Dashboard** (`dashboard`): Created dynamically. 1000x700, resizable, macOS overlay title bar. Single instance (reuses if open). Normal window (not NSPanel).
 - **Settings** (`settings`): Created dynamically. 850x600, non-resizable, macOS overlay title bar. Single instance. Normal window (not NSPanel).
 
-### Vim Keybindings (Dashboard only)
+### Keyboard Navigation
 
-The dashboard uses `useVimBindings()` hook for keyboard navigation:
+All windows are fully navigable without a mouse. Browser-style Tab element cycling is suppressed globally.
+
+#### Quick Capture — Insert/Normal Mode
+
+The capture bar has two modes (state: `mode` in `App.tsx`):
+
+- **Insert mode** (default): Input is focused, typing creates tasks. Esc with text clears the query; Esc with empty input enters normal mode.
+- **Normal mode**: Input is blurred, `j/k` navigate the task list and actions. `i` or `/` returns to insert mode. Second Esc hides the window.
+
+| Key (Insert) | Action |
+|-----|--------|
+| `Enter` | Create task from query |
+| `Esc` | Clear query, or enter normal mode if empty |
+| `⌘,` | Open settings |
+
+| Key (Normal) | Action |
+|-----|--------|
+| `j` / `k` | Navigate down/up |
+| `g` / `G` | Jump to first/last |
+| `Enter` / `e` | Select item (edit task, open dashboard/settings) |
+| `x` | Toggle task status (todo ↔ done) |
+| `d` | Delete selected task |
+| `o` | Open linked note |
+| `i` | Return to insert mode |
+| `/` | Return to insert mode (clears query) |
+| `Esc` | Hide window |
+
+#### Inline Task Editor (Quick Capture)
+
+- `Tab` / `Shift+Tab` cycles between fields (title → description → status → priority → due date → tags)
+- `Esc` in a field blurs it; `Esc` when no field focused closes the editor
+
+#### Dashboard
+
+Uses `useVimBindings()` hook:
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Navigate down/up in list or within column |
 | `h` / `l` | Navigate left/right between kanban columns |
-| `Enter` | Select first task |
-| `e` | Open task editor pane |
+| `Enter` / `e` | Open task editor pane |
 | `x` | Toggle task status (todo ↔ done) |
 | `s` | Cycle status through columns |
 | `a` | Archive / unarchive task |
@@ -116,6 +149,13 @@ The dashboard uses `useVimBindings()` hook for keyboard navigation:
 | `o` | Open linked note (if exists) |
 | `/` | Focus search input |
 | `Escape` | Close editor or deselect task |
+
+#### Settings
+
+| Key | Action |
+|-----|--------|
+| `h` / `l` (or arrows) | Switch between tabs |
+| `Esc` | Close settings window (blurs field first if focused) |
 
 Bindings are ignored when typing in input fields.
 

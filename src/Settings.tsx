@@ -7,6 +7,8 @@ import { useTaskStore } from '@/store/use-task-store';
 
 type Tab = 'general' | 'vault' | 'ui';
 
+const tabIds: Tab[] = ['general', 'vault', 'ui'];
+
 const tabs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
   { id: 'general', label: 'General', icon: Keyboard },
   { id: 'vault', label: 'Vault', icon: Database },
@@ -38,6 +40,55 @@ export default function Settings() {
       console.error(err);
     }
   };
+
+  // Keyboard navigation: h/l switch tabs, Esc closes window
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        // Only handle Escape when in a field — blur first
+        if (e.key === 'Escape') {
+          (document.activeElement as HTMLElement).blur();
+          e.preventDefault();
+        }
+        // Suppress browser Tab — allow natural field navigation only
+        if (e.key === 'Tab') {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      switch (e.key) {
+        case 'h':
+        case 'ArrowLeft':
+          e.preventDefault();
+          setActiveTab((current) => {
+            const idx = tabIds.indexOf(current);
+            return tabIds[Math.max(0, idx - 1)] ?? current;
+          });
+          break;
+        case 'l':
+        case 'ArrowRight':
+          e.preventDefault();
+          setActiveTab((current) => {
+            const idx = tabIds.indexOf(current);
+            return tabIds[Math.min(tabIds.length - 1, idx + 1)] ?? current;
+          });
+          break;
+        case 'Escape':
+          e.preventDefault();
+          void getCurrentWindow().close();
+          break;
+        case 'Tab':
+          // Suppress browser tab cycling
+          e.preventDefault();
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const handleChooseVaultDir = async () => {
     try {
@@ -243,8 +294,12 @@ export default function Settings() {
       {/* Footer */}
       <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-1.5">
         <div className="flex items-center justify-between font-mono text-[10px] text-zinc-700">
-          <span>jot v0.1.0</span>
-          <span>changes save automatically</span>
+          <div className="flex items-center gap-2">
+            <span>h/l tabs</span>
+            <span className="text-zinc-800">·</span>
+            <span>esc close</span>
+          </div>
+          <span>auto-saves</span>
         </div>
       </div>
     </div>

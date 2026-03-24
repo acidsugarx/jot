@@ -18,6 +18,8 @@ import { Command } from 'cmdk';
 import { useTaskStore } from '@/store/use-task-store';
 import type { Task, TaskPriority, TaskStatus } from '@/types';
 
+type CaptureMode = 'insert' | 'normal';
+
 /** Tokenize input string into colored segments for syntax highlighting */
 interface Token {
   text: string;
@@ -118,17 +120,44 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
   const [tagInput, setTagInput] = useState('');
 
   const titleRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const statusRef = useRef<HTMLSelectElement>(null);
+  const priorityRef = useRef<HTMLSelectElement>(null);
+  const dueDateRef = useRef<HTMLInputElement>(null);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // Ordered list of focusable field refs for Tab cycling
+  const fieldRefs = useMemo(() => [
+    titleRef, descriptionRef, statusRef, priorityRef, dueDateRef, tagInputRef,
+  ], []);
 
   useEffect(() => {
     void fetchColumns();
     titleRef.current?.focus();
   }, [fetchColumns]);
 
-  // Listen for Escape
+  // Listen for Escape and Tab field cycling
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Don't intercept Escape when in an input — let blur happen first
       const tag = document.activeElement?.tagName;
+
+      // Tab / Shift+Tab — cycle between editor fields instead of browser tab behavior
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        const refs = fieldRefs.map((r) => r.current).filter(Boolean) as HTMLElement[];
+        const currentIdx = refs.findIndex((el) => el === document.activeElement);
+        if (e.shiftKey) {
+          const prev = currentIdx <= 0 ? refs.length - 1 : currentIdx - 1;
+          refs[prev]?.focus();
+        } else {
+          const next = currentIdx >= refs.length - 1 ? 0 : currentIdx + 1;
+          refs[next]?.focus();
+        }
+        return;
+      }
+
+      // Escape — blur first if in a field, then close editor
       if (e.key === 'Escape') {
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
           (document.activeElement as HTMLElement).blur();
@@ -140,7 +169,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [onClose]);
+  }, [onClose, fieldRefs]);
 
   const save = useCallback((patch: Record<string, unknown>) => {
     void updateTask({ id: task.id, ...patch });
@@ -227,6 +256,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
       {/* Description */}
       <div className="border-b border-zinc-800/30 px-4 py-2">
         <textarea
+          ref={descriptionRef}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           onBlur={handleDescriptionBlur}
@@ -242,6 +272,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
         <div className="flex h-8 items-center justify-between px-4">
           <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
           <select
+            ref={statusRef}
             value={status}
             onChange={(e) => handleStatusChange(e.target.value)}
             className="bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
@@ -257,6 +288,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
         <div className="flex h-8 items-center justify-between px-4">
           <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Priority</span>
           <select
+            ref={priorityRef}
             value={priority}
             onChange={(e) => handlePriorityChange(e.target.value as TaskPriority)}
             className={`bg-transparent text-right text-xs focus:outline-none cursor-pointer ${priorityColor[priority] || 'text-zinc-600'}`}
@@ -274,6 +306,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
             {dueDate ? (
               <div className="flex items-center gap-1">
                 <input
+                  ref={dueDateRef}
                   type="date"
                   value={dueDate}
                   onChange={(e) => handleDueDateChange(e.target.value)}
@@ -326,6 +359,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
             </span>
           ))}
           <input
+            ref={tagInputRef}
             type="text"
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
@@ -360,7 +394,12 @@ function App() {
   const [query, setQuery] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [mode, setMode] = useState<CaptureMode>('insert');
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const isDialogOpenRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const suppressNextBlurHideRef = useRef(false);
+  const preserveModeOnNextFocusRef = useRef(false);
 
   const {
     tasks,
@@ -379,12 +418,30 @@ function App() {
   const hasHighlights = tokens.some((t) => t.color !== null);
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) : null;
 
+  // Items visible in normal mode (tasks + actions)
+  const actionItems = useMemo(() => [
+    { id: '__dashboard', label: 'Dashboard' },
+    { id: '__settings', label: 'Settings' },
+  ], []);
+
+  const normalModeItems = useMemo(() => {
+    if (hasQuery) return [{ id: '__create', label: `Create "${query}"` }];
+    return [...tasks.map((t) => ({ id: t.id, label: t.title })), ...actionItems];
+  }, [tasks, hasQuery, query, actionItems]);
+
+  // Clamp selectedIndex when items change
+  useEffect(() => {
+    if (selectedIndex >= normalModeItems.length) {
+      setSelectedIndex(Math.max(0, normalModeItems.length - 1));
+    }
+  }, [normalModeItems.length, selectedIndex]);
+
+  // Enter insert mode + focus input when window gains focus
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
     void fetchTasks();
   }, [fetchTasks]);
 
-  // Re-fetch when other windows mutate tasks
   useEffect(() => {
     return listenForUpdates();
   }, [listenForUpdates]);
@@ -395,9 +452,21 @@ function App() {
     const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (focused) {
+        suppressNextBlurHideRef.current = false;
         void fetchTasks();
+        if (preserveModeOnNextFocusRef.current) {
+          preserveModeOnNextFocusRef.current = false;
+        } else {
+          // Reset to insert mode when window appears
+          setMode('insert');
+          setSelectedIndex(0);
+        }
+        requestAnimationFrame(() => inputRef.current?.focus());
+      } else if (suppressNextBlurHideRef.current) {
+        suppressNextBlurHideRef.current = false;
+        preserveModeOnNextFocusRef.current = true;
+        void invoke('show_window');
       } else if (!isDialogOpenRef.current) {
-        // Small delay to avoid hiding during NSPanel focus transitions
         hideTimer = setTimeout(() => void invoke('hide_window'), 50);
       }
     });
@@ -406,6 +475,20 @@ function App() {
       unlisten.then((fn) => fn());
     };
   }, [fetchTasks]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (editingTask || mode !== 'insert') return;
+      if (e.key !== 'Escape') return;
+      if (query.trim().length > 0) return;
+      if (document.activeElement !== inputRef.current) return;
+
+      suppressNextBlurHideRef.current = true;
+    };
+
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [editingTask, mode, query]);
 
   // Dynamic window sizing based on actual content
   useEffect(() => {
@@ -440,30 +523,32 @@ function App() {
     }
   }, [tasks, editingTaskId]);
 
-  const handleCreateTask = async () => {
+  const handleCreateTask = useCallback(async () => {
     if (!query.trim()) return;
     try {
       const task = await createTask({ rawInput: query.trim() });
       setQuery('');
+      setMode('insert');
       setStatusMessage(`Created: ${task.title}`);
       setTimeout(() => setStatusMessage(''), 2000);
+      requestAnimationFrame(() => inputRef.current?.focus());
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [query, createTask]);
 
-  const handleToggleStatus = async (task: { id: string; status: TaskStatus }) => {
+  const handleToggleStatus = useCallback(async (task: { id: string; status: TaskStatus }) => {
     const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done';
     try { await updateTaskStatus({ id: task.id, status: newStatus }); } catch (err) { console.error(err); }
-  };
+  }, [updateTaskStatus]);
 
-  const handleDeleteTask = async (taskId: string) => {
+  const handleDeleteTask = useCallback(async (taskId: string) => {
     try { await deleteTask(taskId); } catch (err) { console.error(err); }
-  };
+  }, [deleteTask]);
 
-  const handleOpenNote = async (path: string) => {
+  const handleOpenNote = useCallback(async (path: string) => {
     try { await openLinkedNote(path); } catch (err) { console.error(err); }
-  };
+  }, [openLinkedNote]);
 
   const getPriorityLabel = (p: TaskPriority) => {
     switch (p) {
@@ -478,6 +563,116 @@ function App() {
   const handleCloseEditor = useCallback(() => {
     setEditingTaskId(null);
   }, []);
+
+  // ── Normal mode keyboard handler ────────────────────────────────────────────
+  useEffect(() => {
+    if (mode !== 'normal' || editingTask) return;
+
+    const handler = (e: KeyboardEvent) => {
+      // In normal mode the input stays focused (to keep the NSPanel alive),
+      // so we don't bail on INPUT — the input's onKeyDown already prevents
+      // characters from being typed. Only bail on TEXTAREA/SELECT (editor fields).
+      const tag = document.activeElement?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const item = normalModeItems[selectedIndex];
+
+      switch (e.key) {
+        case 'Escape':
+          e.preventDefault();
+          void invoke('hide_window');
+          return;
+
+        case 'j':
+        case 'ArrowDown':
+          e.preventDefault();
+          setSelectedIndex((i) => Math.min(i + 1, normalModeItems.length - 1));
+          return;
+
+        case 'k':
+        case 'ArrowUp':
+          e.preventDefault();
+          setSelectedIndex((i) => Math.max(i - 1, 0));
+          return;
+
+        case 'g':
+          e.preventDefault();
+          setSelectedIndex(0);
+          return;
+
+        case 'G':
+          e.preventDefault();
+          setSelectedIndex(normalModeItems.length - 1);
+          return;
+
+        case 'i':
+          e.preventDefault();
+          setMode('insert');
+          requestAnimationFrame(() => inputRef.current?.focus());
+          return;
+
+        case '/':
+          e.preventDefault();
+          setMode('insert');
+          setQuery('');
+          requestAnimationFrame(() => inputRef.current?.focus());
+          return;
+
+        case 'Enter':
+        case 'e':
+          e.preventDefault();
+          if (!item) return;
+          if (item.id === '__dashboard') {
+            void invoke('hide_window');
+            void invoke('open_dashboard_window');
+          } else if (item.id === '__settings') {
+            void invoke('hide_window');
+            void invoke('open_settings_window');
+          } else if (item.id === '__create') {
+            void handleCreateTask();
+          } else {
+            setEditingTaskId(item.id);
+          }
+          return;
+
+        case 'x':
+          if (item && !item.id.startsWith('__')) {
+            const task = tasks.find((t) => t.id === item.id);
+            if (task) void handleToggleStatus(task);
+          }
+          return;
+
+        case 'd':
+          if (item && !item.id.startsWith('__')) {
+            void handleDeleteTask(item.id);
+          }
+          return;
+
+        case 'o':
+          if (item && !item.id.startsWith('__')) {
+            const task = tasks.find((t) => t.id === item.id);
+            if (task?.linkedNotePath) void handleOpenNote(task.linkedNotePath);
+          }
+          return;
+
+        case 'Tab':
+          e.preventDefault();
+          return;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, editingTask, normalModeItems, selectedIndex, tasks, handleCreateTask, handleDeleteTask, handleToggleStatus, handleOpenNote]);
+
+  // Scroll selected item into view in normal mode
+  useEffect(() => {
+    if (mode !== 'normal') return;
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-capture-index="${selectedIndex}"]`);
+      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  }, [selectedIndex, mode]);
 
   // ── Editing mode ────────────────────────────────────────────────────────────
 
@@ -532,10 +727,50 @@ function App() {
                 </div>
               )}
               <Command.Input
+                ref={inputRef}
                 value={query}
-                onValueChange={setQuery}
+                onValueChange={(val) => {
+                  setQuery(val);
+                  // Typing anything switches back to insert mode
+                  if (mode !== 'insert') setMode('insert');
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Escape') void invoke('hide_window');
+                  // Tab — suppress browser tab behavior
+                  if (e.key === 'Tab') {
+                    e.preventDefault();
+                    return;
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (mode === 'normal') {
+                      void invoke('hide_window');
+                      return;
+                    }
+                    if (hasQuery) {
+                      // Clear query first, stay in insert mode
+                      setQuery('');
+                    } else {
+                      // Empty input — enter normal mode
+                      suppressNextBlurHideRef.current = true;
+                      preserveModeOnNextFocusRef.current = true;
+                      setMode('normal');
+                      setSelectedIndex(0);
+                      requestAnimationFrame(() => inputRef.current?.focus());
+                    }
+                    return;
+                  }
+                  // In normal mode, intercept keys before they reach the input
+                  if (mode === 'normal') {
+                    if (e.key === 'i' || e.key === '/') {
+                      // These switch back to insert mode — handled by normal mode effect
+                      // but we need to prevent the character from being typed
+                      e.preventDefault();
+                    } else if (!e.metaKey && !e.ctrlKey) {
+                      // Block all other characters from reaching the input
+                      e.preventDefault();
+                    }
+                    return;
+                  }
                   if (e.key === 'Enter' && hasQuery) { e.preventDefault(); void handleCreateTask(); }
                   if ((e.metaKey || e.ctrlKey) && e.key === ',') {
                     e.preventDefault();
@@ -576,14 +811,20 @@ function App() {
                 heading="Tasks"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
-                {tasks.map((task) => {
+                {tasks.map((task, taskIdx) => {
                   const pri = getPriorityLabel(task.priority);
+                  const isNormalSelected = mode === 'normal' && selectedIndex === taskIdx;
                   return (
                     <Command.Item
                       key={task.id}
                       value={task.id}
+                      data-capture-index={taskIdx}
                       onSelect={() => setEditingTaskId(task.id)}
-                      className="group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 border-transparent px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80"
+                      className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                        isNormalSelected
+                          ? 'border-l-cyan-500 bg-zinc-900/80'
+                          : 'border-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
+                      }`}
                     >
                       {/* Checkbox */}
                       <button
@@ -648,8 +889,13 @@ function App() {
               >
                 <Command.Item
                   value="open-dashboard"
+                  data-capture-index={tasks.length}
                   onSelect={() => { void invoke('hide_window'); void invoke('open_dashboard_window'); }}
-                  className="group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    mode === 'normal' && selectedIndex === tasks.length
+                      ? 'bg-zinc-900/80'
+                      : 'data-[selected=true]:bg-zinc-900/80'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-cyan-500/10">
@@ -662,8 +908,13 @@ function App() {
 
                 <Command.Item
                   value="open-settings"
+                  data-capture-index={tasks.length + 1}
                   onSelect={() => { void invoke('hide_window'); void invoke('open_settings_window'); }}
-                  className="group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    mode === 'normal' && selectedIndex === tasks.length + 1
+                      ? 'bg-zinc-900/80'
+                      : 'data-[selected=true]:bg-zinc-900/80'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
@@ -681,8 +932,13 @@ function App() {
               >
                 <Command.Item
                   value="create-task"
+                  data-capture-index={0}
                   onSelect={() => void handleCreateTask()}
-                  className="group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    mode === 'normal' && selectedIndex === 0
+                      ? 'bg-zinc-900/80'
+                      : 'data-[selected=true]:bg-zinc-900/80'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-cyan-500/10">
@@ -700,17 +956,37 @@ function App() {
         {/* Footer */}
         <div className="flex-shrink-0 border-t border-zinc-800/40 px-3 py-1.5">
           <div className="flex items-center justify-between font-mono text-[10px] text-zinc-600">
-            <div className="flex items-center gap-2">
-              <span>↵ {hasQuery ? 'create' : 'edit'}</span>
-              <span className="text-zinc-800">·</span>
-              <span>⌘, settings</span>
-              <span className="text-zinc-800">·</span>
-              <span>esc dismiss</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <ArrowUpDown className="h-2.5 w-2.5" />
-              <span>navigate</span>
-            </div>
+            {mode === 'insert' ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span>↵ {hasQuery ? 'create' : 'edit'}</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>⌘, settings</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>esc {hasQuery ? 'clear' : 'navigate'}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <ArrowUpDown className="h-2.5 w-2.5" />
+                  <span>navigate</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-cyan-500/10 px-1 text-cyan-400">NAV</span>
+                  <span>j/k move</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>↵ select</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>i type</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>x toggle</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>esc dismiss</span>
+                </div>
+                <span>d delete</span>
+              </>
+            )}
           </div>
         </div>
       </Command>

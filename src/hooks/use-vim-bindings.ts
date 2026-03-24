@@ -106,6 +106,12 @@ export function useVimBindings(viewMode: ViewMode) {
 
       const currentTask = tasks.find((t) => t.id === selectedTaskId);
 
+      // Suppress browser Tab element cycling
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        return;
+      }
+
       // --- Global keys (work regardless of selection) ---
 
       // Escape
