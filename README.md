@@ -35,6 +35,23 @@ npm install
 npm run tauri build
 ```
 
+For local packaging helpers, there is also a `Makefile`:
+
+```bash
+make package
+make install-local
+```
+
+`make package` builds an OS-specific bundle for the current machine:
+
+- macOS: `.dmg`
+- Linux: `.AppImage`
+
+`make install-local` then installs the current local build:
+
+- macOS: copies `jot.app` into `/Applications`
+- Linux: copies the release binary into `~/.local/bin/jot`
+
 ## Development
 
 **Prerequisites:** Node.js 20+, Rust 1.77.2+, [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -49,6 +66,8 @@ npm run tauri dev
 | Command | Description |
 |---------|-------------|
 | `npm run tauri dev` | Run app in development mode |
+| `make package` | Build an OS-specific local package |
+| `make install-local` | Package and install the local app build |
 | `npm run lint` | Lint frontend |
 | `npm run typecheck` | Type-check frontend |
 | `npm test -- --run` | Run frontend tests |
@@ -58,8 +77,7 @@ npm run tauri dev
 ### Full validation
 
 ```bash
-cd src-tauri && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test && cd ..
-npm run lint && npm run typecheck && npm test -- --run && npm run build
+make ci
 ```
 
 ## Architecture

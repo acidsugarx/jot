@@ -50,6 +50,7 @@ Run them from the repository root unless a command explicitly targets `src-tauri
 
 #### Frontend
 - Install deps: `npm install`
+- Make helper overview: `make help`
 - Dev server: `npm run dev`
 - Build: `npm run build`
 - Preview: `npm run preview`
@@ -75,6 +76,14 @@ Useful fallback: `npx vitest run src/path/to/file.test.ts -t "test name"`.
 - Tauri dev: `cargo tauri dev`
 - Tauri build: `cargo tauri build`
 
+#### Makefile Helpers
+- Package for current OS: `make package`
+- Install current OS build locally: `make install-local`
+- Local validation wrapper: `make ci`
+- Rust fmt: `make fmt`
+- Rust fmt check: `make fmt-check`
+- Cross-stack lint: `make lint`
+
 #### Recommended Full Validation Sequence
 When both stacks exist, prefer:
 1. `cargo fmt --check`
@@ -85,7 +94,7 @@ When both stacks exist, prefer:
 6. `npm run test -- --run`
 7. `npm run build`
 
-If a wrapper is added later, prefer a single `npm run ci` or `just ci` target and document it here.
+If a wrapper is added later, prefer a single `make ci`, `npm run ci`, or `just ci` target and document it here.
 
 ### GitHub Automation
 - CI workflow: `.github/workflows/ci.yml` (runs on PR + push to `main`)
