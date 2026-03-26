@@ -13,6 +13,7 @@ import {
   Sun,
   Tag,
   Archive,
+  Plus,
 } from 'lucide-react';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
@@ -72,6 +73,8 @@ export default function Dashboard() {
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('inbox');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const quickAddRef = useRef<HTMLInputElement>(null);
+  const [quickAddValue, setQuickAddValue] = useState('');
 
   const {
     tasks,
@@ -85,6 +88,9 @@ export default function Dashboard() {
     deleteTask,
     isEditorOpen,
     setIsEditorOpen,
+    isQuickAddOpen,
+    setIsQuickAddOpen,
+    createTask,
     openLinkedNote,
   } = useTaskStore();
 
@@ -98,6 +104,13 @@ export default function Dashboard() {
   };
 
   useVimBindings(activeTab as ViewMode);
+
+  // Focus quick-add input when opened
+  useEffect(() => {
+    if (isQuickAddOpen) {
+      requestAnimationFrame(() => quickAddRef.current?.focus());
+    }
+  }, [isQuickAddOpen]);
 
   useEffect(() => {
     void fetchTasks();
@@ -506,6 +519,36 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* Quick-add bar */}
+      {isQuickAddOpen && (
+        <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <Plus className="h-3.5 w-3.5 shrink-0 text-cyan-500" />
+            <input
+              ref={quickAddRef}
+              type="text"
+              value={quickAddValue}
+              onChange={(e) => setQuickAddValue(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && quickAddValue.trim()) {
+                  e.preventDefault();
+                  await createTask({ rawInput: quickAddValue.trim() });
+                  setQuickAddValue('');
+                  setIsQuickAddOpen(false);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setQuickAddValue('');
+                  setIsQuickAddOpen(false);
+                }
+              }}
+              placeholder="Type a task… #tag !priority @zettel"
+              className="h-7 flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
+            />
+            <kbd className="shrink-0 font-mono text-[9px] text-zinc-700">enter create · esc cancel</kbd>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-1">
         <div className="flex items-center justify-center gap-3 font-mono text-[10px] text-zinc-700">
@@ -520,6 +563,8 @@ export default function Dashboard() {
           <span>d delete</span>
           <span className="text-zinc-800">·</span>
           <span>a archive</span>
+          <span className="text-zinc-800">·</span>
+          <span>n new</span>
           <span className="text-zinc-800">·</span>
           <span>/ search</span>
           <span className="text-zinc-800">·</span>

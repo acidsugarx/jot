@@ -36,6 +36,7 @@ interface TaskState {
   settings: AppSettings | null;
   selectedTaskId: string | null;
   isEditorOpen: boolean;
+  isQuickAddOpen: boolean;
 
   fetchTasks: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task>;
@@ -55,6 +56,7 @@ interface TaskState {
   updateTheme: (theme: string) => Promise<void>;
   selectTask: (id: string | null) => void;
   setIsEditorOpen: (isOpen: boolean) => void;
+  setIsQuickAddOpen: (isOpen: boolean) => void;
   clearError: () => void;
   listenForUpdates: () => () => void;
 }
@@ -67,6 +69,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   settings: null,
   selectedTaskId: null,
   isEditorOpen: false,
+  isQuickAddOpen: false,
 
   fetchTasks: async () => {
     if (!('__TAURI_INTERNALS__' in window)) return;
@@ -250,6 +253,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectTask: (id) => set({ selectedTaskId: id }),
   setIsEditorOpen: (isOpen) => set({ isEditorOpen: isOpen }),
+  setIsQuickAddOpen: (isOpen) => set({ isQuickAddOpen: isOpen }),
   clearError: () => set({ error: null }),
 
   listenForUpdates: () => {

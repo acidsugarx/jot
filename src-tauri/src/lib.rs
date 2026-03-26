@@ -258,7 +258,9 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
     }
 
     builder
@@ -294,7 +296,9 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
     }
 
     builder

@@ -804,7 +804,10 @@ function App() {
         </div>
 
         {/* Scrollable List */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          style={{ maxHeight: MAX_VISIBLE_TASKS * ITEM_HEIGHT + GROUP_HEADER_HEIGHT * 2 + 2 * ACTION_ITEM_HEIGHT + 8 }}
+        >
           <Command.List className="py-1">
             {!hasQuery && tasks.length > 0 && (
               <Command.Group

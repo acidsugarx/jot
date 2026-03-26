@@ -29,6 +29,8 @@ export function useVimBindings(viewMode: ViewMode) {
     openLinkedNote,
     isEditorOpen,
     setIsEditorOpen,
+    isQuickAddOpen,
+    setIsQuickAddOpen,
   } = useTaskStore();
 
   const handleNav = useCallback(
@@ -102,7 +104,6 @@ export function useVimBindings(viewMode: ViewMode) {
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (!tasks.length) return;
 
       const currentTask = tasks.find((t) => t.id === selectedTaskId);
 
@@ -131,6 +132,15 @@ export function useVimBindings(viewMode: ViewMode) {
         searchInput?.focus();
         return;
       }
+
+      // n — new task quick-add
+      if (e.key === 'n') {
+        e.preventDefault();
+        setIsQuickAddOpen(true);
+        return;
+      }
+
+      if (!tasks.length) return;
 
       // --- Navigation ---
       if (e.key === 'j' || e.key === 'ArrowDown') {
@@ -229,6 +239,8 @@ export function useVimBindings(viewMode: ViewMode) {
     openLinkedNote,
     isEditorOpen,
     setIsEditorOpen,
+    isQuickAddOpen,
+    setIsQuickAddOpen,
     handleNav,
     handleColumnNav,
     viewMode,
