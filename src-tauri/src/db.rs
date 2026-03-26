@@ -304,6 +304,10 @@ pub fn create_task(db: State<'_, DatabaseState>, input: CreateTaskInput) -> Resu
         linked_note_path,
         created_at: timestamp(),
         updated_at: timestamp(),
+        parent_id: input.parent_id,
+        color: input.color,
+        time_estimated: None,
+        time_spent: None,
     };
 
     insert_task(&connection, &task)?;
@@ -588,8 +592,10 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 due_date,
                 linked_note_path,
                 created_at,
-                updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                updated_at,
+                parent_id,
+                color
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ",
             params![
                 task.id,
@@ -601,7 +607,9 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 task.due_date,
                 task.linked_note_path,
                 task.created_at,
-                task.updated_at
+                task.updated_at,
+                task.parent_id,
+                task.color
             ],
         )
         .map_err(|error| format!("Failed to insert task into SQLite: {error}"))?;
@@ -613,7 +621,7 @@ fn list_tasks(connection: &Connection) -> Result<Vec<Task>, String> {
     let mut statement = connection
         .prepare(
             "
-            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at
+            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at, parent_id, color, time_estimated, time_spent
             FROM tasks
             ORDER BY created_at DESC
             ",
@@ -661,7 +669,7 @@ fn fetch_task(connection: &Connection, id: &str) -> Result<Option<Task>, String>
     let task = connection
         .query_row(
             "
-            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at
+            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at, parent_id, color, time_estimated, time_spent
             FROM tasks
             WHERE id = ?1
             ",
@@ -714,6 +722,21 @@ fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, 
         values.push(Box::new(due_date.clone()));
     }
 
+    if let Some(ref color) = input.color {
+        sets.push("color = ?".to_string());
+        values.push(Box::new(color.clone()));
+    }
+
+    if let Some(time_estimated) = input.time_estimated {
+        sets.push("time_estimated = ?".to_string());
+        values.push(Box::new(time_estimated));
+    }
+
+    if let Some(time_spent) = input.time_spent {
+        sets.push("time_spent = ?".to_string());
+        values.push(Box::new(time_spent));
+    }
+
     if sets.is_empty() {
         return fetch_task(connection, &input.id)?
             .ok_or_else(|| format!("Task {} was not found.", input.id));
@@ -760,6 +783,10 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         linked_note_path: row.get(7)?,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        parent_id: row.get(10)?,
+        color: row.get(11)?,
+        time_estimated: row.get(12)?,
+        time_spent: row.get(13)?,
     })
 }
 
@@ -1000,6 +1027,10 @@ mod tests {
             linked_note_path: Some("/tmp/jot-note.md".to_string()),
             created_at: timestamp(),
             updated_at: timestamp(),
+            parent_id: None,
+            color: None,
+            time_estimated: None,
+            time_spent: None,
         };
 
         insert_task(&connection, &task).expect("task should insert");
@@ -1122,6 +1153,10 @@ mod tests {
             linked_note_path: None,
             created_at: timestamp(),
             updated_at: timestamp(),
+            parent_id: None,
+            color: None,
+            time_estimated: None,
+            time_spent: None,
         };
         insert_task(&connection, &task).expect("task should insert");
 

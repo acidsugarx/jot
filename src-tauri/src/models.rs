@@ -47,6 +47,10 @@ pub struct Task {
     pub linked_note_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub parent_id: Option<String>,
+    pub color: Option<String>,
+    pub time_estimated: Option<i64>,
+    pub time_spent: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,6 +63,8 @@ pub struct CreateTaskInput {
     pub tags: Option<Vec<String>>,
     pub due_date: Option<String>,
     pub linked_note_path: Option<String>,
+    pub parent_id: Option<String>,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +84,82 @@ pub struct UpdateTaskInput {
     pub priority: Option<TaskPriority>,
     pub tags: Option<Vec<String>>,
     pub due_date: Option<Option<String>>,
+    pub color: Option<Option<String>>,
+    pub time_estimated: Option<Option<i64>>,
+    pub time_spent: Option<Option<i64>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Checklist {
+    pub id: String,
+    pub task_id: String,
+    pub title: String,
+    pub position: i64,
+    pub items: Vec<ChecklistItem>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistItem {
+    pub id: String,
+    pub checklist_id: String,
+    pub text: String,
+    pub completed: bool,
+    pub position: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChecklistInput {
+    pub task_id: String,
+    pub title: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddChecklistItemInput {
+    pub checklist_id: String,
+    pub text: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateChecklistItemInput {
+    pub id: String,
+    pub text: Option<String>,
+    pub completed: Option<bool>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTagInput {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTagInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
