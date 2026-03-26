@@ -6,8 +6,9 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, CreateColumnInput, CreateTaskInput, KanbanColumn, ReorderColumnsInput, Task,
-    TaskPriority, UpdateColumnInput, UpdateSettingsInput, UpdateTaskInput, UpdateTaskStatusInput,
+    AppSettings, Checklist, ChecklistItem, CreateColumnInput, CreateTaskInput, KanbanColumn,
+    ReorderColumnsInput, Tag, Task, TaskPriority, UpdateColumnInput, UpdateSettingsInput,
+    UpdateTaskInput, UpdateTaskStatusInput,
 };
 use crate::parser::parse_task_input;
 
@@ -573,6 +574,171 @@ pub fn reorder_columns(
     list_columns(&connection)
 }
 
+// ── Checklist commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_checklists(
+    db: State<'_, DatabaseState>,
+    task_id: String,
+) -> Result<Vec<Checklist>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_checklists(&connection, &task_id)
+}
+
+#[tauri::command]
+pub fn create_checklist(
+    db: State<'_, DatabaseState>,
+    task_id: String,
+    title: String,
+) -> Result<Checklist, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    insert_checklist(&connection, &task_id, &title)
+}
+
+#[tauri::command]
+pub fn add_checklist_item(
+    db: State<'_, DatabaseState>,
+    checklist_id: String,
+    text: String,
+) -> Result<ChecklistItem, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    insert_checklist_item(&connection, &checklist_id, &text)
+}
+
+#[tauri::command]
+pub fn update_checklist_item(
+    db: State<'_, DatabaseState>,
+    id: String,
+    text: Option<String>,
+    completed: Option<bool>,
+) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    patch_checklist_item(&connection, &id, text.as_deref(), completed)
+}
+
+#[tauri::command]
+pub fn delete_checklist(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    remove_checklist(&connection, &id)
+}
+
+#[tauri::command]
+pub fn delete_checklist_item(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    remove_checklist_item(&connection, &id)
+}
+
+// ── Tag commands ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_tags(db: State<'_, DatabaseState>) -> Result<Vec<Tag>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_tags(&connection)
+}
+
+#[tauri::command]
+pub fn create_tag(
+    db: State<'_, DatabaseState>,
+    name: String,
+    color: Option<String>,
+) -> Result<Tag, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    insert_tag(&connection, &name, color.as_deref())
+}
+
+#[tauri::command]
+pub fn update_tag(
+    db: State<'_, DatabaseState>,
+    id: String,
+    name: Option<String>,
+    color: Option<String>,
+) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    patch_tag(&connection, &id, name.as_deref(), color.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_tag(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    remove_tag(&connection, &id)
+}
+
+#[tauri::command]
+pub fn get_task_tags(db: State<'_, DatabaseState>, task_id: String) -> Result<Vec<Tag>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_task_tags(&connection, &task_id)
+}
+
+#[tauri::command]
+pub fn set_task_tags(
+    db: State<'_, DatabaseState>,
+    task_id: String,
+    tag_ids: Vec<String>,
+) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    replace_task_tags(&connection, &task_id, &tag_ids)
+}
+
+// ── Subtask commands ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_subtasks(db: State<'_, DatabaseState>, parent_id: String) -> Result<Vec<Task>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_subtasks(&connection, &parent_id)
+}
+
 // ── Private helpers ──────────────────────────────────────────────────────────
 
 fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
@@ -986,6 +1152,335 @@ fn format_note(title: &str, due_date: Option<&str>) -> String {
     lines.join("\n")
 }
 
+// ── Checklist helpers ─────────────────────────────────────────────────────────
+
+fn list_checklists(connection: &Connection, task_id: &str) -> Result<Vec<Checklist>, String> {
+    let mut stmt = connection
+        .prepare("SELECT id, task_id, title, position FROM checklists WHERE task_id = ?1 ORDER BY position ASC")
+        .map_err(|error| format!("Failed to prepare checklists query: {error}"))?;
+
+    let rows = stmt
+        .query_map(params![task_id], |row| {
+            Ok(Checklist {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                title: row.get(2)?,
+                position: row.get(3)?,
+                items: Vec::new(),
+            })
+        })
+        .map_err(|error| format!("Failed to query checklists: {error}"))?;
+
+    let mut checklists: Vec<Checklist> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read checklists: {error}"))?;
+
+    for checklist in &mut checklists {
+        checklist.items = list_checklist_items(connection, &checklist.id)?;
+    }
+
+    Ok(checklists)
+}
+
+fn list_checklist_items(
+    connection: &Connection,
+    checklist_id: &str,
+) -> Result<Vec<ChecklistItem>, String> {
+    let mut stmt = connection
+        .prepare("SELECT id, checklist_id, text, completed, position FROM checklist_items WHERE checklist_id = ?1 ORDER BY position ASC")
+        .map_err(|error| format!("Failed to prepare checklist items query: {error}"))?;
+
+    let rows = stmt
+        .query_map(params![checklist_id], |row| {
+            Ok(ChecklistItem {
+                id: row.get(0)?,
+                checklist_id: row.get(1)?,
+                text: row.get(2)?,
+                completed: row.get::<_, i64>(3)? != 0,
+                position: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query checklist items: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read checklist items: {error}"))
+}
+
+fn insert_checklist(
+    connection: &Connection,
+    task_id: &str,
+    title: &str,
+) -> Result<Checklist, String> {
+    let max_position: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) FROM checklists WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to get max checklist position: {error}"))?;
+
+    let checklist = Checklist {
+        id: Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        title: title.to_string(),
+        position: max_position + 1,
+        items: Vec::new(),
+    };
+
+    connection
+        .execute(
+            "INSERT INTO checklists (id, task_id, title, position) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                checklist.id,
+                checklist.task_id,
+                checklist.title,
+                checklist.position
+            ],
+        )
+        .map_err(|error| format!("Failed to insert checklist: {error}"))?;
+
+    Ok(checklist)
+}
+
+fn insert_checklist_item(
+    connection: &Connection,
+    checklist_id: &str,
+    text: &str,
+) -> Result<ChecklistItem, String> {
+    let max_position: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) FROM checklist_items WHERE checklist_id = ?1",
+            params![checklist_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to get max checklist item position: {error}"))?;
+
+    let item = ChecklistItem {
+        id: Uuid::new_v4().to_string(),
+        checklist_id: checklist_id.to_string(),
+        text: text.to_string(),
+        completed: false,
+        position: max_position + 1,
+    };
+
+    connection
+        .execute(
+            "INSERT INTO checklist_items (id, checklist_id, text, completed, position) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![item.id, item.checklist_id, item.text, item.completed as i64, item.position],
+        )
+        .map_err(|error| format!("Failed to insert checklist item: {error}"))?;
+
+    Ok(item)
+}
+
+fn patch_checklist_item(
+    connection: &Connection,
+    id: &str,
+    text: Option<&str>,
+    completed: Option<bool>,
+) -> Result<(), String> {
+    let mut sets: Vec<&str> = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(text) = text {
+        sets.push("text = ?");
+        values.push(Box::new(text.to_string()));
+    }
+
+    if let Some(completed) = completed {
+        sets.push("completed = ?");
+        values.push(Box::new(completed as i64));
+    }
+
+    if sets.is_empty() {
+        return Ok(());
+    }
+
+    values.push(Box::new(id.to_string()));
+    let sql = format!(
+        "UPDATE checklist_items SET {} WHERE id = ?",
+        sets.join(", ")
+    );
+    let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+
+    connection
+        .execute(&sql, params.as_slice())
+        .map_err(|error| format!("Failed to update checklist item: {error}"))?;
+
+    Ok(())
+}
+
+fn remove_checklist(connection: &Connection, id: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM checklist_items WHERE checklist_id = ?1",
+            params![id],
+        )
+        .map_err(|error| format!("Failed to delete checklist items: {error}"))?;
+
+    connection
+        .execute("DELETE FROM checklists WHERE id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete checklist: {error}"))?;
+
+    Ok(())
+}
+
+fn remove_checklist_item(connection: &Connection, id: &str) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM checklist_items WHERE id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete checklist item: {error}"))?;
+
+    Ok(())
+}
+
+// ── Tag helpers ──────────────────────────────────────────────────────────────
+
+fn list_tags(connection: &Connection) -> Result<Vec<Tag>, String> {
+    let mut stmt = connection
+        .prepare("SELECT id, name, color FROM tags ORDER BY name ASC")
+        .map_err(|error| format!("Failed to prepare tags query: {error}"))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query tags: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read tags: {error}"))
+}
+
+fn insert_tag(connection: &Connection, name: &str, color: Option<&str>) -> Result<Tag, String> {
+    let tag = Tag {
+        id: Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        color: color.unwrap_or("#6b7280").to_string(),
+    };
+
+    connection
+        .execute(
+            "INSERT INTO tags (id, name, color) VALUES (?1, ?2, ?3)",
+            params![tag.id, tag.name, tag.color],
+        )
+        .map_err(|error| format!("Failed to insert tag: {error}"))?;
+
+    Ok(tag)
+}
+
+fn patch_tag(
+    connection: &Connection,
+    id: &str,
+    name: Option<&str>,
+    color: Option<&str>,
+) -> Result<(), String> {
+    let mut sets: Vec<&str> = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(name) = name {
+        sets.push("name = ?");
+        values.push(Box::new(name.to_string()));
+    }
+
+    if let Some(color) = color {
+        sets.push("color = ?");
+        values.push(Box::new(color.to_string()));
+    }
+
+    if sets.is_empty() {
+        return Ok(());
+    }
+
+    values.push(Box::new(id.to_string()));
+    let sql = format!("UPDATE tags SET {} WHERE id = ?", sets.join(", "));
+    let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+
+    connection
+        .execute(&sql, params.as_slice())
+        .map_err(|error| format!("Failed to update tag: {error}"))?;
+
+    Ok(())
+}
+
+fn remove_tag(connection: &Connection, id: &str) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM task_tags WHERE tag_id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete task_tags for tag: {error}"))?;
+
+    connection
+        .execute("DELETE FROM tags WHERE id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete tag: {error}"))?;
+
+    Ok(())
+}
+
+fn list_task_tags(connection: &Connection, task_id: &str) -> Result<Vec<Tag>, String> {
+    let mut stmt = connection
+        .prepare(
+            "SELECT t.id, t.name, t.color FROM tags t INNER JOIN task_tags tt ON t.id = tt.tag_id WHERE tt.task_id = ?1 ORDER BY t.name ASC",
+        )
+        .map_err(|error| format!("Failed to prepare task tags query: {error}"))?;
+
+    let rows = stmt
+        .query_map(params![task_id], |row| {
+            Ok(Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query task tags: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read task tags: {error}"))
+}
+
+fn replace_task_tags(
+    connection: &Connection,
+    task_id: &str,
+    tag_ids: &[String],
+) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM task_tags WHERE task_id = ?1", params![task_id])
+        .map_err(|error| format!("Failed to clear task tags: {error}"))?;
+
+    for tag_id in tag_ids {
+        connection
+            .execute(
+                "INSERT INTO task_tags (task_id, tag_id) VALUES (?1, ?2)",
+                params![task_id, tag_id],
+            )
+            .map_err(|error| format!("Failed to insert task tag: {error}"))?;
+    }
+
+    Ok(())
+}
+
+// ── Subtask helpers ──────────────────────────────────────────────────────────
+
+fn list_subtasks(connection: &Connection, parent_id: &str) -> Result<Vec<Task>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT id, title, description, status, priority, tags, due_date, linked_note_path, created_at, updated_at, parent_id, color, time_estimated, time_spent
+            FROM tasks
+            WHERE parent_id = ?1
+            ORDER BY created_at DESC
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare subtasks query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![parent_id], map_task_row)
+        .map_err(|error| format!("Failed to query subtasks: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read subtasks: {error}"))
+}
+
 fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
     let mut previous_was_dash = false;
@@ -1364,5 +1859,181 @@ mod tests {
             .expect("should read default tag color");
 
         assert_eq!(default_color, "#6b7280");
+    }
+
+    #[test]
+    fn checklist_crud_round_trips() {
+        let connection = test_connection();
+
+        // Create checklist
+        let checklist = insert_checklist(&connection, "task-1", "My Checklist")
+            .expect("checklist should insert");
+        assert_eq!(checklist.title, "My Checklist");
+        assert_eq!(checklist.position, 0);
+        assert!(checklist.items.is_empty());
+
+        // Add item
+        let item = insert_checklist_item(&connection, &checklist.id, "First item")
+            .expect("checklist item should insert");
+        assert_eq!(item.text, "First item");
+        assert!(!item.completed);
+        assert_eq!(item.position, 0);
+
+        // Update item: toggle completed
+        patch_checklist_item(&connection, &item.id, None, Some(true))
+            .expect("should toggle completed");
+
+        // Update item: change text
+        patch_checklist_item(&connection, &item.id, Some("Updated item"), None)
+            .expect("should update text");
+
+        // Verify via get_checklists
+        let checklists = list_checklists(&connection, "task-1").expect("should list checklists");
+        assert_eq!(checklists.len(), 1);
+        assert_eq!(checklists[0].items.len(), 1);
+        assert_eq!(checklists[0].items[0].text, "Updated item");
+        assert!(checklists[0].items[0].completed);
+
+        // Delete checklist (cascades items)
+        remove_checklist(&connection, &checklist.id).expect("should delete checklist");
+        let checklists = list_checklists(&connection, "task-1").expect("should list checklists");
+        assert!(checklists.is_empty());
+    }
+
+    #[test]
+    fn tag_crud_round_trips() {
+        let connection = test_connection();
+
+        // Create tag
+        let tag = insert_tag(&connection, "work", Some("#3b82f6")).expect("tag should insert");
+        assert_eq!(tag.name, "work");
+        assert_eq!(tag.color, "#3b82f6");
+
+        // Verify via get_tags
+        let tags = list_tags(&connection).expect("should list tags");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "work");
+
+        // Update name + color
+        patch_tag(&connection, &tag.id, Some("personal"), Some("#ef4444"))
+            .expect("should update tag");
+
+        let tags = list_tags(&connection).expect("should list tags after update");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "personal");
+        assert_eq!(tags[0].color, "#ef4444");
+
+        // Delete
+        remove_tag(&connection, &tag.id).expect("should delete tag");
+        let tags = list_tags(&connection).expect("should list tags after delete");
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn task_tags_round_trips() {
+        let connection = test_connection();
+
+        // Create 2 tags
+        let tag1 = insert_tag(&connection, "alpha", None).expect("tag1 should insert");
+        let tag2 = insert_tag(&connection, "beta", None).expect("tag2 should insert");
+
+        // Create a task
+        let task = Task {
+            id: "tt-task".to_string(),
+            title: "Tagged task".to_string(),
+            description: None,
+            status: "todo".to_string(),
+            priority: TaskPriority::None,
+            tags: vec![],
+            due_date: None,
+            linked_note_path: None,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+            parent_id: None,
+            color: None,
+            time_estimated: None,
+            time_spent: None,
+        };
+        insert_task(&connection, &task).expect("task should insert");
+
+        // Set both tags
+        replace_task_tags(&connection, &task.id, &[tag1.id.clone(), tag2.id.clone()])
+            .expect("should set task tags");
+
+        let tags = list_task_tags(&connection, &task.id).expect("should list task tags");
+        assert_eq!(tags.len(), 2);
+
+        // Replace with just 1 tag
+        replace_task_tags(&connection, &task.id, std::slice::from_ref(&tag1.id))
+            .expect("should replace task tags");
+
+        let tags =
+            list_task_tags(&connection, &task.id).expect("should list task tags after replace");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].id, tag1.id);
+    }
+
+    #[test]
+    fn subtask_listing_returns_children() {
+        let connection = test_connection();
+
+        // Insert parent task
+        let parent = Task {
+            id: "parent-sub".to_string(),
+            title: "Parent task".to_string(),
+            description: None,
+            status: "todo".to_string(),
+            priority: TaskPriority::None,
+            tags: vec![],
+            due_date: None,
+            linked_note_path: None,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+            parent_id: None,
+            color: None,
+            time_estimated: None,
+            time_spent: None,
+        };
+        insert_task(&connection, &parent).expect("parent should insert");
+
+        // Insert 2 child tasks
+        let child1 = Task {
+            id: "child-sub-1".to_string(),
+            title: "Child 1".to_string(),
+            description: None,
+            status: "todo".to_string(),
+            priority: TaskPriority::None,
+            tags: vec![],
+            due_date: None,
+            linked_note_path: None,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+            parent_id: Some("parent-sub".to_string()),
+            color: None,
+            time_estimated: None,
+            time_spent: None,
+        };
+        insert_task(&connection, &child1).expect("child1 should insert");
+
+        let child2 = Task {
+            id: "child-sub-2".to_string(),
+            title: "Child 2".to_string(),
+            description: None,
+            status: "todo".to_string(),
+            priority: TaskPriority::None,
+            tags: vec![],
+            due_date: None,
+            linked_note_path: None,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+            parent_id: Some("parent-sub".to_string()),
+            color: None,
+            time_estimated: None,
+            time_spent: None,
+        };
+        insert_task(&connection, &child2).expect("child2 should insert");
+
+        let subtasks = list_subtasks(&connection, "parent-sub").expect("should list subtasks");
+        assert_eq!(subtasks.len(), 2);
     }
 }
