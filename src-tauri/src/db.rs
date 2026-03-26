@@ -102,6 +102,111 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             .map_err(|error| format!("Failed to add description column: {error}"))?;
     }
 
+    // Add parent_id column for subtask support
+    let has_parent_id: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'parent_id'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_parent_id {
+        connection
+            .execute_batch("ALTER TABLE tasks ADD COLUMN parent_id TEXT")
+            .map_err(|error| format!("Failed to add parent_id column: {error}"))?;
+    }
+
+    // Add color column on tasks
+    let has_task_color: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'color'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_task_color {
+        connection
+            .execute_batch("ALTER TABLE tasks ADD COLUMN color TEXT")
+            .map_err(|error| format!("Failed to add color column to tasks: {error}"))?;
+    }
+
+    // Add color column on kanban_columns
+    let has_column_color: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('kanban_columns') WHERE name = 'color'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_column_color {
+        connection
+            .execute_batch("ALTER TABLE kanban_columns ADD COLUMN color TEXT")
+            .map_err(|error| format!("Failed to add color column to kanban_columns: {error}"))?;
+    }
+
+    // Add time tracking columns on tasks
+    let has_time_estimated: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'time_estimated'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_time_estimated {
+        connection
+            .execute_batch("ALTER TABLE tasks ADD COLUMN time_estimated INTEGER")
+            .map_err(|error| format!("Failed to add time_estimated column: {error}"))?;
+    }
+
+    let has_time_spent: bool = connection
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'time_spent'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i64>(0)))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_time_spent {
+        connection
+            .execute_batch("ALTER TABLE tasks ADD COLUMN time_spent INTEGER")
+            .map_err(|error| format!("Failed to add time_spent column: {error}"))?;
+    }
+
+    // Create checklists and checklist_items tables
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS checklists (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS checklist_items (
+                id TEXT PRIMARY KEY,
+                checklist_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL DEFAULT 0
+            );
+            ",
+        )
+        .map_err(|error| format!("Failed to create checklists tables: {error}"))?;
+
+    // Create tags and task_tags tables
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS tags (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL DEFAULT '#6b7280'
+            );
+
+            CREATE TABLE IF NOT EXISTS task_tags (
+                task_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                PRIMARY KEY (task_id, tag_id)
+            );
+            ",
+        )
+        .map_err(|error| format!("Failed to create tags tables: {error}"))?;
+
     seed_default_columns(connection)?;
 
     Ok(())
@@ -1033,5 +1138,196 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn subtask_parent_id_column_exists_after_migration() {
+        let connection = test_connection();
+        let now = timestamp();
+
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, created_at, updated_at) VALUES ('parent-1', 'Parent', 'todo', 'none', '[]', ?1, ?1)",
+                params![now],
+            )
+            .expect("parent task should insert");
+
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, parent_id, created_at, updated_at) VALUES ('child-1', 'Child', 'todo', 'none', '[]', 'parent-1', ?1, ?1)",
+                params![now],
+            )
+            .expect("child task with parent_id should insert");
+
+        let parent_id: Option<String> = connection
+            .query_row(
+                "SELECT parent_id FROM tasks WHERE id = 'child-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should read parent_id");
+
+        assert_eq!(parent_id, Some("parent-1".to_string()));
+    }
+
+    #[test]
+    fn color_columns_exist_after_migration() {
+        let connection = test_connection();
+        let now = timestamp();
+
+        // Test color on tasks
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, color, created_at, updated_at) VALUES ('t-color', 'Colored task', 'todo', 'none', '[]', '#ff0000', ?1, ?1)",
+                params![now],
+            )
+            .expect("task with color should insert");
+
+        let task_color: Option<String> = connection
+            .query_row("SELECT color FROM tasks WHERE id = 't-color'", [], |row| {
+                row.get(0)
+            })
+            .expect("should read task color");
+
+        assert_eq!(task_color, Some("#ff0000".to_string()));
+
+        // Test color on kanban_columns
+        connection
+            .execute(
+                "UPDATE kanban_columns SET color = '#00ff00' WHERE status_key = 'todo'",
+                [],
+            )
+            .expect("kanban column color update should succeed");
+
+        let col_color: Option<String> = connection
+            .query_row(
+                "SELECT color FROM kanban_columns WHERE status_key = 'todo'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should read column color");
+
+        assert_eq!(col_color, Some("#00ff00".to_string()));
+    }
+
+    #[test]
+    fn time_tracking_columns_exist_after_migration() {
+        let connection = test_connection();
+        let now = timestamp();
+
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, time_estimated, time_spent, created_at, updated_at) VALUES ('t-time', 'Timed task', 'todo', 'none', '[]', 3600, 1800, ?1, ?1)",
+                params![now],
+            )
+            .expect("task with time columns should insert");
+
+        let (estimated, spent): (Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT time_estimated, time_spent FROM tasks WHERE id = 't-time'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("should read time columns");
+
+        assert_eq!(estimated, Some(3600));
+        assert_eq!(spent, Some(1800));
+    }
+
+    #[test]
+    fn checklists_tables_exist_after_migration() {
+        let connection = test_connection();
+
+        connection
+            .execute(
+                "INSERT INTO checklists (id, task_id, title, position) VALUES ('cl-1', 'task-1', 'My checklist', 0)",
+                [],
+            )
+            .expect("checklist should insert");
+
+        connection
+            .execute(
+                "INSERT INTO checklist_items (id, checklist_id, text, completed, position) VALUES ('ci-1', 'cl-1', 'First item', 0, 0)",
+                [],
+            )
+            .expect("checklist item should insert");
+
+        connection
+            .execute(
+                "INSERT INTO checklist_items (id, checklist_id, text, completed, position) VALUES ('ci-2', 'cl-1', 'Second item', 1, 1)",
+                [],
+            )
+            .expect("completed checklist item should insert");
+
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM checklist_items WHERE checklist_id = 'cl-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should count checklist items");
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn tags_tables_exist_after_migration() {
+        let connection = test_connection();
+        let now = timestamp();
+
+        connection
+            .execute(
+                "INSERT INTO tags (id, name, color) VALUES ('tag-1', 'work', '#3b82f6')",
+                [],
+            )
+            .expect("tag should insert");
+
+        connection
+            .execute(
+                "INSERT INTO tags (id, name) VALUES ('tag-2', 'personal')",
+                [],
+            )
+            .expect("tag with default color should insert");
+
+        // Insert a task and link it via task_tags
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, created_at, updated_at) VALUES ('t-tagged', 'Tagged task', 'todo', 'none', '[]', ?1, ?1)",
+                params![now],
+            )
+            .expect("task should insert");
+
+        connection
+            .execute(
+                "INSERT INTO task_tags (task_id, tag_id) VALUES ('t-tagged', 'tag-1')",
+                [],
+            )
+            .expect("task_tag should insert");
+
+        connection
+            .execute(
+                "INSERT INTO task_tags (task_id, tag_id) VALUES ('t-tagged', 'tag-2')",
+                [],
+            )
+            .expect("second task_tag should insert");
+
+        let tag_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM task_tags WHERE task_id = 't-tagged'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should count task tags");
+
+        assert_eq!(tag_count, 2);
+
+        // Verify default color
+        let default_color: String = connection
+            .query_row("SELECT color FROM tags WHERE id = 'tag-2'", [], |row| {
+                row.get(0)
+            })
+            .expect("should read default tag color");
+
+        assert_eq!(default_color, "#6b7280");
     }
 }
