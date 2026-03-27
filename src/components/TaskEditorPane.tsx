@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
 import { FileText, Link as LinkIcon, X, Plus, Calendar, Eye, PenLine } from 'lucide-react';
 import { TaskPriority } from '@/types';
+import type { Checklist, Task as TaskType } from '@/types';
+import { ChecklistEditor } from '@/components/ChecklistEditor';
+import { SubtaskList } from '@/components/SubtaskList';
 
 const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
   { value: 'none', label: 'None', color: 'text-zinc-600' },
@@ -19,7 +22,7 @@ const priorityColor: Record<string, string> = {
 };
 
 export function TaskEditorPane() {
-  const { tasks, columns, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote } = useTaskStore();
+  const { tasks, columns, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote, getChecklists, getSubtasks, selectTask } = useTaskStore();
   const task = tasks.find((t) => t.id === selectedTaskId);
 
   const [title, setTitle] = useState('');
@@ -30,6 +33,8 @@ export function TaskEditorPane() {
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [descPreview, setDescPreview] = useState(false);
+  const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [subtasks, setSubtasks] = useState<TaskType[]>([]);
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +63,18 @@ export function TaskEditorPane() {
 
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
+
+  const loadExtras = useCallback(async () => {
+    if (!task) return;
+    const [cl, st] = await Promise.all([
+      getChecklists(task.id),
+      getSubtasks(task.id),
+    ]);
+    setChecklists(cl);
+    setSubtasks(st);
+  }, [task, getChecklists, getSubtasks]);
+
+  useEffect(() => { void loadExtras(); }, [loadExtras]);
 
   if (!task) return null;
 
@@ -296,6 +313,27 @@ export function TaskEditorPane() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Checklists */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <div className="mb-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Checklists</span>
+          </div>
+          <ChecklistEditor taskId={task.id} checklists={checklists} onUpdate={loadExtras} />
+        </div>
+
+        {/* Subtasks */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <div className="mb-2">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Subtasks</span>
+          </div>
+          <SubtaskList
+            parentId={task.id}
+            subtasks={subtasks}
+            onUpdate={loadExtras}
+            onSelect={(id) => selectTask(id)}
+          />
         </div>
 
         {/* Linked Note */}
