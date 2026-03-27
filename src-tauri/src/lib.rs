@@ -1,6 +1,7 @@
 mod db;
 mod models;
 mod parser;
+mod yougile;
 
 use tauri::{
     menu::MenuItem,
