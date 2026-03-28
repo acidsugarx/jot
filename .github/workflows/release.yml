@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   publish:
@@ -64,3 +65,77 @@ jobs:
           releaseBody: Download the installer for your platform from the assets below.
           releaseDraft: false
           prerelease: false
+
+  update-tap:
+    name: Update Homebrew Tap
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download aarch64 DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download ${{ github.ref_name }} \
+            --repo ${{ github.repository }} \
+            --pattern "*aarch64.dmg" \
+            --dir .
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          DMG_FILE=$(ls *aarch64.dmg | head -1)
+          echo "AARCH64_SHA=$(shasum -a 256 "$DMG_FILE" | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "DMG_NAME=$DMG_FILE" >> $GITHUB_OUTPUT
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: acidsugarx/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Update formula
+        working-directory: tap
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          AARCH64_SHA="${{ steps.sha.outputs.AARCH64_SHA }}"
+          DMG_NAME="${{ steps.sha.outputs.DMG_NAME }}"
+          
+          cat > Formula/jot.rb << EOF
+          class Jot < Formula
+            desc "Keyboard-first task manager with local-first storage"
+            homepage "https://github.com/acidsugarx/jot"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/acidsugarx/jot/releases/download/v${VERSION}/${DMG_NAME}"
+                sha256 "${AARCH64_SHA}"
+              end
+            end
+
+            def install
+              app.install "jot.app"
+            end
+
+            test do
+              assert_path_exists bin.parent/"jot.app"
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/jot.rb
+          git commit -m "Update jot to v${{ steps.version.outputs.VERSION }}"
+          git push
