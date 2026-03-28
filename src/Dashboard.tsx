@@ -19,6 +19,7 @@ import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { SourceSwitcher } from '@/components/SourceSwitcher';
+import { YougileTaskEditor } from '@/components/YougileTaskEditor';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { Task, TaskPriority, KanbanColumn } from '@/types';
@@ -585,10 +586,21 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Editor pane */}
-        {selectedTaskId && isEditorOpen && selectedTask && (
+        {/* Editor pane — local tasks */}
+        {!isYougile && selectedTaskId && isEditorOpen && selectedTask && (
           <TaskEditorPane />
         )}
+
+        {/* Editor pane — Yougile tasks */}
+        {isYougile && yougileStore.selectedTaskId && (() => {
+          const task = yougileStore.tasks.find((t) => t.id === yougileStore.selectedTaskId);
+          return task ? (
+            <YougileTaskEditor
+              task={task}
+              onClose={() => yougileStore.selectTask(null)}
+            />
+          ) : null;
+        })()}
       </div>
 
       {/* Quick-add bar */}
