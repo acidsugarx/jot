@@ -52,6 +52,7 @@ export interface UpdateTaskInput {
 export interface AppSettings {
   vaultDir: string | null;
   theme: string;
+  yougileEnabled: boolean;
 }
 
 export interface KanbanColumn {

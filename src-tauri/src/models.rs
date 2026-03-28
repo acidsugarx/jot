@@ -167,6 +167,7 @@ pub struct UpdateTagInput {
 pub struct AppSettings {
     pub vault_dir: Option<String>,
     pub theme: String,
+    pub yougile_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

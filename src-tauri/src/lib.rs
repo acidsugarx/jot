@@ -17,7 +17,8 @@ use crate::db::{
     delete_checklist_item, delete_column, delete_tag, delete_task, get_checklists, get_columns,
     get_settings, get_subtasks, get_tags, get_task_tags, get_tasks, init_database,
     open_linked_note, reorder_columns, set_task_tags, update_checklist_item, update_column,
-    update_settings, update_tag, update_task, update_task_status, update_theme, DatabaseState,
+    update_settings, update_tag, update_task, update_task_status, update_theme,
+    update_yougile_enabled, DatabaseState,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -384,6 +385,7 @@ pub fn run() {
             delete_column,
             reorder_columns,
             update_theme,
+            update_yougile_enabled,
             get_checklists,
             create_checklist,
             add_checklist_item,

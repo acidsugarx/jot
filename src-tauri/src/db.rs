@@ -412,6 +412,21 @@ pub fn update_theme(db: State<'_, DatabaseState>, theme: String) -> Result<AppSe
     load_settings(&connection)
 }
 
+#[tauri::command]
+pub fn update_yougile_enabled(
+    db: State<'_, DatabaseState>,
+    enabled: bool,
+) -> Result<AppSettings, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    save_setting(&connection, "yougile_enabled", Some(if enabled { "true" } else { "false" }))?;
+
+    load_settings(&connection)
+}
+
 // ── Note commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1074,7 +1089,20 @@ fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
         .flatten()
         .unwrap_or_else(|| "dark".to_string());
 
-    Ok(AppSettings { vault_dir, theme })
+    let yougile_enabled: bool = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_enabled'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    Ok(AppSettings {
+        vault_dir,
+        theme,
+        yougile_enabled,
+    })
 }
 
 fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {
