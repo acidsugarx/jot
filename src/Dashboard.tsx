@@ -18,7 +18,9 @@ import {
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
+import { SourceSwitcher } from '@/components/SourceSwitcher';
 import { useTaskStore } from '@/store/use-task-store';
+import { useYougileStore } from '@/store/use-yougile-store';
 import { Task, TaskPriority } from '@/types';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
@@ -93,6 +95,18 @@ export default function Dashboard() {
     createTask,
     openLinkedNote,
   } = useTaskStore();
+
+  const yougileStore = useYougileStore();
+
+  // Fetch Yougile columns + tasks when board selection changes
+  useEffect(() => {
+    if (yougileStore.activeSource === 'yougile' && yougileStore.yougileContext.boardId) {
+      yougileStore.fetchColumns(yougileStore.yougileContext.boardId).then(() => {
+        void yougileStore.fetchTasks();
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yougileStore.activeSource, yougileStore.yougileContext.boardId]);
 
   // Cycle to next column's statusKey, wrapping around
   const getNextStatus = (currentStatus: string): string => {
@@ -366,6 +380,9 @@ export default function Dashboard() {
             );
           })}
         </div>
+
+        {/* Source switcher */}
+        <SourceSwitcher />
 
         {/* Search */}
         <div className="flex items-center gap-2">
