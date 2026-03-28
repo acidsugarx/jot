@@ -548,6 +548,17 @@ export default function Dashboard() {
 
           {activeTab === 'kanban' && (
             <div className="h-full w-full">
+              {isYougile && yougileStore.isLoading && yougileStore.tasks.length === 0 && (
+                <div className="flex gap-4 p-4">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex-1 space-y-2">
+                      <div className="h-8 bg-zinc-800 rounded animate-pulse" />
+                      <div className="h-20 bg-zinc-800 rounded animate-pulse" />
+                      <div className="h-20 bg-zinc-800 rounded animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              )}
               {isYougile ? (
                 <KanbanBoard
                   yougileColumns={yougileColumnsAsKanban}
@@ -632,6 +643,16 @@ export default function Dashboard() {
           <span>o note</span>
         </div>
       </div>
+
+      {/* Yougile error toast */}
+      {yougileStore.error && (
+        <div className="fixed bottom-4 right-4 bg-red-500/10 border border-red-500/30 text-red-400 text-xs px-3 py-2 rounded-lg shadow-lg z-50 max-w-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span>{yougileStore.error}</span>
+            <button onClick={() => yougileStore.clearError()} className="text-red-300 hover:text-red-200">x</button>
+          </div>
+        </div>
+      )}
 
       {/* Context Menu */}
       {contextMenu && contextTask && (

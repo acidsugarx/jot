@@ -138,8 +138,17 @@ export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoar
     );
   }
 
+  // Show a subtle loading indicator at the top of the board when Yougile tasks are being fetched
+  const showYougileLoadingBar = isYougile && yougileStore.isLoading;
+
   return (
-    <div className="flex h-full w-full overflow-x-auto overflow-y-hidden px-6 py-4">
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {showYougileLoadingBar && (
+        <div className="h-0.5 w-full bg-zinc-800 shrink-0">
+          <div className="h-full bg-cyan-500/40 animate-pulse" style={{ width: '60%' }} />
+        </div>
+      )}
+    <div className="flex flex-1 overflow-x-auto overflow-y-hidden px-6 py-4">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -224,6 +233,7 @@ export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoar
           )}
         </DragOverlay>
       </DndContext>
+    </div>
     </div>
   );
 }

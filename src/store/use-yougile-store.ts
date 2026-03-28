@@ -42,7 +42,13 @@ interface YougileState {
 
   // Loading & error state
   loading: boolean;
+  isLoading: boolean; // kept in sync with loading
   error: string | null;
+  clearError: () => void;
+
+  // Selection state (mirrors local task store for vim navigation)
+  selectedTaskId: string | null;
+  selectTask: (id: string | null) => void;
 
   // Auth actions
   fetchAccounts: () => Promise<void>;
@@ -91,7 +97,12 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   users: [],
 
   loading: false,
+  isLoading: false,
   error: null,
+  clearError: () => set({ error: null }),
+
+  selectedTaskId: null,
+  selectTask: (id) => set({ selectedTaskId: id }),
 
   // --- Auth ---
 
@@ -141,14 +152,14 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, error: null });
+    set({ loading: true, isLoading: true, error: null });
     try {
       const projects = await invoke<YougileProject[]>('yougile_get_projects', {
         accountId: yougileContext.accountId,
       });
-      set({ projects, loading: false });
+      set({ projects, loading: false, isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set({ error: String(e), loading: false, isLoading: false });
     }
   },
 
@@ -156,15 +167,15 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, error: null });
+    set({ loading: true, isLoading: true, error: null });
     try {
       const boards = await invoke<YougileBoard[]>('yougile_get_boards', {
         accountId: yougileContext.accountId,
         projectId,
       });
-      set({ boards: boards.filter((b) => !b.deleted), loading: false });
+      set({ boards: boards.filter((b) => !b.deleted), loading: false, isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set({ error: String(e), loading: false, isLoading: false });
     }
   },
 
@@ -172,15 +183,15 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, error: null });
+    set({ loading: true, isLoading: true, error: null });
     try {
       const columns = await invoke<YougileColumn[]>('yougile_get_columns', {
         accountId: yougileContext.accountId,
         boardId,
       });
-      set({ columns: columns.filter((c) => !c.deleted), loading: false });
+      set({ columns: columns.filter((c) => !c.deleted), loading: false, isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set({ error: String(e), loading: false, isLoading: false });
     }
   },
 
@@ -207,7 +218,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!yougileContext.accountId) return;
     if (columns.length === 0) return;
 
-    set({ loading: true, error: null });
+    set({ loading: true, isLoading: true, error: null });
     try {
       const allTasks: YougileTask[] = [];
       for (const col of columns) {
@@ -217,9 +228,9 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         });
         allTasks.push(...tasks);
       }
-      set({ tasks: allTasks.filter((t) => !t.deleted), loading: false });
+      set({ tasks: allTasks.filter((t) => !t.deleted), loading: false, isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set({ error: String(e), loading: false, isLoading: false });
     }
   },
 
