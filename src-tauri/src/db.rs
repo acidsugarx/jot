@@ -208,6 +208,20 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("Failed to create tags tables: {error}"))?;
 
+    // Migration: create yougile_accounts table
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS yougile_accounts (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                company_id TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .map_err(|e| e.to_string())?;
+
     seed_default_columns(connection)?;
 
     Ok(())
@@ -1481,6 +1495,96 @@ fn list_subtasks(connection: &Connection, parent_id: &str) -> Result<Vec<Task>, 
         .map_err(|error| format!("Failed to read subtasks: {error}"))
 }
 
+// ── Yougile account helpers ───────────────────────────────────────────────────
+
+pub fn get_yougile_accounts_impl(
+    db: &DatabaseState,
+) -> Result<Vec<crate::yougile::models::YougileAccount>, String> {
+    let conn = db.connection.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts ORDER BY created_at",
+        )
+        .map_err(|e| e.to_string())?;
+    let accounts = stmt
+        .query_map([], |row| {
+            Ok(crate::yougile::models::YougileAccount {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                company_id: row.get(2)?,
+                company_name: row.get(3)?,
+                api_key: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(accounts)
+}
+
+pub fn add_yougile_account_impl(
+    db: &DatabaseState,
+    email: &str,
+    company_id: &str,
+    company_name: &str,
+    api_key: &str,
+) -> Result<crate::yougile::models::YougileAccount, String> {
+    let conn = db.connection.lock().map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = timestamp();
+    conn.execute(
+        "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![id, email, company_id, company_name, api_key, created_at],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(crate::yougile::models::YougileAccount {
+        id,
+        email: email.to_string(),
+        company_id: company_id.to_string(),
+        company_name: company_name.to_string(),
+        api_key: api_key.to_string(),
+        created_at,
+    })
+}
+
+pub fn remove_yougile_account_impl(db: &DatabaseState, account_id: &str) -> Result<(), String> {
+    let conn = db.connection.lock().map_err(|e| e.to_string())?;
+    let rows = conn
+        .execute(
+            "DELETE FROM yougile_accounts WHERE id = ?1",
+            rusqlite::params![account_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if rows == 0 {
+        return Err("Account not found".to_string());
+    }
+    Ok(())
+}
+
+pub fn get_yougile_account_by_id_impl(
+    db: &DatabaseState,
+    account_id: &str,
+) -> Result<crate::yougile::models::YougileAccount, String> {
+    let conn = db.connection.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts WHERE id = ?1",
+        rusqlite::params![account_id],
+        |row| {
+            Ok(crate::yougile::models::YougileAccount {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                company_id: row.get(2)?,
+                company_name: row.get(3)?,
+                api_key: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
     let mut previous_was_dash = false;
@@ -2035,5 +2139,26 @@ mod tests {
 
         let subtasks = list_subtasks(&connection, "parent-sub").expect("should list subtasks");
         assert_eq!(subtasks.len(), 2);
+    }
+
+    #[test]
+    fn yougile_accounts_table_exists_after_migration() {
+        let connection = Connection::open_in_memory().expect("in-memory database should open");
+        run_migrations(&connection).expect("migrations should succeed");
+        connection
+            .execute(
+                "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+                 VALUES ('a1', 'test@test.com', 'c1', 'TestCo', 'key123', '2025-01-01')",
+                [],
+            )
+            .unwrap();
+        let name: String = connection
+            .query_row(
+                "SELECT company_name FROM yougile_accounts WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "TestCo");
     }
 }
