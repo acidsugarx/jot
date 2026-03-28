@@ -1,11 +1,19 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
-import { FileText } from 'lucide-react';
+import { YougileTask } from '@/types/yougile';
+import { FileText, Users } from 'lucide-react';
 import { useTaskStore } from '@/store/use-task-store';
 
+// Unified card item — either a local Task or a YougileTask
+export type CardTask = Task | YougileTask;
+
+function isYougileTask(task: CardTask): task is YougileTask {
+  return 'columnId' in task;
+}
+
 interface TaskCardProps {
-  task: Task;
+  task: CardTask;
   isOverlay?: boolean;
 }
 
@@ -39,6 +47,63 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
     );
   }
 
+  if (isYougileTask(task)) {
+    // Yougile task rendering
+    const deadlineTs = task.deadline?.deadline;
+    const deadlineStr = deadlineTs
+      ? new Date(deadlineTs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      : null;
+    const isDone = task.completed;
+    const colorStripe = task.color && task.color !== '' ? task.color : null;
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        onClick={() => selectTask(task.id)}
+        onDoubleClick={() => setIsEditorOpen(true)}
+        {...attributes}
+        {...listeners}
+        className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
+          isOverlay
+            ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'
+            : isSelected
+              ? 'border-l-2 border-l-cyan-500 bg-cyan-500/[0.03]'
+              : 'hover:bg-zinc-900/40'
+        }`}
+      >
+        {/* Color stripe */}
+        {colorStripe && !isSelected && (
+          <div
+            className="absolute left-0 top-0 bottom-0 w-0.5 rounded-l"
+            style={{ backgroundColor: colorStripe }}
+          />
+        )}
+
+        <div className="flex items-center gap-2">
+          <span className={`min-w-0 flex-1 truncate text-sm ${isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
+            {task.title}
+          </span>
+        </div>
+
+        {(deadlineStr || task.assigned.length > 0) && (
+          <div className="flex items-center gap-1.5">
+            {deadlineStr && (
+              <span className="font-mono text-[10px] text-zinc-700">{deadlineStr}</span>
+            )}
+            {task.assigned.length > 0 && (
+              <span className="flex items-center gap-0.5 font-mono text-[10px] text-zinc-700">
+                <Users className="h-2.5 w-2.5" />
+                {task.assigned.length}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Local task rendering (original)
   const hasMeta = task.priority !== 'none' || task.tags.length > 0 || task.dueDate;
 
   return (

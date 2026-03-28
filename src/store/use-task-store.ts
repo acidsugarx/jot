@@ -4,8 +4,11 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AppSettings,
+  Checklist,
+  ChecklistItem,
   CreateTaskInput,
   KanbanColumn,
+  Tag,
   Task,
   UpdateColumnInput,
   UpdateTaskInput,
@@ -54,6 +57,25 @@ interface TaskState {
   fetchSettings: () => Promise<void>;
   updateSettings: (vaultDir: string | null) => Promise<void>;
   updateTheme: (theme: string) => Promise<void>;
+
+  tags: Tag[];
+  // Checklist methods
+  getChecklists: (taskId: string) => Promise<Checklist[]>;
+  createChecklist: (taskId: string, title: string) => Promise<Checklist>;
+  addChecklistItem: (checklistId: string, text: string) => Promise<ChecklistItem>;
+  updateChecklistItem: (id: string, text?: string, completed?: boolean) => Promise<void>;
+  deleteChecklist: (id: string) => Promise<void>;
+  deleteChecklistItem: (id: string) => Promise<void>;
+  // Tag methods
+  fetchTags: () => Promise<void>;
+  createTag: (name: string, color?: string) => Promise<Tag>;
+  updateTag: (id: string, name?: string, color?: string) => Promise<void>;
+  deleteTag: (id: string) => Promise<void>;
+  getTaskTags: (taskId: string) => Promise<Tag[]>;
+  setTaskTags: (taskId: string, tagIds: string[]) => Promise<void>;
+  // Subtask methods
+  getSubtasks: (parentId: string) => Promise<Task[]>;
+
   selectTask: (id: string | null) => void;
   setIsEditorOpen: (isOpen: boolean) => void;
   setIsQuickAddOpen: (isOpen: boolean) => void;
@@ -70,6 +92,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   selectedTaskId: null,
   isEditorOpen: false,
   isQuickAddOpen: false,
+  tags: [],
 
   fetchTasks: async () => {
     if (!('__TAURI_INTERNALS__' in window)) return;
@@ -248,6 +271,146 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       void emit('theme-changed', settings.theme);
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to update theme' });
+    }
+  },
+
+  // ── Checklist actions ─────────────────────────────────────────────────────
+
+  getChecklists: async (taskId) => {
+    if (!('__TAURI_INTERNALS__' in window)) return [];
+    try {
+      return await invoke<Checklist[]>('get_checklists', { taskId });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to get checklists' });
+      throw error;
+    }
+  },
+
+  createChecklist: async (taskId, title) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      return await invoke<Checklist>('create_checklist', { taskId, title });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to create checklist' });
+      throw error;
+    }
+  },
+
+  addChecklistItem: async (checklistId, text) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      return await invoke<ChecklistItem>('add_checklist_item', { checklistId, text });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to add checklist item' });
+      throw error;
+    }
+  },
+
+  updateChecklistItem: async (id, text, completed) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('update_checklist_item', { id, text, completed });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to update checklist item' });
+      throw error;
+    }
+  },
+
+  deleteChecklist: async (id) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('delete_checklist', { id });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to delete checklist' });
+      throw error;
+    }
+  },
+
+  deleteChecklistItem: async (id) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('delete_checklist_item', { id });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to delete checklist item' });
+      throw error;
+    }
+  },
+
+  // ── Tag actions ───────────────────────────────────────────────────────────
+
+  fetchTags: async () => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    try {
+      const tags = await invoke<Tag[]>('get_tags');
+      set({ tags });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to fetch tags' });
+    }
+  },
+
+  createTag: async (name, color) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      const tag = await invoke<Tag>('create_tag', { name, color });
+      set((state) => ({ tags: [...state.tags, tag] }));
+      return tag;
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to create tag' });
+      throw error;
+    }
+  },
+
+  updateTag: async (id, name, color) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      const updated = await invoke<Tag>('update_tag', { id, name, color });
+      set((state) => ({ tags: state.tags.map((t) => (t.id === updated.id ? updated : t)) }));
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to update tag' });
+      throw error;
+    }
+  },
+
+  deleteTag: async (id) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('delete_tag', { id });
+      set((state) => ({ tags: state.tags.filter((t) => t.id !== id) }));
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to delete tag' });
+      throw error;
+    }
+  },
+
+  getTaskTags: async (taskId) => {
+    if (!('__TAURI_INTERNALS__' in window)) return [];
+    try {
+      return await invoke<Tag[]>('get_task_tags', { taskId });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to get task tags' });
+      throw error;
+    }
+  },
+
+  setTaskTags: async (taskId, tagIds) => {
+    if (!('__TAURI_INTERNALS__' in window)) throw new Error('Tauri not available');
+    try {
+      await invoke('set_task_tags', { taskId, tagIds });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to set task tags' });
+      throw error;
+    }
+  },
+
+  // ── Subtask actions ───────────────────────────────────────────────────────
+
+  getSubtasks: async (parentId) => {
+    if (!('__TAURI_INTERNALS__' in window)) return [];
+    try {
+      return await invoke<Task[]>('get_subtasks', { parentId });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to get subtasks' });
+      throw error;
     }
   },
 

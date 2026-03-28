@@ -13,6 +13,10 @@ export interface Task {
   linkedNotePath: string | null;
   createdAt: string;
   updatedAt: string;
+  parentId: string | null;
+  color: string | null;
+  timeEstimated: number | null;
+  timeSpent: number | null;
 }
 
 export interface CreateTaskInput {
@@ -23,6 +27,8 @@ export interface CreateTaskInput {
   tags?: string[] | null;
   dueDate?: string | null;
   linkedNotePath?: string | null;
+  parentId?: string | null;
+  color?: string | null;
 }
 
 export interface UpdateTaskStatusInput {
@@ -38,11 +44,15 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   tags?: string[];
   dueDate?: string | null;
+  color?: string | null;
+  timeEstimated?: number | null;
+  timeSpent?: number | null;
 }
 
 export interface AppSettings {
   vaultDir: string | null;
   theme: string;
+  yougileEnabled: boolean;
 }
 
 export interface KanbanColumn {
@@ -63,4 +73,26 @@ export interface UpdateColumnInput {
 
 export interface ReorderColumnsInput {
   ids: string[];
+}
+
+export interface Checklist {
+  id: string;
+  taskId: string;
+  title: string;
+  position: number;
+  items: ChecklistItem[];
+}
+
+export interface ChecklistItem {
+  id: string;
+  checklistId: string;
+  text: string;
+  completed: boolean;
+  position: number;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
 }

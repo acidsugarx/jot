@@ -18,8 +18,12 @@ import {
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
+import { SourceSwitcher } from '@/components/SourceSwitcher';
+import { YougileTaskEditor } from '@/components/YougileTaskEditor';
 import { useTaskStore } from '@/store/use-task-store';
-import { Task, TaskPriority } from '@/types';
+import { useYougileStore } from '@/store/use-yougile-store';
+import { Task, TaskPriority, KanbanColumn } from '@/types';
+import { CardTask } from '@/components/KanbanTaskCard';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
 
@@ -93,6 +97,46 @@ export default function Dashboard() {
     createTask,
     openLinkedNote,
   } = useTaskStore();
+
+  const yougileStore = useYougileStore();
+  const isYougile = yougileStore.activeSource === 'yougile';
+
+  // Map Yougile columns to the KanbanColumn shape used by KanbanBoard
+  const yougileColumnsAsKanban = useMemo((): KanbanColumn[] => {
+    if (!isYougile) return [];
+    return yougileStore.columns.map((col, idx) => ({
+      id: col.id,
+      name: col.title,
+      statusKey: col.id,
+      position: idx,
+    }));
+  }, [isYougile, yougileStore.columns]);
+
+  // Map Yougile tasks grouped by columnId for KanbanBoard
+  const yougileTasksByColumn = useMemo((): Map<string, CardTask[]> => {
+    if (!isYougile) return new Map();
+    const map = new Map<string, CardTask[]>();
+    for (const col of yougileStore.columns) {
+      map.set(col.id, []);
+    }
+    for (const task of yougileStore.tasks) {
+      if (!task.columnId) continue;
+      const existing = map.get(task.columnId);
+      if (existing) existing.push(task);
+      else map.set(task.columnId, [task]);
+    }
+    return map;
+  }, [isYougile, yougileStore.columns, yougileStore.tasks]);
+
+  // Fetch Yougile columns + tasks when board selection changes
+  useEffect(() => {
+    if (yougileStore.activeSource === 'yougile' && yougileStore.yougileContext.boardId) {
+      yougileStore.fetchColumns(yougileStore.yougileContext.boardId).then(() => {
+        void yougileStore.fetchTasks();
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yougileStore.activeSource, yougileStore.yougileContext.boardId]);
 
   // Cycle to next column's statusKey, wrapping around
   const getNextStatus = (currentStatus: string): string => {
@@ -367,6 +411,9 @@ export default function Dashboard() {
           })}
         </div>
 
+        {/* Source switcher */}
+        <SourceSwitcher />
+
         {/* Search */}
         <div className="flex items-center gap-2">
           <div className="flex h-7 items-center gap-1.5 rounded-md border border-zinc-800/60 bg-[#111111] px-2">
@@ -502,21 +549,58 @@ export default function Dashboard() {
 
           {activeTab === 'kanban' && (
             <div className="h-full w-full">
-              <KanbanBoard />
+              {isYougile && yougileStore.isLoading && yougileStore.tasks.length === 0 && (
+                <div className="flex gap-4 p-4">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex-1 space-y-2">
+                      <div className="h-8 bg-zinc-800 rounded animate-pulse" />
+                      <div className="h-20 bg-zinc-800 rounded animate-pulse" />
+                      <div className="h-20 bg-zinc-800 rounded animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {isYougile ? (
+                <KanbanBoard
+                  yougileColumns={yougileColumnsAsKanban}
+                  yougileTasksByColumn={yougileTasksByColumn}
+                />
+              ) : (
+                <KanbanBoard />
+              )}
             </div>
           )}
 
           {activeTab === 'calendar' && (
             <div className="h-full w-full">
-              <CalendarView tasks={tasks} />
+              {isYougile ? (
+                <CalendarView
+                  tasks={[]}
+                  yougileMode
+                  yougileTasksRaw={yougileStore.tasks}
+                />
+              ) : (
+                <CalendarView tasks={tasks} />
+              )}
             </div>
           )}
         </div>
 
-        {/* Editor pane */}
-        {selectedTaskId && isEditorOpen && selectedTask && (
+        {/* Editor pane — local tasks */}
+        {!isYougile && selectedTaskId && isEditorOpen && selectedTask && (
           <TaskEditorPane />
         )}
+
+        {/* Editor pane — Yougile tasks */}
+        {isYougile && yougileStore.selectedTaskId && (() => {
+          const task = yougileStore.tasks.find((t) => t.id === yougileStore.selectedTaskId);
+          return task ? (
+            <YougileTaskEditor
+              task={task}
+              onClose={() => yougileStore.selectTask(null)}
+            />
+          ) : null;
+        })()}
       </div>
 
       {/* Quick-add bar */}
@@ -571,6 +655,16 @@ export default function Dashboard() {
           <span>o note</span>
         </div>
       </div>
+
+      {/* Yougile error toast */}
+      {yougileStore.error && (
+        <div className="fixed bottom-4 right-4 bg-red-500/10 border border-red-500/30 text-red-400 text-xs px-3 py-2 rounded-lg shadow-lg z-50 max-w-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span>{yougileStore.error}</span>
+            <button onClick={() => yougileStore.clearError()} className="text-red-300 hover:text-red-200">x</button>
+          </div>
+        </div>
+      )}
 
       {/* Context Menu */}
       {contextMenu && contextTask && (

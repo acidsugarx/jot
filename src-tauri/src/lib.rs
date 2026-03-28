@@ -1,6 +1,7 @@
 mod db;
 mod models;
 mod parser;
+mod yougile;
 
 use tauri::{
     menu::MenuItem,
@@ -12,9 +13,12 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use crate::db::{
-    create_column, create_task, delete_column, delete_task, get_columns, get_settings, get_tasks,
-    init_database, open_linked_note, reorder_columns, update_column, update_settings, update_task,
-    update_task_status, update_theme, DatabaseState,
+    add_checklist_item, create_checklist, create_column, create_tag, create_task, delete_checklist,
+    delete_checklist_item, delete_column, delete_tag, delete_task, get_checklists, get_columns,
+    get_settings, get_subtasks, get_tags, get_task_tags, get_tasks, init_database,
+    open_linked_note, reorder_columns, set_task_tags, update_checklist_item, update_column,
+    update_settings, update_tag, update_task, update_task_status, update_theme,
+    update_yougile_enabled, DatabaseState,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -380,7 +384,34 @@ pub fn run() {
             update_column,
             delete_column,
             reorder_columns,
-            update_theme
+            update_theme,
+            update_yougile_enabled,
+            get_checklists,
+            create_checklist,
+            add_checklist_item,
+            update_checklist_item,
+            delete_checklist,
+            delete_checklist_item,
+            get_tags,
+            create_tag,
+            update_tag,
+            delete_tag,
+            get_task_tags,
+            set_task_tags,
+            get_subtasks,
+            yougile::commands::yougile_login,
+            yougile::commands::yougile_add_account,
+            yougile::commands::yougile_remove_account,
+            yougile::commands::yougile_get_accounts,
+            yougile::commands::yougile_get_projects,
+            yougile::commands::yougile_get_boards,
+            yougile::commands::yougile_get_columns,
+            yougile::commands::yougile_get_users,
+            yougile::commands::yougile_get_tasks,
+            yougile::commands::yougile_create_task,
+            yougile::commands::yougile_update_task,
+            yougile::commands::yougile_move_task,
+            yougile::commands::yougile_delete_task
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

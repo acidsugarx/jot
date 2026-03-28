@@ -13,12 +13,17 @@ import {
   LayoutDashboard,
   ChevronLeft,
   Calendar,
+  Globe,
+  HardDrive,
+  ChevronRight,
 } from 'lucide-react';
 import { Command } from 'cmdk';
 import { useTaskStore } from '@/store/use-task-store';
+import { useYougileStore } from '@/store/use-yougile-store';
 import type { Task, TaskPriority, TaskStatus } from '@/types';
 
 type CaptureMode = 'insert' | 'normal';
+type PickerMode = 'none' | 'org' | 'project' | 'board';
 
 /** Tokenize input string into colored segments for syntax highlighting */
 interface Token {
@@ -396,6 +401,7 @@ function App() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [mode, setMode] = useState<CaptureMode>('insert');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [pickerMode, setPickerMode] = useState<PickerMode>('none');
   const isDialogOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const suppressNextBlurHideRef = useRef(false);
@@ -412,6 +418,25 @@ function App() {
     clearError,
     listenForUpdates,
   } = useTaskStore();
+
+  const yougileStore = useYougileStore();
+  const {
+    yougileEnabled,
+    activeSource,
+    setActiveSource,
+    yougileContext,
+    accounts,
+    projects,
+    boards,
+    columns: yougileColumns,
+    fetchAccounts,
+    fetchProjects,
+    fetchBoards,
+    fetchColumns: fetchYougileColumns,
+    setYougileContext,
+  } = yougileStore;
+
+  const isYougile = yougileEnabled && activeSource === 'yougile';
 
   const hasQuery = query.trim().length > 0;
   const tokens = useMemo(() => tokenize(query), [query]);
@@ -526,16 +551,30 @@ function App() {
   const handleCreateTask = useCallback(async () => {
     if (!query.trim()) return;
     try {
-      const task = await createTask({ rawInput: query.trim() });
-      setQuery('');
-      setMode('insert');
-      setStatusMessage(`Created: ${task.title}`);
-      setTimeout(() => setStatusMessage(''), 2000);
-      requestAnimationFrame(() => inputRef.current?.focus());
+      if (isYougile && yougileContext.boardId) {
+        const firstColumn = yougileColumns[0];
+        if (firstColumn) {
+          const task = await yougileStore.createTask({ title: query.trim(), columnId: firstColumn.id });
+          if (task) {
+            setQuery('');
+            setMode('insert');
+            setStatusMessage(`Created in Yougile: ${task.title}`);
+            setTimeout(() => setStatusMessage(''), 2000);
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }
+        }
+      } else {
+        const task = await createTask({ rawInput: query.trim() });
+        setQuery('');
+        setMode('insert');
+        setStatusMessage(`Created: ${task.title}`);
+        setTimeout(() => setStatusMessage(''), 2000);
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
     } catch (err) {
       console.error(err);
     }
-  }, [query, createTask]);
+  }, [query, createTask, isYougile, yougileContext.boardId, yougileColumns, yougileStore]);
 
   const handleToggleStatus = useCallback(async (task: { id: string; status: TaskStatus }) => {
     const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done';
@@ -742,6 +781,13 @@ function App() {
                   }
                   if (e.key === 'Escape') {
                     e.preventDefault();
+                    // In picker mode, go back one level
+                    if (pickerMode !== 'none') {
+                      if (pickerMode === 'board') setPickerMode('project');
+                      else if (pickerMode === 'project') setPickerMode('org');
+                      else setPickerMode('none');
+                      return;
+                    }
                     if (mode === 'normal') {
                       void invoke('hide_window');
                       return;
@@ -784,6 +830,19 @@ function App() {
                 }`}
               />
             </div>
+            {yougileEnabled && (
+              <span
+                className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] cursor-pointer transition-colors ${
+                  isYougile
+                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                    : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
+                }`}
+                onClick={() => setPickerMode('org')}
+                title={isYougile ? (yougileContext.boardName ?? 'Yougile') : 'LOCAL'}
+              >
+                {isYougile ? (yougileContext.boardName ?? 'YOUGILE') : 'LOCAL'}
+              </span>
+            )}
             <kbd className="shrink-0 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
               Opt+Space
             </kbd>
@@ -809,7 +868,71 @@ function App() {
           style={{ maxHeight: MAX_VISIBLE_TASKS * ITEM_HEIGHT + GROUP_HEADER_HEIGHT * 2 + 2 * ACTION_ITEM_HEIGHT + 8 }}
         >
           <Command.List className="py-1">
-            {!hasQuery && tasks.length > 0 && (
+            {/* Picker Mode — replaces task list when active */}
+            {pickerMode !== 'none' && (
+              <Command.Group
+                heading={pickerMode === 'org' ? 'Select Account' : pickerMode === 'project' ? 'Select Project' : 'Select Board'}
+                className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
+              >
+                {pickerMode === 'org' && accounts.map((account) => (
+                  <Command.Item
+                    key={account.id}
+                    value={`org-${account.id}`}
+                    onSelect={() => {
+                      setYougileContext({ accountId: account.id });
+                      void fetchProjects();
+                      setPickerMode('project');
+                    }}
+                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Globe className="h-3.5 w-3.5 text-zinc-500" />
+                      <span className="text-zinc-200">{account.companyName}</span>
+                    </div>
+                    {yougileContext.accountId === account.id && <Check className="h-3 w-3 text-cyan-400" />}
+                  </Command.Item>
+                ))}
+                {pickerMode === 'project' && projects.map((project) => (
+                  <Command.Item
+                    key={project.id}
+                    value={`project-${project.id}`}
+                    onSelect={() => {
+                      setYougileContext({ projectId: project.id, projectName: project.title });
+                      void fetchBoards(project.id);
+                      setPickerMode('board');
+                    }}
+                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
+                      <span className="text-zinc-200">{project.title}</span>
+                    </div>
+                    {yougileContext.projectId === project.id && <Check className="h-3 w-3 text-cyan-400" />}
+                  </Command.Item>
+                ))}
+                {pickerMode === 'board' && boards.map((board) => (
+                  <Command.Item
+                    key={board.id}
+                    value={`board-${board.id}`}
+                    onSelect={() => {
+                      setYougileContext({ boardId: board.id, boardName: board.title });
+                      void fetchYougileColumns(board.id);
+                      setActiveSource('yougile');
+                      setPickerMode('none');
+                    }}
+                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
+                      <span className="text-zinc-200">{board.title}</span>
+                    </div>
+                    {yougileContext.boardId === board.id && <Check className="h-3 w-3 text-cyan-400" />}
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
+
+            {pickerMode === 'none' && !hasQuery && tasks.length > 0 && (
               <Command.Group
                 heading="Tasks"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
@@ -885,7 +1008,7 @@ function App() {
               </Command.Group>
             )}
 
-            {!hasQuery ? (
+            {pickerMode === 'none' && (!hasQuery ? (
               <Command.Group
                 heading="Actions"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
@@ -927,6 +1050,72 @@ function App() {
                   </div>
                   <kbd className="font-mono text-[10px] text-zinc-600">⌘,</kbd>
                 </Command.Item>
+
+                {yougileEnabled && (
+                  <>
+                    <Command.Item
+                      value="toggle-source"
+                      onSelect={() => {
+                        if (isYougile) {
+                          setActiveSource('local');
+                        } else {
+                          void fetchAccounts();
+                          setPickerMode('org');
+                        }
+                      }}
+                      className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
+                          {isYougile ? <HardDrive className="h-3.5 w-3.5 text-zinc-400" /> : <Globe className="h-3.5 w-3.5 text-zinc-400" />}
+                        </div>
+                        <span className="text-zinc-200">{isYougile ? 'Switch to Local' : 'Switch to Yougile'}</span>
+                      </div>
+                    </Command.Item>
+
+                    {isYougile && (
+                      <>
+                        <Command.Item
+                          value="switch-org"
+                          onSelect={() => {
+                            void fetchAccounts();
+                            setPickerMode('org');
+                          }}
+                          className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
+                              <Globe className="h-3.5 w-3.5 text-zinc-400" />
+                            </div>
+                            <span className="text-zinc-200">Switch Org…</span>
+                          </div>
+                        </Command.Item>
+
+                        <Command.Item
+                          value="switch-board"
+                          onSelect={() => {
+                            if (yougileContext.accountId) {
+                              void fetchProjects();
+                            } else {
+                              void fetchAccounts();
+                              setPickerMode('org');
+                              return;
+                            }
+                            setPickerMode('project');
+                          }}
+                          className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
+                              <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+                            </div>
+                            <span className="text-zinc-200">Switch Board…</span>
+                          </div>
+                        </Command.Item>
+                      </>
+                    )}
+                  </>
+                )}
               </Command.Group>
             ) : (
               <Command.Group
@@ -952,7 +1141,7 @@ function App() {
                   <kbd className="shrink-0 font-mono text-[10px] text-cyan-500/60">↵</kbd>
                 </Command.Item>
               </Command.Group>
-            )}
+            ))}
           </Command.List>
         </div>
 

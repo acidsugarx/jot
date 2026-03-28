@@ -1,26 +1,40 @@
 import { useEffect, useState, useRef } from 'react';
-import { FolderOpen, Keyboard, Database, Palette } from 'lucide-react';
+import { FolderOpen, Keyboard, Database, Palette, Users } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
+import { useYougileStore } from '@/store/use-yougile-store';
+import { AccountsSettings } from '@/components/AccountsSettings';
+import type { AppSettings } from '@/types';
 
-type Tab = 'general' | 'vault' | 'ui';
+type Tab = 'general' | 'vault' | 'ui' | 'accounts';
 
-const tabIds: Tab[] = ['general', 'vault', 'ui'];
+const baseTabIds: Tab[] = ['general', 'vault', 'ui'];
 
-const tabs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
+const tabDefs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
   { id: 'general', label: 'General', icon: Keyboard },
   { id: 'vault', label: 'Vault', icon: Database },
   { id: 'ui', label: 'Appearance', icon: Palette },
+  { id: 'accounts', label: 'Accounts', icon: Users },
 ];
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('general');
   const [vaultDirInput, setVaultDirInput] = useState('');
   const isDialogOpenRef = useRef(false);
+  const tabIdsRef = useRef<Tab[]>(baseTabIds);
 
   const { settings, fetchSettings, updateSettings, updateTheme } = useTaskStore();
+  const yougileStore = useYougileStore();
+
+  // Derive visible tabs based on yougileEnabled
+  const tabIds: Tab[] = yougileStore.yougileEnabled
+    ? [...baseTabIds, 'accounts']
+    : baseTabIds;
+  const tabs = tabDefs.filter((t) => tabIds.includes(t.id));
+  tabIdsRef.current = tabIds;
 
   useEffect(() => {
     void fetchSettings();
@@ -30,7 +44,11 @@ export default function Settings() {
     if (settings?.vaultDir) {
       setVaultDirInput(settings.vaultDir);
     }
-  }, [settings]);
+    // Sync yougileEnabled from backend settings into the store
+    if (settings != null) {
+      yougileStore.setYougileEnabled(settings.yougileEnabled);
+    }
+  }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveVaultPath = async (val: string) => {
     try {
@@ -63,16 +81,18 @@ export default function Settings() {
         case 'ArrowLeft':
           e.preventDefault();
           setActiveTab((current) => {
-            const idx = tabIds.indexOf(current);
-            return tabIds[Math.max(0, idx - 1)] ?? current;
+            const ids = tabIdsRef.current;
+            const idx = ids.indexOf(current);
+            return ids[Math.max(0, idx - 1)] ?? current;
           });
           break;
         case 'l':
         case 'ArrowRight':
           e.preventDefault();
           setActiveTab((current) => {
-            const idx = tabIds.indexOf(current);
-            return tabIds[Math.min(tabIds.length - 1, idx + 1)] ?? current;
+            const ids = tabIdsRef.current;
+            const idx = ids.indexOf(current);
+            return ids[Math.min(ids.length - 1, idx + 1)] ?? current;
           });
           break;
         case 'Escape':
@@ -185,6 +205,41 @@ export default function Settings() {
               <div className="border-t border-zinc-800/40 mt-4 pt-4">
                 <div className="mb-3">
                   <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                    Integrations
+                  </span>
+                </div>
+                <div className="flex items-center justify-between px-3 py-2">
+                  <div>
+                    <div className="text-sm text-zinc-200">Yougile Integration</div>
+                    <div className="text-xs text-zinc-500">Connect to Yougile for remote task management</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newValue = !yougileStore.yougileEnabled;
+                      yougileStore.setYougileEnabled(newValue);
+                      if ('__TAURI_INTERNALS__' in window) {
+                        void invoke<AppSettings>('update_yougile_enabled', { enabled: newValue });
+                      }
+                      // If disabling while on accounts tab, go back to general
+                      if (!newValue && (activeTab as Tab) === 'accounts') {
+                        setActiveTab('general');
+                      }
+                    }}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      yougileStore.yougileEnabled ? 'bg-cyan-500' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      yougileStore.yougileEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-t border-zinc-800/40 mt-4 pt-4">
+                <div className="mb-3">
+                  <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
                     Vim Bindings (Dashboard)
                   </span>
                 </div>
@@ -286,6 +341,17 @@ export default function Settings() {
               <p className="mt-3 px-3 font-mono text-[10px] text-zinc-700">
                 Theme applies to all windows instantly.
               </p>
+            </div>
+          )}
+
+          {activeTab === 'accounts' && (
+            <div>
+              <div className="mb-3">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Yougile Accounts
+                </span>
+              </div>
+              <AccountsSettings />
             </div>
           )}
         </div>
