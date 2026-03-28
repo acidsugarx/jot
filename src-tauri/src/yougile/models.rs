@@ -196,9 +196,15 @@ pub struct UpdateYougileTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub assigned: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<YougileDeadline>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_tracking: Option<YougileTimeTracking>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stickers: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checklists: Option<Vec<YougileChecklist>>,
 }
