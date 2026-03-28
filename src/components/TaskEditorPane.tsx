@@ -57,8 +57,8 @@ export function TaskEditorPane() {
       getChecklists(task.id),
       getSubtasks(task.id),
     ]);
-    setChecklists(cl);
-    setSubtasks(st);
+    setChecklists(cl ?? []);
+    setSubtasks(st ?? []);
   }, [task, getChecklists, getSubtasks]);
 
   useEffect(() => { void loadExtras(); }, [loadExtras]);

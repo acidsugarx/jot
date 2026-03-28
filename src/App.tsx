@@ -705,11 +705,13 @@ function App() {
         }
       } else {
         const task = await createTask({ rawInput: query.trim() });
-        setQuery('');
-        setMode('insert');
-        setStatusMessage(`Created: ${task.title}`);
-        setTimeout(() => setStatusMessage(''), 2000);
-        requestAnimationFrame(() => inputRef.current?.focus());
+        if (task) {
+          setQuery('');
+          setMode('insert');
+          setStatusMessage(`Created: ${task.title}`);
+          setTimeout(() => setStatusMessage(''), 2000);
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }
       }
     } catch (err) {
       console.error(err);

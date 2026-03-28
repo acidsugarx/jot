@@ -1,5 +1,4 @@
 import { useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 
@@ -377,7 +376,7 @@ export function useVimBindings(
         if (isYougile) {
           const colIds = yougileStore.columns.map((c) => c.id);
           if (colIndex >= colIds.length) return;
-          const targetTasks = activeTasks.filter((t) => t.columnId === colIds[colIndex]);
+          const targetTasks = yougileStore.tasks.filter((t) => t.columnId === colIds[colIndex]);
           if (targetTasks.length > 0) {
             selectTask(targetTasks[0]!.id);
             scrollSelectedIntoView();
@@ -386,7 +385,7 @@ export function useVimBindings(
           const { columns } = useTaskStore.getState();
           const colKeys = columns.map((c) => c.statusKey);
           if (colIndex >= colKeys.length) return;
-          const targetTasks = activeTasks.filter((t) => t.status === colKeys[colIndex]);
+          const targetTasks = tasks.filter((t) => t.status === colKeys[colIndex]);
           if (targetTasks.length > 0) {
             selectTask(targetTasks[0]!.id);
             scrollSelectedIntoView();
