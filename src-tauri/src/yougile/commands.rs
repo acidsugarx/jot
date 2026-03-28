@@ -1,7 +1,51 @@
 use super::auth;
 use super::models::*;
 use crate::db::DatabaseState;
+use crate::parser::parse_task_input;
+use chrono::DateTime;
 use tauri::State;
+
+fn apply_raw_input(payload: CreateYougileTask) -> CreateYougileTask {
+    let Some(raw_input) = payload.raw_input.as_deref() else {
+        return payload;
+    };
+
+    let parsed = parse_task_input(raw_input);
+    let deadline = payload.deadline.or_else(|| {
+        parsed
+            .due_date
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|date_time| YougileDeadline {
+                deadline: Some(date_time.timestamp_millis()),
+                start_date: None,
+                with_time: Some(false),
+                history: Vec::new(),
+                blocked_points: Vec::new(),
+                links: Vec::new(),
+                deleted: None,
+                empty: None,
+            })
+    });
+
+    CreateYougileTask {
+        title: if parsed.title.is_empty() {
+            payload.title
+        } else {
+            parsed.title
+        },
+        raw_input: None,
+        column_id: payload.column_id,
+        description: payload.description,
+        color: payload.color,
+        assigned: payload.assigned,
+        deadline,
+        time_tracking: payload.time_tracking,
+        checklists: payload.checklists,
+        stopwatch: payload.stopwatch,
+        timer: payload.timer,
+    }
+}
 
 // --- Auth Commands ---
 
@@ -77,6 +121,26 @@ pub async fn yougile_get_users(
     client.get_users(&project_id).await
 }
 
+#[tauri::command]
+pub async fn yougile_get_string_stickers(
+    account_id: String,
+    board_id: String,
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<YougileStringSticker>, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_string_stickers(&board_id).await
+}
+
+#[tauri::command]
+pub async fn yougile_get_sprint_stickers(
+    account_id: String,
+    board_id: String,
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<YougileSprintSticker>, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_sprint_stickers(&board_id).await
+}
+
 // --- Task Commands ---
 
 #[tauri::command]
@@ -90,12 +154,23 @@ pub async fn yougile_get_tasks(
 }
 
 #[tauri::command]
+pub async fn yougile_get_board_tasks(
+    account_id: String,
+    board_id: String,
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<YougileTask>, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_board_tasks(&board_id).await
+}
+
+#[tauri::command]
 pub async fn yougile_create_task(
     account_id: String,
     payload: CreateYougileTask,
     state: State<'_, DatabaseState>,
 ) -> Result<YougileTask, String> {
     let client = auth::client_for_account(&state, &account_id)?;
+    let payload = apply_raw_input(payload);
     client.create_task(&payload).await
 }
 

@@ -69,9 +69,17 @@ interface Props {
   tasks: Task[];
   yougileMode?: boolean;
   yougileTasksRaw?: YougileTask[];
+  onSelectTask?: (id: string) => void;
+  onOpenEditor?: () => void;
 }
 
-export function CalendarView({ tasks, yougileMode, yougileTasksRaw }: Props) {
+export function CalendarView({
+  tasks,
+  yougileMode,
+  yougileTasksRaw,
+  onSelectTask,
+  onOpenEditor,
+}: Props) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth()); // 0-indexed
@@ -125,8 +133,8 @@ export function CalendarView({ tasks, yougileMode, yougileTasksRaw }: Props) {
 
   const handleTaskClick = (e: React.MouseEvent, task: CalendarTask) => {
     e.stopPropagation();
-    selectTask(task.id);
-    setIsEditorOpen(true);
+    (onSelectTask ?? selectTask)(task.id);
+    (onOpenEditor ?? (() => setIsEditorOpen(true)))();
   };
 
   return (

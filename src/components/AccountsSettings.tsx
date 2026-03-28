@@ -1,10 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Plus, Trash2, Loader2 } from 'lucide-react';
 import { useYougileStore } from '@/store/use-yougile-store';
 import type { YougileCompany } from '@/types/yougile';
 
 export function AccountsSettings() {
-  const { accounts, login, addAccount, removeAccount } = useYougileStore();
+  const { accounts, login, addAccount, removeAccount, fetchAccounts } = useYougileStore();
   const [step, setStep] = useState<'list' | 'credentials' | 'company'>('list');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -12,11 +12,21 @@ export function AccountsSettings() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    void fetchAccounts();
+  }, [fetchAccounts]);
+
   const handleLogin = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const result = await login(email, password);
+      if (result.length === 0) {
+        // Check store for error message
+        const storeState = useYougileStore.getState();
+        setError(storeState.error || 'Invalid credentials or no organizations found');
+        return;
+      }
       setCompanies(result);
       setStep('company');
     } catch (e) {

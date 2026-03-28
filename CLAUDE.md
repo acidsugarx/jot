@@ -1,371 +1,188 @@
-# CLAUDE.md
+# Claude Code Configuration - RuFlo V3
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Behavioral Rules (Always Enforced)
 
-## Project Overview
+- Do what has been asked; nothing more, nothing less
+- NEVER create files unless they're absolutely necessary for achieving your goal
+- ALWAYS prefer editing an existing file to creating a new one
+- NEVER proactively create documentation files (*.md) or README files unless explicitly requested
+- NEVER save working files, text/mds, or tests to the root folder
+- Never continuously check status after spawning a swarm — wait for results
+- ALWAYS read a file before editing it
+- NEVER commit secrets, credentials, or .env files
 
-**Jot** is a keyboard-centric task manager and Zettelkasten bridge built with Tauri v2. It runs as a system tray daemon with multiple windows:
+## File Organization
 
-- **Quick Capture** (Opt+Space): cmdk-based command palette for rapid task entry
-- **Dashboard** (Cmd+Shift+Space): Multi-view workspace with List, Kanban, and Calendar tabs
-- **Settings** (Cmd+,): Configuration window for vault path and app settings
+- NEVER save to root folder — use the directories below
+- Use `/src` for source code files
+- Use `/tests` for test files
+- Use `/docs` for documentation and markdown files
+- Use `/config` for configuration files
+- Use `/scripts` for utility scripts
+- Use `/examples` for example code
 
-Tasks are stored in SQLite; notes are created as .md files in an external Obsidian vault.
+## Project Architecture
 
-## Development Commands
+- Follow Domain-Driven Design with bounded contexts
+- Keep files under 500 lines
+- Use typed interfaces for all public APIs
+- Prefer TDD London School (mock-first) for new code
+- Use event sourcing for state changes
+- Ensure input validation at system boundaries
+
+### Project Config
+
+- **Topology**: hierarchical-mesh
+- **Max Agents**: 15
+- **Memory**: hybrid
+- **HNSW**: Enabled
+- **Neural**: Enabled
+
+## Build & Test
 
 ```bash
-# Install dependencies
-npm install
+# Build
+npm run build
 
-# Development (runs both Vite dev server and Tauri)
-npm run tauri dev
+# Test
+npm test
 
-# Type checking
-npm run typecheck
-
-# Linting
+# Lint
 npm run lint
-
-# Building
-npm run build          # Frontend only
-npm run tauri build    # Full desktop app
-
-# Running tests
-npm test               # Vitest (watch mode)
-npm test -- --run      # Vitest (single run, CI)
-npm test -- <pattern>  # Run tests matching pattern
-npm test -- -t "name"  # Run tests matching name
-
-# Rust commands (run from src-tauri/)
-cargo test                              # All Rust tests
-cargo test test_name                    # Single test
-cargo test parser::                     # Module filter
-cargo fmt --check                       # Format check
-cargo clippy --all-targets --all-features -- -D warnings  # Lint
 ```
 
-### Full Validation Sequence
+- ALWAYS run tests after making code changes
+- ALWAYS verify build succeeds before committing
+
+## Security Rules
+
+- NEVER hardcode API keys, secrets, or credentials in source files
+- NEVER commit .env files or any file containing secrets
+- Always validate user input at system boundaries
+- Always sanitize file paths to prevent directory traversal
+- Run `npx @claude-flow/cli@latest security scan` after security-related changes
+
+## Concurrency: 1 MESSAGE = ALL RELATED OPERATIONS
+
+- All operations MUST be concurrent/parallel in a single message
+- Use Claude Code's Task tool for spawning agents, not just MCP
+- ALWAYS batch ALL todos in ONE TodoWrite call (5-10+ minimum)
+- ALWAYS spawn ALL agents in ONE message with full instructions via Task tool
+- ALWAYS batch ALL file reads/writes/edits in ONE message
+- ALWAYS batch ALL Bash commands in ONE message
+
+## Swarm Orchestration
+
+- MUST initialize the swarm using CLI tools when starting complex tasks
+- MUST spawn concurrent agents using Claude Code's Task tool
+- Never use CLI tools alone for execution — Task tool agents do the actual work
+- MUST call CLI tools AND Task tool in ONE message for complex work
+
+### 3-Tier Model Routing (ADR-026)
+
+| Tier | Handler | Latency | Cost | Use Cases |
+|------|---------|---------|------|-----------|
+| **1** | Agent Booster (WASM) | <1ms | $0 | Simple transforms (var→const, add types) — Skip LLM |
+| **2** | Haiku | ~500ms | $0.0002 | Simple tasks, low complexity (<30%) |
+| **3** | Sonnet/Opus | 2-5s | $0.003-0.015 | Complex reasoning, architecture, security (>30%) |
+
+- Always check for `[AGENT_BOOSTER_AVAILABLE]` or `[TASK_MODEL_RECOMMENDATION]` before spawning agents
+- Use Edit tool directly when `[AGENT_BOOSTER_AVAILABLE]`
+
+## Swarm Configuration & Anti-Drift
+
+- ALWAYS use hierarchical topology for coding swarms
+- Keep maxAgents at 6-8 for tight coordination
+- Use specialized strategy for clear role boundaries
+- Use `raft` consensus for hive-mind (leader maintains authoritative state)
+- Run frequent checkpoints via `post-task` hooks
+- Keep shared memory namespace for all agents
 
 ```bash
-cd src-tauri && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test && cd ..
-npm run lint && npm run typecheck && npm test -- --run && npm run build
+npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
 ```
 
-## Architecture
+## Swarm Execution Rules
 
-### Backend (Rust + Tauri v2)
+- ALWAYS use `run_in_background: true` for all agent Task calls
+- ALWAYS put ALL agent Task calls in ONE message for parallel execution
+- After spawning, STOP — do NOT add more tool calls or check status
+- Never poll TaskOutput or check swarm status — trust agents to return
+- When agent results arrive, review ALL results before proceeding
 
-Located in `src-tauri/src/`:
+## V3 CLI Commands
 
-| Module | Purpose |
-|--------|---------|
-| `lib.rs` | Tauri setup, system tray, global shortcuts, multi-window management, IPC handlers |
-| `db.rs` | SQLite CRUD operations, database migrations, zettel note creation |
-| `models.rs` | Type definitions (Task, TaskStatus, TaskPriority, AppSettings) |
-| `parser.rs` | NLP parser for raw input (extracts #tags, !priority, dates, @zettel) |
-| `yougile/client.rs` | HTTP client (reqwest), all Yougile API calls with pagination |
-| `yougile/models.rs` | Yougile API DTOs |
-| `yougile/auth.rs` | Login flow, API key management |
-| `yougile/commands.rs` | Tauri IPC command handlers for Yougile operations |
+### Core Commands
 
-### Frontend (React + TypeScript)
+| Command | Subcommands | Description |
+|---------|-------------|-------------|
+| `init` | 4 | Project initialization |
+| `agent` | 8 | Agent lifecycle management |
+| `swarm` | 6 | Multi-agent swarm coordination |
+| `memory` | 11 | AgentDB memory with HNSW search |
+| `task` | 6 | Task creation and lifecycle |
+| `session` | 7 | Session state management |
+| `hooks` | 17 | Self-learning hooks + 12 workers |
+| `hive-mind` | 6 | Byzantine fault-tolerant consensus |
 
-Located in `src/`. Uses `@` path alias mapped to `src/` (configured in `vite.config.ts` and `tsconfig.app.json`).
+### Quick CLI Examples
 
-| Module | Purpose |
-|--------|---------|
-| `App.tsx` | Quick capture window - cmdk-based command palette |
-| `Dashboard.tsx` | Multi-view workspace with List/Kanban/Calendar tabs |
-| `Settings.tsx` | Settings window for vault configuration |
-| `store/use-task-store.ts` | Zustand store for state management and IPC calls |
-| `hooks/use-vim-bindings.ts` | Vim-style keyboard navigation (j/k/h/l, e/x/s/a/d/o) |
-| `components/KanbanBoard.tsx` | Drag-and-drop kanban using @dnd-kit |
-| `components/CalendarView.tsx` | Month-view calendar with task dots and day detail |
-| `components/TaskEditorPane.tsx` | Slide-in panel for inline editing (title, description, status, priority, due date, tags) |
-| `types.ts` | TypeScript interfaces matching Rust backend |
-| `types/yougile.ts` | TypeScript interfaces for Yougile entities |
-| `store/use-yougile-store.ts` | Zustand store for Yougile state, navigation, CRUD |
-| `components/SourceSwitcher.tsx` | Local/Yougile toggle + org/project/board breadcrumb |
-| `components/YougileTaskEditor.tsx` | Task editor for Yougile-specific fields |
-| `components/ChecklistEditor.tsx` | Checklist UI (shared by local + Yougile) |
-| `components/SubtaskList.tsx` | Subtask list UI (shared by local + Yougile) |
-| `components/AccountsSettings.tsx` | Yougile accounts management tab in Settings |
-| `components/ui/` | shadcn/ui components (Badge, Button, ScrollArea, Tabs) |
-
-## Key Patterns
-
-### Multi-Window Architecture
-
-All windows share a single `index.html` entry point. Routing happens in `main.tsx` by reading `getCurrentWindow().label`:
-
-- `"main"` → renders `<App />` (Quick Capture)
-- `"dashboard"` → renders `<Dashboard />`
-- `"settings"` → renders `<Settings />`
-
-New windows are created from Rust via `WebviewWindowBuilder` in `lib.rs` (see `open_dashboard_window()`, `open_settings_window()`). Each gets the same `index.html` URL but a different label, which the frontend uses to pick the right component.
-
-**Window properties:**
-- **Quick Capture** (`main`): Defined in `tauri.conf.json`. Transparent, no decorations, hidden by default. On macOS, converted to an **NSPanel** via `tauri-nspanel` at startup so it can overlay fullscreen apps (like Raycast/Spotlight). Uses `NonactivatingPanel` style mask, `CanJoinAllSpaces | FullScreenAuxiliary` collection behavior, and `PopUpMenu` window level (101). Auto-hides on blur. Close is intercepted to hide instead.
-- **Dashboard** (`dashboard`): Created dynamically. 1000x700, resizable, macOS overlay title bar. Single instance (reuses if open). Normal window (not NSPanel).
-- **Settings** (`settings`): Created dynamically. 850x600, non-resizable, macOS overlay title bar. Single instance. Normal window (not NSPanel).
-
-### Keyboard Navigation
-
-All windows are fully navigable without a mouse. Browser-style Tab element cycling is suppressed globally.
-
-#### Quick Capture — Insert/Normal Mode
-
-The capture bar has two modes (state: `mode` in `App.tsx`):
-
-- **Insert mode** (default): Input is focused, typing creates tasks. Esc with text clears the query; Esc with empty input enters normal mode.
-- **Normal mode**: Input is blurred, `j/k` navigate the task list and actions. `i` or `/` returns to insert mode. Second Esc hides the window.
-
-| Key (Insert) | Action |
-|-----|--------|
-| `Enter` | Create task from query |
-| `Esc` | Clear query, or enter normal mode if empty |
-| `⌘,` | Open settings |
-
-| Key (Normal) | Action |
-|-----|--------|
-| `j` / `k` | Navigate down/up |
-| `g` / `G` | Jump to first/last |
-| `Enter` / `e` | Select item (edit task, open dashboard/settings) |
-| `x` | Toggle task status (todo ↔ done) |
-| `d` | Delete selected task |
-| `o` | Open linked note |
-| `i` | Return to insert mode |
-| `/` | Return to insert mode (clears query) |
-| `Esc` | Hide window |
-
-#### Inline Task Editor (Quick Capture)
-
-- `Tab` / `Shift+Tab` cycles between fields (title → description → status → priority → due date → tags)
-- `Esc` in a field blurs it; `Esc` when no field focused closes the editor
-
-#### Dashboard
-
-Uses `useVimBindings()` hook:
-
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Navigate down/up in list or within column |
-| `h` / `l` | Navigate left/right between kanban columns |
-| `Enter` / `e` | Open task editor pane |
-| `x` | Toggle task status (todo ↔ done) |
-| `s` | Cycle status through columns |
-| `a` | Archive / unarchive task |
-| `d` | Delete selected task |
-| `o` | Open linked note (if exists) |
-| `/` | Focus search input |
-| `Escape` | Close editor or deselect task |
-
-#### Settings
-
-| Key | Action |
-|-----|--------|
-| `h` / `l` (or arrows) | Switch between tabs |
-| `Esc` | Close settings window (blurs field first if focused) |
-
-Bindings are ignored when typing in input fields.
-
-### NLP Input Parsing
-
-Tasks are created from natural language input. Format:
-```
-[Task Title] #[tag] ![priority] [date/time] [@zettel]
+```bash
+npx @claude-flow/cli@latest init --wizard
+npx @claude-flow/cli@latest agent spawn -t coder --name my-coder
+npx @claude-flow/cli@latest swarm init --v3-mode
+npx @claude-flow/cli@latest memory search --query "authentication patterns"
+npx @claude-flow/cli@latest doctor --fix
 ```
 
-Examples:
-- `Write docs #work !high` → task with tag "work", high priority
-- `Meeting tomorrow at 2pm #sales` → task with due date
-- `Review PR friday` → due next Friday
-- `Deploy next monday` → due next Monday
-- `Ship feature in 3 days !high` → due in 3 days
-- `Conference Mar 25 #speaking` → due March 25
-- `Plan next week` → due in 1 week
-- `Research topic @zettel` → creates linked .md file in vault
+## Available Agents (60+ Types)
 
-Parsed by `parser.rs::parse_task_input()`.
+### Core Development
+`coder`, `reviewer`, `tester`, `planner`, `researcher`
 
-### IPC Communication
+### Specialized
+`security-architect`, `security-auditor`, `memory-specialist`, `performance-engineer`
 
-Frontend calls Rust via Tauri's `invoke()`. All store actions guard with `__TAURI_INTERNALS__` check first:
+### Swarm Coordination
+`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`
 
-```typescript
-if (!('__TAURI_INTERNALS__' in window)) { return; }
-const tasks = await invoke<Task[]>('get_tasks');
+### GitHub & Repository
+`pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`
+
+### SPARC Methodology
+`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`
+
+## Memory Commands Reference
+
+```bash
+# Store (REQUIRED: --key, --value; OPTIONAL: --namespace, --ttl, --tags)
+npx @claude-flow/cli@latest memory store --key "pattern-auth" --value "JWT with refresh" --namespace patterns
+
+# Search (REQUIRED: --query; OPTIONAL: --namespace, --limit, --threshold)
+npx @claude-flow/cli@latest memory search --query "authentication patterns"
+
+# List (OPTIONAL: --namespace, --limit)
+npx @claude-flow/cli@latest memory list --namespace patterns --limit 10
+
+# Retrieve (REQUIRED: --key; OPTIONAL: --namespace)
+npx @claude-flow/cli@latest memory retrieve --key "pattern-auth" --namespace patterns
 ```
 
-Available commands: `create_task`, `get_tasks`, `update_task` (partial patch), `update_task_status`, `delete_task`, `open_linked_note`, `get_settings`, `update_settings`, `update_theme`, `show_window`, `hide_window`, `open_dashboard_window`, `open_settings_window`, `get_columns`, `create_column`, `update_column`, `delete_column`, `reorder_columns`.
+## Quick Setup
 
-### UI Layout Pattern
-
-The capture window uses a strict flex layout to prevent overflow issues:
-
-```tsx
-<Command className="flex flex-col overflow-hidden">
-  {/* Fixed: flex-shrink-0 */}
-  <div className="flex-shrink-0">Input Area</div>
-  <div className="flex-shrink-0">Settings (when open)</div>
-
-  {/* Scrollable: min-h-0 flex-1 overflow-y-auto */}
-  <div className="min-h-0 flex-1 overflow-y-auto">
-    <Command.List>Tasks & Commands</Command.List>
-  </div>
-
-  {/* Fixed: flex-shrink-0 */}
-  <div className="flex-shrink-0">Footer</div>
-</Command>
+```bash
+claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
+npx @claude-flow/cli@latest daemon start
+npx @claude-flow/cli@latest doctor --fix
 ```
 
-### Styling: Dark/Light Theme
+## Claude Code vs CLI Tools
 
-The app supports dark (default) and light themes. Theme preference is stored in the `settings` table (`key = 'theme'`).
+- Claude Code's Task tool handles ALL execution: agents, file ops, code generation, git
+- CLI tools handle coordination via Bash: swarm init, memory, hooks, routing
+- NEVER use CLI tools as a substitute for Task tool agents
 
-**Dark mode (default):**
-- Background: `bg-[#111111]` (dashboard), `bg-zinc-950` (capture window)
-- Borders: `border-zinc-800` (subtle)
-- Text: `text-zinc-200` (primary), `text-zinc-400` (muted)
-- Accent: `text-cyan-400` / `bg-cyan-500/10` for interactive elements
+## Support
 
-**Light mode:**
-- Implemented via CSS-only overrides in `styles.css` scoped to `[data-theme="light"]`
-- Overrides Tailwind utility classes and hex background colors
-- No component code changes needed for theme — all in `styles.css`
-- Theme is applied by setting `data-theme` attribute on `<html>` element
-
-**Common rules:**
-- Selection: `selection:bg-cyan-500/30`
-- Font: Sans-serif for UI, monospace (font-mono) for metadata/tags
-- Rounded: `rounded-lg` for containers, minimal radius for badges
-- No shadows, minimal borders, high information density
-- Dashboard uses `backdrop-blur-md` on header; **do not use `backdrop-blur` on the capture window** — it causes black-square rendering on the transparent main window
-
-### Markdown Description Preview
-
-The task editor pane has a preview toggle for the description field. The renderer (`renderMarkdown()` in `TaskEditorPane.tsx`) supports:
-- **bold**, *italic*, `inline code`
-- [links](url)
-- `- ` list items
-- `# ` / `## ` / `### ` headers
-- ` ``` ` code blocks
-- `> ` blockquotes
-
-Styled with `.prose-jot` classes in `styles.css`. Light theme variants included.
-
-### Kanban Board
-
-Located in `components/KanbanBoard.tsx`:
-- Dynamic columns from `kanban_columns` table (default: todo, in_progress, done)
-- Uses @dnd-kit for drag-and-drop (sortable columns, draggable tasks)
-- `activationConstraint: { distance: 5 }` prevents accidental drags
-- Drag overlay shows task being moved
-- Dropping task into new column calls `updateTaskStatus()` IPC
-
-### Zettel Note Creation
-
-When `@zettel` is in input:
-1. Rust resolves vault path from settings or `JOT_VAULT_DIR` env var
-2. Creates file: `YYYYMMDDHHMM-slugified-title.md`
-3. Writes YAML frontmatter + H1 title
-4. Returns absolute path, stored in `task.linked_note_path`
-5. Clicking "Note" button opens via OS default (Obsidian, Neovim, etc.)
-
-### Yougile Integration
-
-Jot supports Yougile as a live remote data source. When enabled (Settings > General > Yougile Integration), users can switch between local SQLite tasks and Yougile tasks.
-
-**Architecture:**
-- All Yougile HTTP calls live in `src-tauri/src/yougile/` (Rust)
-- Frontend uses a separate Zustand store (`use-yougile-store.ts`)
-- Separate `yougile_*` IPC commands — not shared with local commands
-
-**Data flow:** Always-live — no local cache. Every view mount fetches from the API. Optimistic UI for mutations with revert on failure.
-
-**Auth:** JWT API keys minted via email/password, stored in `yougile_accounts` SQLite table. Keys don't expire.
-
-**Kill switch:** `settings.yougile_enabled` — off by default. Hides all Yougile UI when disabled.
-
-**IPC commands:**
-- Yougile: `yougile_login`, `yougile_add_account`, `yougile_remove_account`, `yougile_get_accounts`, `yougile_get_projects`, `yougile_get_boards`, `yougile_get_columns`, `yougile_get_users`, `yougile_get_tasks`, `yougile_create_task`, `yougile_update_task`, `yougile_move_task`, `yougile_delete_task`
-- Local enhancements: `get_checklists`, `create_checklist`, `add_checklist_item`, `update_checklist_item`, `delete_checklist`, `delete_checklist_item`, `get_tags`, `create_tag`, `update_tag`, `delete_tag`, `get_task_tags`, `set_task_tags`, `get_subtasks`
-
-## Database Schema
-
-SQLite located at OS AppData directory (`jot.db`):
-
-Task `status` is a free-form string matching a `kanban_columns.status_key`, or the reserved value `"archived"`. `TaskStatus` is `string` in TypeScript; the `TaskStatus` Rust enum has been removed.
-
-```sql
-CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT,
-    status TEXT NOT NULL DEFAULT 'todo',
-    priority TEXT NOT NULL DEFAULT 'none',
-    tags TEXT NOT NULL DEFAULT '[]',
-    due_date TEXT,
-    linked_note_path TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
--- Known keys: 'vault_dir' (string path), 'theme' ('dark' | 'light')
-
-CREATE TABLE kanban_columns (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    status_key TEXT NOT NULL UNIQUE,
-    position INTEGER NOT NULL DEFAULT 0
-);
--- Seeded with defaults: (To Do/todo), (In Progress/in_progress), (Done/done)
-
-CREATE TABLE checklists (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE checklist_items (
-    id TEXT PRIMARY KEY,
-    checklist_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    completed INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE tags (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    color TEXT NOT NULL DEFAULT '#6b7280'
-);
-
-CREATE TABLE task_tags (
-    task_id TEXT NOT NULL,
-    tag_id TEXT NOT NULL,
-    PRIMARY KEY (task_id, tag_id)
-);
-
-CREATE TABLE yougile_accounts (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    company_id TEXT NOT NULL,
-    company_name TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-```
-
-## Common Issues
-
-- **Input appears as black square**: Remove `backdrop-blur`, ensure `bg-transparent` on Command.Input (capture window only — main window has `transparent: true` in tauri.conf.json)
-- **Settings overlapping tasks**: Ensure fixed areas have `flex-shrink-0`, scrollable has `min-h-0 flex-1 overflow-y-auto`
-- **Window not showing**: Check window is created with correct label; main window starts hidden by design
-- **Tauri commands not available**: Always check `__TAURI_INTERNALS__ in window` before invoking
+- Documentation: https://github.com/ruvnet/claude-flow
+- Issues: https://github.com/ruvnet/claude-flow/issues

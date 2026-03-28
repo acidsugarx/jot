@@ -17,8 +17,10 @@ export interface YougileAccount {
 export interface YougileProject {
   id: string;
   title: string;
+  deleted?: boolean;
+  timestamp?: number;
   color?: string;
-  users?: string[];
+  users?: Record<string, string>;
 }
 
 export interface YougileBoard {
@@ -32,15 +34,47 @@ export interface YougileColumn {
   id: string;
   title: string;
   boardId?: string;
-  color?: string;
+  color?: number;
   deleted: boolean;
 }
 
 export interface YougileUser {
   id: string;
   email?: string;
-  name?: string;
-  avatar?: string;
+  realName?: string;
+  isAdmin?: boolean;
+  status?: string;
+  lastActivity?: number;
+}
+
+export interface YougileStringStickerState {
+  id: string;
+  name: string;
+  color?: string;
+  deleted?: boolean;
+}
+
+export interface YougileStringSticker {
+  id: string;
+  name: string;
+  icon?: string;
+  deleted?: boolean;
+  states: YougileStringStickerState[];
+}
+
+export interface YougileSprintStickerState {
+  id: string;
+  name: string;
+  begin?: number;
+  end?: number;
+  deleted?: boolean;
+}
+
+export interface YougileSprintSticker {
+  id: string;
+  name: string;
+  deleted?: boolean;
+  states: YougileSprintStickerState[];
 }
 
 export interface YougileChecklistItem {
@@ -51,19 +85,39 @@ export interface YougileChecklistItem {
 
 export interface YougileChecklist {
   id?: string;
-  title?: string;
+  title: string;
   items: YougileChecklistItem[];
 }
 
 export interface YougileDeadline {
   deadline?: number;
   startDate?: number;
-  withTime: boolean;
+  withTime?: boolean;
+  history: string[];
+  blockedPoints: string[];
+  links: string[];
+  deleted?: boolean;
+  empty?: boolean;
 }
 
 export interface YougileTimeTracking {
   plan?: number;
   work?: number;
+  deleted?: boolean;
+}
+
+export interface YougileStopwatch {
+  running: boolean;
+  seconds: number;
+  atMoment?: number;
+  deleted?: boolean;
+}
+
+export interface YougileTimer {
+  running: boolean;
+  seconds: number;
+  since?: number;
+  deleted?: boolean;
 }
 
 export interface YougileTask {
@@ -78,21 +132,27 @@ export interface YougileTask {
   assigned: string[];
   subtasks: string[];
   checklists?: YougileChecklist[];
-  stickers?: Record<string, string>;
+  stickers?: Record<string, unknown>;
   deadline?: YougileDeadline;
   timeTracking?: YougileTimeTracking;
+  stopwatch?: YougileStopwatch;
+  timer?: YougileTimer;
   createdBy?: string;
   timestamp?: number;
 }
 
 export interface CreateYougileTask {
   title: string;
+  rawInput?: string;
   columnId: string;
   description?: string;
   color?: string;
   assigned?: string[];
   deadline?: YougileDeadline;
+  timeTracking?: YougileTimeTracking;
   checklists?: YougileChecklist[];
+  stopwatch?: YougileStopwatch;
+  timer?: YougileTimer;
 }
 
 export interface UpdateYougileTask {
@@ -104,10 +164,13 @@ export interface UpdateYougileTask {
   archived?: boolean;
   deleted?: boolean;
   assigned?: string[];
+  subtasks?: string[];
   deadline?: YougileDeadline;
   timeTracking?: YougileTimeTracking;
-  stickers?: Record<string, string>;
+  stickers?: Record<string, unknown>;
   checklists?: YougileChecklist[];
+  stopwatch?: YougileStopwatch;
+  timer?: YougileTimer;
 }
 
 export interface YougileContext {
@@ -116,4 +179,8 @@ export interface YougileContext {
   projectName: string | null;
   boardId: string | null;
   boardName: string | null;
+}
+
+export interface YougileSyncState extends YougileContext {
+  activeSource: 'local' | 'yougile';
 }

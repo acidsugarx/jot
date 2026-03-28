@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::models::{
     AppSettings, Checklist, ChecklistItem, CreateColumnInput, CreateTaskInput, KanbanColumn,
     ReorderColumnsInput, Tag, Task, TaskPriority, UpdateColumnInput, UpdateSettingsInput,
-    UpdateTaskInput, UpdateTaskStatusInput,
+    UpdateTaskInput, UpdateTaskStatusInput, YougileSyncState,
 };
 use crate::parser::parse_task_input;
 
@@ -428,7 +428,45 @@ pub fn update_yougile_enabled(
         Some(if enabled { "true" } else { "false" }),
     )?;
 
+    if !enabled {
+        save_yougile_sync_state(
+            &connection,
+            &YougileSyncState {
+                active_source: "local".to_string(),
+                account_id: None,
+                project_id: None,
+                project_name: None,
+                board_id: None,
+                board_name: None,
+            },
+        )?;
+    }
+
     load_settings(&connection)
+}
+
+#[tauri::command]
+pub fn get_yougile_sync_state(db: State<'_, DatabaseState>) -> Result<YougileSyncState, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    load_yougile_sync_state(&connection)
+}
+
+#[tauri::command]
+pub fn update_yougile_sync_state(
+    db: State<'_, DatabaseState>,
+    state: YougileSyncState,
+) -> Result<YougileSyncState, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    save_yougile_sync_state(&connection, &state)?;
+    load_yougile_sync_state(&connection)
 }
 
 // ── Note commands ────────────────────────────────────────────────────────────
@@ -1109,6 +1147,111 @@ fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
     })
 }
 
+fn load_yougile_sync_state(connection: &Connection) -> Result<YougileSyncState, String> {
+    let active_source = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_active_source'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile source setting: {error}"))?
+        .flatten()
+        .unwrap_or_else(|| "local".to_string());
+
+    let account_id = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_account_id'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile account setting: {error}"))?
+        .flatten();
+
+    let project_id = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_project_id'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile project id setting: {error}"))?
+        .flatten();
+
+    let project_name = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_project_name'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile project name setting: {error}"))?
+        .flatten();
+
+    let board_id = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_board_id'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile board id setting: {error}"))?
+        .flatten();
+
+    let board_name = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'yougile_board_name'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to load Yougile board name setting: {error}"))?
+        .flatten();
+
+    Ok(YougileSyncState {
+        active_source,
+        account_id,
+        project_id,
+        project_name,
+        board_id,
+        board_name,
+    })
+}
+
+fn save_yougile_sync_state(
+    connection: &Connection,
+    state: &YougileSyncState,
+) -> Result<(), String> {
+    save_setting(
+        connection,
+        "yougile_active_source",
+        Some(&state.active_source),
+    )?;
+    save_setting(
+        connection,
+        "yougile_account_id",
+        state.account_id.as_deref(),
+    )?;
+    save_setting(
+        connection,
+        "yougile_project_id",
+        state.project_id.as_deref(),
+    )?;
+    save_setting(
+        connection,
+        "yougile_project_name",
+        state.project_name.as_deref(),
+    )?;
+    save_setting(connection, "yougile_board_id", state.board_id.as_deref())?;
+    save_setting(
+        connection,
+        "yougile_board_name",
+        state.board_name.as_deref(),
+    )?;
+    Ok(())
+}
+
 fn save_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {
     connection
         .execute(
@@ -1741,6 +1884,33 @@ mod tests {
         );
 
         fs::remove_dir_all(&vault_dir).expect("vault dir should be removable");
+    }
+
+    #[test]
+    fn yougile_sync_state_round_trips_through_settings() {
+        let connection = test_connection();
+
+        save_yougile_sync_state(
+            &connection,
+            &YougileSyncState {
+                active_source: "yougile".to_string(),
+                account_id: Some("account-1".to_string()),
+                project_id: Some("project-1".to_string()),
+                project_name: Some("Main".to_string()),
+                board_id: Some("board-1".to_string()),
+                board_name: Some("Sprint".to_string()),
+            },
+        )
+        .expect("Yougile sync state should save");
+
+        let loaded = load_yougile_sync_state(&connection).expect("Yougile sync state should load");
+
+        assert_eq!(loaded.active_source, "yougile");
+        assert_eq!(loaded.account_id.as_deref(), Some("account-1"));
+        assert_eq!(loaded.project_id.as_deref(), Some("project-1"));
+        assert_eq!(loaded.project_name.as_deref(), Some("Main"));
+        assert_eq!(loaded.board_id.as_deref(), Some("board-1"));
+        assert_eq!(loaded.board_name.as_deref(), Some("Sprint"));
     }
 
     #[test]

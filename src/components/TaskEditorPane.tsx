@@ -1,25 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
 import { FileText, Link as LinkIcon, X, Plus, Calendar, Eye, PenLine } from 'lucide-react';
+import { toDateInputValue } from '@/lib/formatting';
+import { priorityOptions, priorityColor } from '@/lib/constants';
 import { TaskPriority } from '@/types';
 import type { Checklist, Task as TaskType } from '@/types';
 import { ChecklistEditor } from '@/components/ChecklistEditor';
 import { SubtaskList } from '@/components/SubtaskList';
-
-const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
-  { value: 'none', label: 'None', color: 'text-zinc-600' },
-  { value: 'low', label: 'Low', color: 'text-blue-400' },
-  { value: 'medium', label: 'Medium', color: 'text-yellow-400' },
-  { value: 'high', label: 'High', color: 'text-orange-400' },
-  { value: 'urgent', label: 'Urgent', color: 'text-red-400' },
-];
-
-const priorityColor: Record<string, string> = {
-  urgent: 'text-red-400',
-  high: 'text-orange-400',
-  medium: 'text-yellow-400',
-  low: 'text-blue-400',
-};
 
 export function TaskEditorPane() {
   const { tasks, columns, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote, getChecklists, getSubtasks, selectTask } = useTaskStore();
@@ -51,7 +38,7 @@ export function TaskEditorPane() {
     setDueDate(task.dueDate ? toDateInputValue(task.dueDate) : '');
     setTags([...task.tags]);
     setTagInput('');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: sync local state on task identity change, not on every task mutation
   }, [taskId, taskUpdatedAt]);
 
   // Auto-resize textareas
@@ -445,14 +432,3 @@ function inlineFormat(text: string): string {
     .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
-function toDateInputValue(isoString: string): string {
-  try {
-    const d = new Date(isoString);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  } catch {
-    return '';
-  }
-}

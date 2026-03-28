@@ -1,8 +1,15 @@
 import { useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 
 export type ViewMode = 'list' | 'kanban' | 'calendar';
+export interface DeleteRequest {
+  taskId: string;
+  taskTitle: string;
+  source: 'local' | 'yougile';
+  nextTaskId: string | null;
+}
 
 /** Get the ordered task list as the user sees it (wip → todo → done) */
 function getOrderedTasks() {
@@ -20,7 +27,13 @@ function scrollSelectedIntoView() {
   });
 }
 
-export function useVimBindings(viewMode: ViewMode) {
+export function useVimBindings(
+  viewMode: ViewMode,
+  options?: {
+    onRequestDelete?: (request: DeleteRequest) => void;
+    onToggleHelp?: () => void;
+  }
+) {
   const {
     tasks,
     selectedTaskId: localSelectedTaskId,
@@ -156,9 +169,16 @@ export function useVimBindings(viewMode: ViewMode) {
 
       const currentTask = activeTasks.find((t) => t.id === selectedTaskId);
 
-      // Suppress browser Tab element cycling
+      // Tab — toggle between local/yougile source
       if (e.key === 'Tab') {
         e.preventDefault();
+        if (yougileStore.yougileEnabled) {
+          if (yougileStore.activeSource === 'yougile') {
+            yougileStore.setActiveSource('local');
+          } else {
+            yougileStore.setActiveSource('yougile');
+          }
+        }
         return;
       }
 
@@ -182,8 +202,8 @@ export function useVimBindings(viewMode: ViewMode) {
         return;
       }
 
-      // n — new task quick-add (local mode only)
-      if (e.key === 'n' && !isYougile) {
+      // n — new task quick-add
+      if (e.key === 'n') {
         e.preventDefault();
         setIsQuickAddOpen(true);
         return;
@@ -276,16 +296,28 @@ export function useVimBindings(viewMode: ViewMode) {
       }
 
       if (e.key === 'd') {
+        const ordered = isYougile
+          ? activeTasks
+          : viewMode === 'list'
+            ? getOrderedTasks()
+            : tasks;
+        const idx = ordered.findIndex((t) => t.id === currentTask.id);
+        const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
+
+        if (options?.onRequestDelete) {
+          options.onRequestDelete({
+            taskId: currentTask.id,
+            taskTitle: currentTask.title,
+            source: isYougile ? 'yougile' : 'local',
+            nextTaskId: nextTask?.id ?? null,
+          });
+          return;
+        }
+
         if (isYougile) {
-          const ordered = activeTasks;
-          const idx = ordered.findIndex((t) => t.id === currentTask.id);
-          const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
           void yougileStore.deleteTask(currentTask.id);
           if (nextTask) selectTask(nextTask.id);
         } else {
-          const ordered = viewMode === 'list' ? getOrderedTasks() : tasks;
-          const idx = ordered.findIndex((t) => t.id === currentTask.id);
-          const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
           void localDeleteTask(currentTask.id);
           if (nextTask) selectTask(nextTask.id);
         }
@@ -296,6 +328,70 @@ export function useVimBindings(viewMode: ViewMode) {
       if (e.key === 'o' && !isYougile) {
         const lt = tasks.find((t) => t.id === currentTask.id);
         if (lt?.linkedNotePath) void openLinkedNote(lt.linkedNotePath);
+        return;
+      }
+
+      // m — move task to next column (kanban & list views)
+      if (e.key === 'm') {
+        if (isYougile) {
+          const colIds = yougileStore.columns.map((c) => c.id);
+          if (colIds.length === 0) return;
+          const yt = yougileStore.tasks.find((t) => t.id === currentTask.id);
+          if (!yt?.columnId) return;
+          const idx = colIds.indexOf(yt.columnId);
+          const nextIdx = (idx + 1) % colIds.length;
+          void yougileStore.moveTask(currentTask.id, colIds[nextIdx]!);
+        } else {
+          const { columns } = useTaskStore.getState();
+          const colKeys = columns.map((c) => c.statusKey);
+          if (colKeys.length === 0) return;
+          const lt = tasks.find((t) => t.id === currentTask.id);
+          if (!lt) return;
+          const idx = colKeys.indexOf(lt.status);
+          const nextStatus = colKeys[(idx + 1) % colKeys.length] ?? 'todo';
+          void updateTaskStatus({ id: lt.id, status: nextStatus });
+        }
+        return;
+      }
+
+      // r — refresh / re-fetch current view
+      if (e.key === 'r') {
+        if (isYougile) {
+          void yougileStore.fetchTasks();
+        } else {
+          void useTaskStore.getState().fetchTasks();
+        }
+        return;
+      }
+
+      // ? — toggle hotkey cheat sheet
+      if (e.key === '?') {
+        e.preventDefault();
+        options?.onToggleHelp?.();
+        return;
+      }
+
+      // 1-4 — jump to column by index (kanban view)
+      if (viewMode === 'kanban' && e.key >= '1' && e.key <= '4') {
+        const colIndex = parseInt(e.key) - 1;
+        if (isYougile) {
+          const colIds = yougileStore.columns.map((c) => c.id);
+          if (colIndex >= colIds.length) return;
+          const targetTasks = activeTasks.filter((t) => t.columnId === colIds[colIndex]);
+          if (targetTasks.length > 0) {
+            selectTask(targetTasks[0]!.id);
+            scrollSelectedIntoView();
+          }
+        } else {
+          const { columns } = useTaskStore.getState();
+          const colKeys = columns.map((c) => c.statusKey);
+          if (colIndex >= colKeys.length) return;
+          const targetTasks = activeTasks.filter((t) => t.status === colKeys[colIndex]);
+          if (targetTasks.length > 0) {
+            selectTask(targetTasks[0]!.id);
+            scrollSelectedIntoView();
+          }
+        }
         return;
       }
     };
@@ -318,6 +414,7 @@ export function useVimBindings(viewMode: ViewMode) {
     handleColumnNav,
     viewMode,
     isYougile,
+    options,
     yougileStore,
   ]);
 }

@@ -170,6 +170,17 @@ pub struct AppSettings {
     pub yougile_enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct YougileSyncState {
+    pub active_source: String,
+    pub account_id: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub board_id: Option<String>,
+    pub board_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettingsInput {

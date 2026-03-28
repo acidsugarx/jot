@@ -15,65 +15,20 @@ import {
   Calendar,
   Globe,
   HardDrive,
+  ChevronDown,
   ChevronRight,
 } from 'lucide-react';
 import { Command } from 'cmdk';
+import { YougileTaskEditor } from '@/components/YougileTaskEditor';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
+import { tokenize, toDateInputValue } from '@/lib/formatting';
+import { priorityOptions, priorityColor } from '@/lib/constants';
 import type { Task, TaskPriority, TaskStatus } from '@/types';
+import type { YougileTask } from '@/types/yougile';
 
 type CaptureMode = 'insert' | 'normal';
 type PickerMode = 'none' | 'org' | 'project' | 'board';
-
-/** Tokenize input string into colored segments for syntax highlighting */
-interface Token {
-  text: string;
-  color: string | null; // null = default text color
-}
-
-function tokenize(input: string): Token[] {
-  if (!input) return [];
-
-  const tokens: Token[] = [];
-  // Match #tags, !priority, @zettel
-  const regex = /(#\w+|!(?:low|medium|high|urgent)\b|@zettel\b)/gi;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(input)) !== null) {
-    // Text before this match
-    if (match.index > lastIndex) {
-      tokens.push({ text: input.slice(lastIndex, match.index), color: null });
-    }
-
-    const token = match[0];
-    let color: string;
-
-    if (token.startsWith('#')) {
-      color = 'rgb(34 211 238)'; // cyan-400
-    } else if (token.startsWith('@')) {
-      color = 'rgb(167 139 250)'; // violet-400
-    } else if (token.startsWith('!')) {
-      const level = token.slice(1).toLowerCase();
-      if (level === 'urgent') color = 'rgb(248 113 113)'; // red-400
-      else if (level === 'high') color = 'rgb(251 146 60)'; // orange-400
-      else if (level === 'medium') color = 'rgb(250 204 21)'; // yellow-400
-      else color = 'rgb(96 165 250)'; // blue-400
-    } else {
-      color = 'rgb(34 211 238)';
-    }
-
-    tokens.push({ text: token, color });
-    lastIndex = regex.lastIndex;
-  }
-
-  // Remaining text
-  if (lastIndex < input.length) {
-    tokens.push({ text: input.slice(lastIndex), color: null });
-  }
-
-  return tokens;
-}
 
 const ITEM_HEIGHT = 36;
 const GROUP_HEADER_HEIGHT = 28;
@@ -84,31 +39,8 @@ const ACTION_ITEM_HEIGHT = 44;
 const MAX_VISIBLE_TASKS = 8;
 const EDITOR_HEIGHT = 340;
 
-const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
-  { value: 'none', label: 'None', color: 'text-zinc-600' },
-  { value: 'low', label: 'Low', color: 'text-blue-400' },
-  { value: 'medium', label: 'Medium', color: 'text-yellow-400' },
-  { value: 'high', label: 'High', color: 'text-orange-400' },
-  { value: 'urgent', label: 'Urgent', color: 'text-red-400' },
-];
-
-const priorityColor: Record<string, string> = {
-  urgent: 'text-red-400',
-  high: 'text-orange-400',
-  medium: 'text-yellow-400',
-  low: 'text-blue-400',
-};
-
-function toDateInputValue(isoString: string): string {
-  try {
-    const d = new Date(isoString);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  } catch {
-    return '';
-  }
+function isYougileTask(task: Task | YougileTask): task is YougileTask {
+  return 'columnId' in task;
 }
 
 // ── Inline Task Editor ────────────────────────────────────────────────────────
@@ -409,13 +341,15 @@ function App() {
 
   const {
     tasks,
-    error,
+    settings,
+    error: localError,
     fetchTasks,
+    fetchSettings,
     createTask,
     updateTaskStatus,
     deleteTask,
     openLinkedNote,
-    clearError,
+    clearError: clearLocalError,
     listenForUpdates,
   } = useTaskStore();
 
@@ -424,35 +358,119 @@ function App() {
     yougileEnabled,
     activeSource,
     setActiveSource,
+    setYougileEnabled,
     yougileContext,
     accounts,
     projects,
     boards,
     columns: yougileColumns,
+    tasks: yougileTasks,
     fetchAccounts,
     fetchProjects,
     fetchBoards,
     fetchColumns: fetchYougileColumns,
+    fetchTasks: fetchYougileTasks,
+    fetchUsers,
+    hydrateSyncState,
     setYougileContext,
+    selectTask: selectYougileTask,
+    error: yougileError,
+    clearError: clearYougileError,
   } = yougileStore;
 
   const isYougile = yougileEnabled && activeSource === 'yougile';
+  const activeAccount = accounts.find((account) => account.id === yougileContext.accountId);
+  const visibleYougileTasks = useMemo(
+    () => yougileTasks.filter((task) => !task.deleted && !task.archived),
+    [yougileTasks]
+  );
+  const activeTasks = isYougile ? visibleYougileTasks : tasks;
+  const visibleError = pickerMode !== 'none' || isYougile
+    ? (yougileError ?? localError)
+    : localError;
+  const clearSourceError = useCallback(() => {
+    clearLocalError();
+    clearYougileError();
+  }, [clearLocalError, clearYougileError]);
 
   const hasQuery = query.trim().length > 0;
   const tokens = useMemo(() => tokenize(query), [query]);
   const hasHighlights = tokens.some((t) => t.color !== null);
-  const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) : null;
+  const editingLocalTask = !isYougile && editingTaskId
+    ? tasks.find((task) => task.id === editingTaskId)
+    : null;
+  const editingYougileTask = isYougile && editingTaskId
+    ? visibleYougileTasks.find((task) => task.id === editingTaskId)
+    : null;
+  const editingTask = editingLocalTask ?? editingYougileTask;
 
   // Items visible in normal mode (tasks + actions)
-  const actionItems = useMemo(() => [
-    { id: '__dashboard', label: 'Dashboard' },
-    { id: '__settings', label: 'Settings' },
-  ], []);
+  const actionItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      label: string;
+      shortcut?: string;
+      Icon: typeof LayoutDashboard;
+      iconWrapClass: string;
+      iconClass: string;
+    }> = [
+      {
+        id: '__dashboard',
+        label: 'Dashboard',
+        shortcut: '⌘⇧Space',
+        Icon: LayoutDashboard,
+        iconWrapClass: 'bg-cyan-500/10',
+        iconClass: 'text-cyan-400',
+      },
+      {
+        id: '__settings',
+        label: 'Settings',
+        shortcut: '⌘,',
+        Icon: Settings,
+        iconWrapClass: 'bg-zinc-800',
+        iconClass: 'text-zinc-400',
+      },
+    ];
+
+    if (!yougileEnabled) {
+      return items;
+    }
+
+    items.push({
+      id: '__toggle-source',
+      label: isYougile ? 'Switch to Local' : 'Switch to Yougile',
+      Icon: isYougile ? HardDrive : Globe,
+      iconWrapClass: 'bg-zinc-800',
+      iconClass: 'text-zinc-400',
+    });
+
+    items.push({
+      id: '__switch-org',
+      label: 'Switch Org…',
+      Icon: Globe,
+      iconWrapClass: 'bg-zinc-800',
+      iconClass: 'text-zinc-400',
+    });
+
+    if (isYougile) {
+      items.push(
+        {
+          id: '__switch-board',
+          label: 'Switch Board…',
+          Icon: ChevronRight,
+          iconWrapClass: 'bg-zinc-800',
+          iconClass: 'text-zinc-400',
+        }
+      );
+    }
+
+    return items;
+  }, [isYougile, yougileEnabled]);
 
   const normalModeItems = useMemo(() => {
     if (hasQuery) return [{ id: '__create', label: `Create "${query}"` }];
-    return [...tasks.map((t) => ({ id: t.id, label: t.title })), ...actionItems];
-  }, [tasks, hasQuery, query, actionItems]);
+    return [...activeTasks.map((task) => ({ id: task.id, label: task.title })), ...actionItems];
+  }, [activeTasks, hasQuery, query, actionItems]);
 
   // Clamp selectedIndex when items change
   useEffect(() => {
@@ -461,16 +479,56 @@ function App() {
     }
   }, [normalModeItems.length, selectedIndex]);
 
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
+
+  useEffect(() => {
+    if (settings) {
+      setYougileEnabled(settings.yougileEnabled);
+    }
+  }, [settings, setYougileEnabled]);
+
+  const syncYougileState = useCallback(async () => {
+    if (!yougileEnabled) return;
+    await hydrateSyncState();
+    await fetchAccounts();
+  }, [fetchAccounts, hydrateSyncState, yougileEnabled]);
+
   // Enter insert mode + focus input when window gains focus
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
     void fetchTasks();
-  }, [fetchTasks]);
+    if (yougileEnabled) {
+      void syncYougileState();
+    }
+  }, [fetchTasks, syncYougileState, yougileEnabled]);
+
+  useEffect(() => {
+    if (activeSource !== 'yougile' || !yougileContext.accountId) return;
+    void fetchProjects();
+  }, [activeSource, fetchProjects, yougileContext.accountId]);
+
+  useEffect(() => {
+    if (activeSource !== 'yougile' || !yougileContext.projectId) return;
+    void Promise.all([
+      fetchBoards(yougileContext.projectId),
+      fetchUsers(yougileContext.projectId),
+    ]);
+  }, [activeSource, fetchBoards, fetchUsers, yougileContext.projectId]);
+
+  useEffect(() => {
+    if (activeSource !== 'yougile' || !yougileContext.boardId) return;
+    void fetchYougileColumns(yougileContext.boardId).then(() => {
+      void fetchYougileTasks();
+    });
+  }, [activeSource, fetchYougileColumns, fetchYougileTasks, yougileContext.boardId]);
 
   useEffect(() => {
     return listenForUpdates();
   }, [listenForUpdates]);
 
+  const lastFocusFetchRef = useRef(0);
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -478,7 +536,15 @@ function App() {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (focused) {
         suppressNextBlurHideRef.current = false;
-        void fetchTasks();
+        // Debounce: skip re-fetch if focused within 2s
+        const now = Date.now();
+        if (now - lastFocusFetchRef.current > 2000) {
+          lastFocusFetchRef.current = now;
+          void fetchTasks();
+          if (yougileEnabled) {
+            void syncYougileState();
+          }
+        }
         if (preserveModeOnNextFocusRef.current) {
           preserveModeOnNextFocusRef.current = false;
         } else {
@@ -499,7 +565,7 @@ function App() {
       if (hideTimer) clearTimeout(hideTimer);
       unlisten.then((fn) => fn());
     };
-  }, [fetchTasks]);
+  }, [fetchTasks, syncYougileState, yougileEnabled]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -522,39 +588,113 @@ function App() {
     let contentHeight: number;
 
     if (editingTask) {
-      contentHeight = EDITOR_HEIGHT;
+      contentHeight = editingYougileTask ? 620 : EDITOR_HEIGHT;
     } else if (hasQuery) {
       // "Create task" item
       contentHeight = GROUP_HEADER_HEIGHT + ACTION_ITEM_HEIGHT;
     } else {
-      const taskCount = Math.min(tasks.length, MAX_VISIBLE_TASKS);
+      const taskCount = Math.min(activeTasks.length, MAX_VISIBLE_TASKS);
       const tasksHeight = taskCount > 0 ? GROUP_HEADER_HEIGHT + taskCount * ITEM_HEIGHT : 0;
-      const actionsHeight = GROUP_HEADER_HEIGHT + 2 * ACTION_ITEM_HEIGHT;
+      const actionsHeight = GROUP_HEADER_HEIGHT + actionItems.length * ACTION_ITEM_HEIGHT;
       contentHeight = tasksHeight + actionsHeight;
     }
 
-    const statusHeight = (statusMessage || error) ? 24 : 0;
+    const statusHeight = (statusMessage || visibleError) ? 24 : 0;
     const inputHeight = editingTask ? 0 : INPUT_AREA_HEIGHT;
     const totalHeight = inputHeight + statusHeight + contentHeight + FOOTER_HEIGHT + WINDOW_CHROME;
     const clampedHeight = Math.max(totalHeight, 200);
 
     void getCurrentWindow().setSize(new LogicalSize(680, clampedHeight));
-  }, [hasQuery, tasks.length, statusMessage, error, editingTask]);
+  }, [
+    actionItems.length,
+    activeTasks.length,
+    editingTask,
+    editingYougileTask,
+    hasQuery,
+    visibleError,
+    statusMessage,
+  ]);
 
   // Close editor if task disappears (e.g. deleted from another window)
   useEffect(() => {
-    if (editingTaskId && !tasks.find((t) => t.id === editingTaskId)) {
+    if (editingTaskId && !activeTasks.find((task) => task.id === editingTaskId)) {
       setEditingTaskId(null);
     }
-  }, [tasks, editingTaskId]);
+  }, [activeTasks, editingTaskId]);
+
+  const handleSelectAccount = useCallback(async (accountId: string) => {
+    setYougileContext({
+      accountId,
+      projectId: null,
+      projectName: null,
+      boardId: null,
+      boardName: null,
+    });
+    setEditingTaskId(null);
+    await fetchProjects();
+    const nextState = useYougileStore.getState();
+    if (!nextState.error && nextState.projects.length === 0) {
+      setStatusMessage('No projects found in this organization');
+    } else {
+      setStatusMessage('');
+    }
+    setPickerMode('project');
+  }, [fetchProjects, setYougileContext]);
+
+  const handleSelectProject = useCallback(async (projectId: string) => {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+
+    setYougileContext({
+      projectId,
+      projectName: project.title,
+      boardId: null,
+      boardName: null,
+    });
+    setEditingTaskId(null);
+    await Promise.all([fetchBoards(projectId), fetchUsers(projectId)]);
+    const nextState = useYougileStore.getState();
+    if (!nextState.error && nextState.boards.length === 0) {
+      setStatusMessage('No boards found in this project');
+    } else {
+      setStatusMessage('');
+    }
+    setPickerMode('board');
+  }, [fetchBoards, fetchUsers, projects, setYougileContext]);
+
+  const handleSelectBoard = useCallback(async (boardId: string) => {
+    const board = boards.find((item) => item.id === boardId);
+    if (!board) return;
+
+    setYougileContext({ boardId: board.id, boardName: board.title });
+    setActiveSource('yougile');
+    setEditingTaskId(null);
+    await fetchYougileColumns(board.id);
+    await fetchYougileTasks();
+    setPickerMode('none');
+  }, [boards, fetchYougileColumns, fetchYougileTasks, setActiveSource, setYougileContext]);
 
   const handleCreateTask = useCallback(async () => {
     if (!query.trim()) return;
     try {
-      if (isYougile && yougileContext.boardId) {
-        const firstColumn = yougileColumns[0];
+      if (isYougile) {
+        if (!yougileContext.boardId) {
+          setStatusMessage('Select a Yougile board first');
+          setTimeout(() => setStatusMessage(''), 2000);
+          return;
+        }
+
+        let firstColumn = yougileColumns[0];
+        if (!firstColumn) {
+          await fetchYougileColumns(yougileContext.boardId);
+          firstColumn = useYougileStore.getState().columns[0];
+        }
         if (firstColumn) {
-          const task = await yougileStore.createTask({ title: query.trim(), columnId: firstColumn.id });
+          const task = await yougileStore.createTask({
+            title: query.trim(),
+            rawInput: query.trim(),
+            columnId: firstColumn.id,
+          });
           if (task) {
             setQuery('');
             setMode('insert');
@@ -574,16 +714,32 @@ function App() {
     } catch (err) {
       console.error(err);
     }
-  }, [query, createTask, isYougile, yougileContext.boardId, yougileColumns, yougileStore]);
+  }, [query, createTask, fetchYougileColumns, isYougile, yougileContext.boardId, yougileColumns, yougileStore]);
 
-  const handleToggleStatus = useCallback(async (task: { id: string; status: TaskStatus }) => {
-    const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done';
-    try { await updateTaskStatus({ id: task.id, status: newStatus }); } catch (err) { console.error(err); }
-  }, [updateTaskStatus]);
+  const handleToggleStatus = useCallback(async (task: Task | YougileTask) => {
+    try {
+      if (isYougileTask(task)) {
+        await yougileStore.updateTask(task.id, { completed: !task.completed });
+      } else {
+        const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done';
+        await updateTaskStatus({ id: task.id, status: newStatus });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, [updateTaskStatus, yougileStore]);
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
-    try { await deleteTask(taskId); } catch (err) { console.error(err); }
-  }, [deleteTask]);
+    try {
+      if (isYougile) {
+        await yougileStore.deleteTask(taskId);
+      } else {
+        await deleteTask(taskId);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, [deleteTask, isYougile, yougileStore]);
 
   const handleOpenNote = useCallback(async (path: string) => {
     try { await openLinkedNote(path); } catch (err) { console.error(err); }
@@ -602,6 +758,89 @@ function App() {
   const handleCloseEditor = useCallback(() => {
     setEditingTaskId(null);
   }, []);
+
+  const handleAction = useCallback(async (actionId: string) => {
+    switch (actionId) {
+      case '__dashboard':
+        await invoke('hide_window');
+        await invoke('open_dashboard_window');
+        return;
+      case '__settings':
+        await invoke('hide_window');
+        await invoke('open_settings_window');
+        return;
+      case '__toggle-source':
+        if (isYougile) {
+          selectYougileTask(null);
+          setEditingTaskId(null);
+          setActiveSource('local');
+          return;
+        }
+        await fetchAccounts();
+        if (useYougileStore.getState().accounts.length === 0) {
+          await invoke('open_settings_window');
+          return;
+        }
+        setPickerMode('org');
+        return;
+      case '__switch-org':
+        await fetchAccounts();
+        if (useYougileStore.getState().accounts.length === 0) {
+          await invoke('open_settings_window');
+          return;
+        }
+        setPickerMode('org');
+        return;
+      case '__switch-board':
+        if (!yougileContext.accountId) {
+          await fetchAccounts();
+          setPickerMode('org');
+          return;
+        }
+        if (projects.length === 0) {
+          await fetchProjects();
+        }
+        setPickerMode('project');
+        return;
+      default:
+        return;
+    }
+  }, [
+    fetchAccounts,
+    fetchProjects,
+    isYougile,
+    projects.length,
+    selectYougileTask,
+    setActiveSource,
+    yougileContext.accountId,
+  ]);
+
+  const sourceBadgeLabel = useMemo(() => {
+    if (!isYougile) {
+      return 'LOCAL';
+    }
+
+    const segments = [activeAccount?.companyName, yougileContext.boardName].filter(Boolean);
+    return segments.join(' / ') || 'YOUGILE';
+  }, [activeAccount?.companyName, isYougile, yougileContext.boardName]);
+
+  const sourceBadgeTitle = useMemo(() => {
+    if (!isYougile) {
+      return 'Local tasks';
+    }
+
+    const segments = [
+      activeAccount?.companyName,
+      yougileContext.projectName,
+      yougileContext.boardName,
+    ].filter(Boolean);
+    return segments.join(' / ') || 'Yougile';
+  }, [
+    activeAccount?.companyName,
+    isYougile,
+    yougileContext.boardName,
+    yougileContext.projectName,
+  ]);
 
   // ── Normal mode keyboard handler ────────────────────────────────────────────
   useEffect(() => {
@@ -661,14 +900,10 @@ function App() {
         case 'e':
           e.preventDefault();
           if (!item) return;
-          if (item.id === '__dashboard') {
-            void invoke('hide_window');
-            void invoke('open_dashboard_window');
-          } else if (item.id === '__settings') {
-            void invoke('hide_window');
-            void invoke('open_settings_window');
-          } else if (item.id === '__create') {
+          if (item.id === '__create') {
             void handleCreateTask();
+          } else if (item.id.startsWith('__')) {
+            void handleAction(item.id);
           } else {
             setEditingTaskId(item.id);
           }
@@ -676,7 +911,7 @@ function App() {
 
         case 'x':
           if (item && !item.id.startsWith('__')) {
-            const task = tasks.find((t) => t.id === item.id);
+            const task = activeTasks.find((t) => t.id === item.id);
             if (task) void handleToggleStatus(task);
           }
           return;
@@ -689,8 +924,10 @@ function App() {
 
         case 'o':
           if (item && !item.id.startsWith('__')) {
-            const task = tasks.find((t) => t.id === item.id);
-            if (task?.linkedNotePath) void handleOpenNote(task.linkedNotePath);
+            const task = activeTasks.find((t) => t.id === item.id);
+            if (task && !isYougileTask(task) && task.linkedNotePath) {
+              void handleOpenNote(task.linkedNotePath);
+            }
           }
           return;
 
@@ -702,7 +939,18 @@ function App() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [mode, editingTask, normalModeItems, selectedIndex, tasks, handleCreateTask, handleDeleteTask, handleToggleStatus, handleOpenNote]);
+  }, [
+    activeTasks,
+    editingTask,
+    handleAction,
+    handleCreateTask,
+    handleDeleteTask,
+    handleOpenNote,
+    handleToggleStatus,
+    mode,
+    normalModeItems,
+    selectedIndex,
+  ]);
 
   // Scroll selected item into view in normal mode
   useEffect(() => {
@@ -719,7 +967,15 @@ function App() {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-transparent">
         <div className="flex w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/95 shadow-[0_0_60px_rgba(0,0,0,0.6)] backdrop-blur-xl">
-          <InlineTaskEditor task={editingTask} onClose={handleCloseEditor} />
+          {editingLocalTask ? (
+            <InlineTaskEditor task={editingLocalTask} onClose={handleCloseEditor} />
+          ) : editingYougileTask ? (
+            <YougileTaskEditor
+              task={editingYougileTask}
+              embedded
+              onClose={handleCloseEditor}
+            />
+          ) : null}
 
           {/* Footer */}
           <div className="flex-shrink-0 border-t border-zinc-800/40 px-3 py-1.5">
@@ -831,30 +1087,45 @@ function App() {
               />
             </div>
             {yougileEnabled && (
-              <span
-                className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] cursor-pointer transition-colors ${
-                  isYougile
-                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
-                    : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
-                }`}
-                onClick={() => setPickerMode('org')}
-                title={isYougile ? (yougileContext.boardName ?? 'Yougile') : 'LOCAL'}
-              >
-                {isYougile ? (yougileContext.boardName ?? 'YOUGILE') : 'LOCAL'}
-              </span>
+              <div className="flex shrink-0 items-stretch">
+                <button
+                  type="button"
+                  className={`rounded-l border px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                    isYougile
+                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                      : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
+                  } rounded-r-none border-r-0`}
+                  onClick={() => void handleAction(isYougile ? '__switch-board' : '__toggle-source')}
+                  title={sourceBadgeTitle}
+                >
+                  {sourceBadgeLabel}
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-r border px-1 py-0.5 transition-colors ${
+                    isYougile
+                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400/70 hover:bg-cyan-500/20 hover:text-cyan-400'
+                      : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                  }`}
+                  onClick={() => void handleAction('__switch-org')}
+                  title="Choose Yougile organization"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </div>
             )}
             <kbd className="shrink-0 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
               Opt+Space
             </kbd>
           </div>
 
-          {(statusMessage || error) && (
+          {(statusMessage || visibleError) && (
             <div className="mt-1.5 flex items-center gap-2 pl-10 text-[11px]">
-              <span className={error ? 'text-red-400' : 'text-zinc-500'}>
-                {error || statusMessage}
+              <span className={visibleError ? 'text-red-400' : 'text-zinc-500'}>
+                {visibleError || statusMessage}
               </span>
-              {error && (
-                <button type="button" onClick={() => clearError()} className="text-zinc-500 hover:text-zinc-300">
+              {visibleError && (
+                <button type="button" onClick={clearSourceError} className="text-zinc-500 hover:text-zinc-300">
                   <X className="h-3 w-3" />
                 </button>
               )}
@@ -865,24 +1136,26 @@ function App() {
         {/* Scrollable List */}
         <div
           className="min-h-0 flex-1 overflow-y-auto"
-          style={{ maxHeight: MAX_VISIBLE_TASKS * ITEM_HEIGHT + GROUP_HEADER_HEIGHT * 2 + 2 * ACTION_ITEM_HEIGHT + 8 }}
+          style={{
+            maxHeight:
+              MAX_VISIBLE_TASKS * ITEM_HEIGHT +
+              GROUP_HEADER_HEIGHT * 2 +
+              actionItems.length * ACTION_ITEM_HEIGHT +
+              8,
+          }}
         >
           <Command.List className="py-1">
             {/* Picker Mode — replaces task list when active */}
             {pickerMode !== 'none' && (
               <Command.Group
-                heading={pickerMode === 'org' ? 'Select Account' : pickerMode === 'project' ? 'Select Project' : 'Select Board'}
+                heading={pickerMode === 'org' ? 'Select Organization' : pickerMode === 'project' ? 'Select Project' : 'Select Board'}
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
                 {pickerMode === 'org' && accounts.map((account) => (
                   <Command.Item
                     key={account.id}
                     value={`org-${account.id}`}
-                    onSelect={() => {
-                      setYougileContext({ accountId: account.id });
-                      void fetchProjects();
-                      setPickerMode('project');
-                    }}
+                    onSelect={() => void handleSelectAccount(account.id)}
                     className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
                   >
                     <div className="flex items-center gap-2.5">
@@ -892,15 +1165,21 @@ function App() {
                     {yougileContext.accountId === account.id && <Check className="h-3 w-3 text-cyan-400" />}
                   </Command.Item>
                 ))}
+                {pickerMode === 'org' && accounts.length > 0 && (
+                  <div className="px-3 py-2 text-[10px] text-zinc-600">
+                    Showing saved organizations. Add more in Settings.
+                  </div>
+                )}
+                {pickerMode === 'org' && accounts.length === 0 && (
+                  <div className="px-3 py-3 text-xs text-zinc-500">
+                    No connected Yougile accounts. Open Settings and add one first.
+                  </div>
+                )}
                 {pickerMode === 'project' && projects.map((project) => (
                   <Command.Item
                     key={project.id}
                     value={`project-${project.id}`}
-                    onSelect={() => {
-                      setYougileContext({ projectId: project.id, projectName: project.title });
-                      void fetchBoards(project.id);
-                      setPickerMode('board');
-                    }}
+                    onSelect={() => void handleSelectProject(project.id)}
                     className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
                   >
                     <div className="flex items-center gap-2.5">
@@ -910,16 +1189,16 @@ function App() {
                     {yougileContext.projectId === project.id && <Check className="h-3 w-3 text-cyan-400" />}
                   </Command.Item>
                 ))}
+                {pickerMode === 'project' && projects.length === 0 && !visibleError && (
+                  <div className="px-3 py-3 text-xs text-zinc-500">
+                    No projects found in this organization.
+                  </div>
+                )}
                 {pickerMode === 'board' && boards.map((board) => (
                   <Command.Item
                     key={board.id}
                     value={`board-${board.id}`}
-                    onSelect={() => {
-                      setYougileContext({ boardId: board.id, boardName: board.title });
-                      void fetchYougileColumns(board.id);
-                      setActiveSource('yougile');
-                      setPickerMode('none');
-                    }}
+                    onSelect={() => void handleSelectBoard(board.id)}
                     className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
                   >
                     <div className="flex items-center gap-2.5">
@@ -929,17 +1208,30 @@ function App() {
                     {yougileContext.boardId === board.id && <Check className="h-3 w-3 text-cyan-400" />}
                   </Command.Item>
                 ))}
+                {pickerMode === 'board' && boards.length === 0 && !visibleError && (
+                  <div className="px-3 py-3 text-xs text-zinc-500">
+                    No boards found in this project.
+                  </div>
+                )}
               </Command.Group>
             )}
 
-            {pickerMode === 'none' && !hasQuery && tasks.length > 0 && (
+            {pickerMode === 'none' && !hasQuery && activeTasks.length > 0 && (
               <Command.Group
-                heading="Tasks"
+                heading={isYougile ? 'Yougile Tasks' : 'Tasks'}
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
-                {tasks.map((task, taskIdx) => {
-                  const pri = getPriorityLabel(task.priority);
+                {activeTasks.map((task, taskIdx) => {
                   const isNormalSelected = mode === 'normal' && selectedIndex === taskIdx;
+                  const isRemoteTask = isYougileTask(task);
+                  const isDone = isRemoteTask ? task.completed : task.status === 'done';
+                  const pri = !isRemoteTask ? getPriorityLabel(task.priority) : null;
+                  const deadline = isRemoteTask && task.deadline?.deadline
+                    ? new Date(task.deadline.deadline).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : null;
                   return (
                     <Command.Item
                       key={task.id}
@@ -956,25 +1248,25 @@ function App() {
                       <button
                         type="button"
                         className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
-                          task.status === 'done'
+                          isDone
                             ? 'border-cyan-500/40 bg-cyan-500/20'
                             : 'border-zinc-700 hover:border-zinc-500'
                         }`}
                         onClick={(e) => { e.stopPropagation(); void handleToggleStatus(task); }}
                       >
-                        {task.status === 'done' && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+                        {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
                       </button>
 
                       {/* Title */}
                       <span className={`min-w-0 flex-1 truncate ${
-                        task.status === 'done' ? 'text-zinc-600 line-through' : 'text-zinc-200'
+                        isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
                       }`}>
                         {task.title}
                       </span>
 
                       {/* Inline metadata — right side */}
                       <div className="flex shrink-0 items-center gap-1.5">
-                        {task.linkedNotePath && (
+                        {!isRemoteTask && task.linkedNotePath && (
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); void handleOpenNote(task.linkedNotePath!); }}
@@ -983,15 +1275,23 @@ function App() {
                             <FileText className="h-3 w-3" />
                           </button>
                         )}
-                        {task.tags.map((tag) => (
+                        {!isRemoteTask && task.tags.map((tag) => (
                           <span key={tag} className="font-mono text-[10px] text-zinc-600">#{tag}</span>
                         ))}
                         {pri && (
                           <span className={`font-mono text-[10px] font-bold ${pri.color}`}>{pri.text}</span>
                         )}
-                        {task.dueDate && (
+                        {!isRemoteTask && task.dueDate && (
                           <span className="font-mono text-[10px] text-zinc-600">
                             {new Date(task.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
+                        {isRemoteTask && deadline && (
+                          <span className="font-mono text-[10px] text-zinc-600">{deadline}</span>
+                        )}
+                        {isRemoteTask && task.assigned.length > 0 && (
+                          <span className="font-mono text-[10px] text-zinc-600">
+                            @{task.assigned.length}
                           </span>
                         )}
                         <button
@@ -1013,109 +1313,34 @@ function App() {
                 heading="Actions"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
-                <Command.Item
-                  value="open-dashboard"
-                  data-capture-index={tasks.length}
-                  onSelect={() => { void invoke('hide_window'); void invoke('open_dashboard_window'); }}
-                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
-                    mode === 'normal' && selectedIndex === tasks.length
-                      ? 'bg-zinc-900/80'
-                      : 'data-[selected=true]:bg-zinc-900/80'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-cyan-500/10">
-                      <LayoutDashboard className="h-3.5 w-3.5 text-cyan-400" />
-                    </div>
-                    <span className="text-zinc-200">Dashboard</span>
-                  </div>
-                  <kbd className="font-mono text-[10px] text-zinc-600">⌘⇧Space</kbd>
-                </Command.Item>
+                {actionItems.map((action, actionIdx) => {
+                  const Icon = action.Icon;
+                  const itemIndex = activeTasks.length + actionIdx;
 
-                <Command.Item
-                  value="open-settings"
-                  data-capture-index={tasks.length + 1}
-                  onSelect={() => { void invoke('hide_window'); void invoke('open_settings_window'); }}
-                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
-                    mode === 'normal' && selectedIndex === tasks.length + 1
-                      ? 'bg-zinc-900/80'
-                      : 'data-[selected=true]:bg-zinc-900/80'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
-                      <Settings className="h-3.5 w-3.5 text-zinc-400" />
-                    </div>
-                    <span className="text-zinc-200">Settings</span>
-                  </div>
-                  <kbd className="font-mono text-[10px] text-zinc-600">⌘,</kbd>
-                </Command.Item>
-
-                {yougileEnabled && (
-                  <>
+                  return (
                     <Command.Item
-                      value="toggle-source"
-                      onSelect={() => {
-                        if (isYougile) {
-                          setActiveSource('local');
-                        } else {
-                          void fetchAccounts();
-                          setPickerMode('org');
-                        }
-                      }}
-                      className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                      key={action.id}
+                      value={action.id}
+                      data-capture-index={itemIndex}
+                      onSelect={() => void handleAction(action.id)}
+                      className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                        mode === 'normal' && selectedIndex === itemIndex
+                          ? 'bg-zinc-900/80'
+                          : 'data-[selected=true]:bg-zinc-900/80'
+                      }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
-                          {isYougile ? <HardDrive className="h-3.5 w-3.5 text-zinc-400" /> : <Globe className="h-3.5 w-3.5 text-zinc-400" />}
+                        <div className={`flex h-6 w-6 items-center justify-center rounded-md ${action.iconWrapClass}`}>
+                          <Icon className={`h-3.5 w-3.5 ${action.iconClass}`} />
                         </div>
-                        <span className="text-zinc-200">{isYougile ? 'Switch to Local' : 'Switch to Yougile'}</span>
+                        <span className="text-zinc-200">{action.label}</span>
                       </div>
+                      {action.shortcut && (
+                        <kbd className="font-mono text-[10px] text-zinc-600">{action.shortcut}</kbd>
+                      )}
                     </Command.Item>
-
-                    {isYougile && (
-                      <>
-                        <Command.Item
-                          value="switch-org"
-                          onSelect={() => {
-                            void fetchAccounts();
-                            setPickerMode('org');
-                          }}
-                          className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
-                              <Globe className="h-3.5 w-3.5 text-zinc-400" />
-                            </div>
-                            <span className="text-zinc-200">Switch Org…</span>
-                          </div>
-                        </Command.Item>
-
-                        <Command.Item
-                          value="switch-board"
-                          onSelect={() => {
-                            if (yougileContext.accountId) {
-                              void fetchProjects();
-                            } else {
-                              void fetchAccounts();
-                              setPickerMode('org');
-                              return;
-                            }
-                            setPickerMode('project');
-                          }}
-                          className="flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
-                              <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
-                            </div>
-                            <span className="text-zinc-200">Switch Board…</span>
-                          </div>
-                        </Command.Item>
-                      </>
-                    )}
-                  </>
-                )}
+                  );
+                })}
               </Command.Group>
             ) : (
               <Command.Group

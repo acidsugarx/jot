@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { emit, listen } from '@tauri-apps/api/event';
 import type {
   YougileAccount,
   YougileProject,
@@ -7,17 +8,45 @@ import type {
   YougileColumn,
   YougileTask,
   YougileUser,
+  YougileStringSticker,
+  YougileSprintSticker,
   YougileContext,
   YougileCompany,
   CreateYougileTask,
   UpdateYougileTask,
+  YougileSyncState,
 } from '@/types/yougile';
 
 function isTauri(): boolean {
   return '__TAURI_INTERNALS__' in window;
 }
 
+const FETCH_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Request timed out')), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+let lastFetchTime = 0;
+const FETCH_DEBOUNCE_MS = 2_000;
+
 export type ActiveSource = 'local' | 'yougile';
+const YOUGILE_SYNC_UPDATED_EVENT = 'yougile-sync-updated';
+const YOUGILE_TASKS_UPDATED_EVENT = 'yougile-tasks-updated';
+
+const initialContext: YougileContext = {
+  accountId: null,
+  projectId: null,
+  projectName: null,
+  boardId: null,
+  boardName: null,
+};
 
 interface YougileState {
   // Feature flag (persisted from settings)
@@ -39,10 +68,11 @@ interface YougileState {
   columns: YougileColumn[];
   tasks: YougileTask[];
   users: YougileUser[];
+  stringStickers: YougileStringSticker[];
+  sprintStickers: YougileSprintSticker[];
 
   // Loading & error state
-  loading: boolean;
-  isLoading: boolean; // kept in sync with loading
+  isLoading: boolean;
   error: string | null;
   clearError: () => void;
 
@@ -61,6 +91,8 @@ interface YougileState {
   fetchBoards: (projectId: string) => Promise<void>;
   fetchColumns: (boardId: string) => Promise<void>;
   fetchUsers: (projectId: string) => Promise<void>;
+  fetchStringStickers: (boardId: string) => Promise<void>;
+  fetchSprintStickers: (boardId: string) => Promise<void>;
 
   // Task actions
   fetchTasks: () => Promise<void>;
@@ -68,26 +100,142 @@ interface YougileState {
   updateTask: (taskId: string, payload: UpdateYougileTask) => Promise<YougileTask | null>;
   moveTask: (taskId: string, columnId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
+
+  // Cross-window sync
+  hydrateSyncState: () => Promise<void>;
+  persistSyncState: () => Promise<void>;
+  listenForSyncUpdates: () => () => void;
+  listenForTaskUpdates: () => () => void;
+}
+
+interface YougileTasksUpdatedPayload {
+  boardId: string | null;
+}
+
+function toSyncState(activeSource: ActiveSource, yougileContext: YougileContext): YougileSyncState {
+  return {
+    activeSource,
+    accountId: yougileContext.accountId,
+    projectId: yougileContext.projectId,
+    projectName: yougileContext.projectName,
+    boardId: yougileContext.boardId,
+    boardName: yougileContext.boardName,
+  };
+}
+
+function applySyncState(
+  state: Pick<
+    YougileState,
+    'activeSource'
+    | 'yougileContext'
+    | 'projects'
+    | 'boards'
+    | 'columns'
+    | 'tasks'
+    | 'users'
+    | 'stringStickers'
+    | 'sprintStickers'
+    | 'selectedTaskId'
+  >,
+  syncState: YougileSyncState
+) {
+  const nextContext: YougileContext = {
+    accountId: syncState.accountId,
+    projectId: syncState.projectId,
+    projectName: syncState.projectName,
+    boardId: syncState.boardId,
+    boardName: syncState.boardName,
+  };
+
+  const accountChanged = state.yougileContext.accountId !== nextContext.accountId;
+  const projectChanged = state.yougileContext.projectId !== nextContext.projectId;
+  const boardChanged = state.yougileContext.boardId !== nextContext.boardId;
+
+  return {
+    activeSource: syncState.activeSource,
+    yougileContext: nextContext,
+    projects: accountChanged ? [] : state.projects,
+    boards: accountChanged || projectChanged ? [] : state.boards,
+    columns: accountChanged || projectChanged || boardChanged ? [] : state.columns,
+    tasks: accountChanged || projectChanged || boardChanged ? [] : state.tasks,
+    users: accountChanged || projectChanged ? [] : state.users,
+    stringStickers: accountChanged || projectChanged || boardChanged ? [] : state.stringStickers,
+    sprintStickers: accountChanged || projectChanged || boardChanged ? [] : state.sprintStickers,
+    selectedTaskId: accountChanged || projectChanged || boardChanged ? null : state.selectedTaskId,
+  };
+}
+
+function scheduleSyncPersist(get: () => YougileState) {
+  if (!isTauri()) return;
+  queueMicrotask(() => {
+    void get().persistSyncState();
+  });
+}
+
+async function emitYougileTasksUpdated(boardId: string | null) {
+  if (!isTauri()) return;
+  await emit(YOUGILE_TASKS_UPDATED_EVENT, { boardId } satisfies YougileTasksUpdatedPayload);
 }
 
 export const useYougileStore = create<YougileState>((set, get) => ({
   yougileEnabled: false,
-  setYougileEnabled: (enabled) => set({ yougileEnabled: enabled }),
+  setYougileEnabled: (enabled) => {
+    set((state) =>
+      enabled
+        ? { yougileEnabled: true }
+        : {
+            ...state,
+            yougileEnabled: false,
+            activeSource: 'local',
+            yougileContext: initialContext,
+            projects: [],
+            boards: [],
+            columns: [],
+            tasks: [],
+            users: [],
+            stringStickers: [],
+            sprintStickers: [],
+            selectedTaskId: null,
+            error: null,
+            isLoading: false,
+          }
+    );
+    scheduleSyncPersist(get);
+  },
 
   activeSource: 'local',
-  setActiveSource: (source) => set({ activeSource: source }),
-
-  yougileContext: {
-    accountId: null,
-    projectId: null,
-    projectName: null,
-    boardId: null,
-    boardName: null,
-  },
-  setYougileContext: (ctx) =>
+  setActiveSource: (source) => {
     set((state) => ({
-      yougileContext: { ...state.yougileContext, ...ctx },
-    })),
+      activeSource: state.yougileEnabled ? source : 'local',
+    }));
+    scheduleSyncPersist(get);
+  },
+
+  yougileContext: initialContext,
+  setYougileContext: (ctx) => {
+    set((state) => {
+      const nextContext: YougileContext = {
+        ...state.yougileContext,
+        ...ctx,
+      };
+      const accountChanged = state.yougileContext.accountId !== nextContext.accountId;
+      const projectChanged = state.yougileContext.projectId !== nextContext.projectId;
+      const boardChanged = state.yougileContext.boardId !== nextContext.boardId;
+
+      return {
+        yougileContext: nextContext,
+        projects: accountChanged ? [] : state.projects,
+        boards: accountChanged || projectChanged ? [] : state.boards,
+        columns: accountChanged || projectChanged || boardChanged ? [] : state.columns,
+        tasks: accountChanged || projectChanged || boardChanged ? [] : state.tasks,
+        users: accountChanged || projectChanged ? [] : state.users,
+        stringStickers: accountChanged || projectChanged || boardChanged ? [] : state.stringStickers,
+        sprintStickers: accountChanged || projectChanged || boardChanged ? [] : state.sprintStickers,
+        selectedTaskId: accountChanged || projectChanged || boardChanged ? null : state.selectedTaskId,
+      };
+    });
+    scheduleSyncPersist(get);
+  },
 
   accounts: [],
   projects: [],
@@ -95,8 +243,9 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   columns: [],
   tasks: [],
   users: [],
+  stringStickers: [],
+  sprintStickers: [],
 
-  loading: false,
   isLoading: false,
   error: null,
   clearError: () => set({ error: null }),
@@ -141,9 +290,27 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   removeAccount: async (accountId) => {
     if (!isTauri()) return;
     await invoke('yougile_remove_account', { accountId });
-    set((state) => ({
-      accounts: state.accounts.filter((a) => a.id !== accountId),
-    }));
+    set((state) => {
+      const removedSelectedAccount = state.yougileContext.accountId === accountId;
+      return {
+        accounts: state.accounts.filter((a) => a.id !== accountId),
+        ...(removedSelectedAccount
+          ? {
+              activeSource: 'local' as ActiveSource,
+              yougileContext: initialContext,
+              projects: [],
+              boards: [],
+              columns: [],
+              tasks: [],
+              users: [],
+              stringStickers: [],
+              sprintStickers: [],
+              selectedTaskId: null,
+            }
+          : {}),
+      };
+    });
+    scheduleSyncPersist(get);
   },
 
   // --- Navigation ---
@@ -152,14 +319,16 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, isLoading: true, error: null });
+    set({ isLoading: true, error: null });
     try {
-      const projects = await invoke<YougileProject[]>('yougile_get_projects', {
-        accountId: yougileContext.accountId,
-      });
-      set({ projects, loading: false, isLoading: false });
+      const projects = await withTimeout(
+        invoke<YougileProject[]>('yougile_get_projects', {
+          accountId: yougileContext.accountId,
+        })
+      );
+      set({ projects, isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false, isLoading: false });
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -167,15 +336,17 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, isLoading: true, error: null });
+    set({ isLoading: true, error: null });
     try {
-      const boards = await invoke<YougileBoard[]>('yougile_get_boards', {
-        accountId: yougileContext.accountId,
-        projectId,
-      });
-      set({ boards: boards.filter((b) => !b.deleted), loading: false, isLoading: false });
+      const boards = await withTimeout(
+        invoke<YougileBoard[]>('yougile_get_boards', {
+          accountId: yougileContext.accountId,
+          projectId,
+        })
+      );
+      set({ boards: boards.filter((b) => !b.deleted), isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false, isLoading: false });
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -183,15 +354,17 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    set({ loading: true, isLoading: true, error: null });
+    set({ isLoading: true, error: null });
     try {
-      const columns = await invoke<YougileColumn[]>('yougile_get_columns', {
-        accountId: yougileContext.accountId,
-        boardId,
-      });
-      set({ columns: columns.filter((c) => !c.deleted), loading: false, isLoading: false });
+      const columns = await withTimeout(
+        invoke<YougileColumn[]>('yougile_get_columns', {
+          accountId: yougileContext.accountId,
+          boardId,
+        })
+      );
+      set({ columns: columns.filter((c) => !c.deleted), isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false, isLoading: false });
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -210,27 +383,55 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     }
   },
 
+  fetchStringStickers: async (boardId) => {
+    if (!isTauri()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return;
+    try {
+      const stringStickers = await invoke<YougileStringSticker[]>('yougile_get_string_stickers', {
+        accountId: yougileContext.accountId,
+        boardId,
+      });
+      set({ stringStickers: stringStickers.filter((sticker) => !sticker.deleted) });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  fetchSprintStickers: async (boardId) => {
+    if (!isTauri()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return;
+    try {
+      const sprintStickers = await invoke<YougileSprintSticker[]>('yougile_get_sprint_stickers', {
+        accountId: yougileContext.accountId,
+        boardId,
+      });
+      set({ sprintStickers: sprintStickers.filter((sticker) => !sticker.deleted) });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
   // --- Tasks ---
 
   fetchTasks: async () => {
     if (!isTauri()) return;
-    const { yougileContext, columns } = get();
-    if (!yougileContext.accountId) return;
-    if (columns.length === 0) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId || !yougileContext.boardId) return;
 
-    set({ loading: true, isLoading: true, error: null });
+    set({ isLoading: true, error: null });
     try {
-      const allTasks: YougileTask[] = [];
-      for (const col of columns) {
-        const tasks = await invoke<YougileTask[]>('yougile_get_tasks', {
+      const tasks = await withTimeout(
+        invoke<YougileTask[]>('yougile_get_board_tasks', {
           accountId: yougileContext.accountId,
-          columnId: col.id,
-        });
-        allTasks.push(...tasks);
-      }
-      set({ tasks: allTasks.filter((t) => !t.deleted), loading: false, isLoading: false });
+          boardId: yougileContext.boardId,
+        })
+      );
+      set({ tasks: tasks.filter((t) => !t.deleted), isLoading: false });
     } catch (e) {
-      set({ error: String(e), loading: false, isLoading: false });
+      // On error, keep existing tasks visible (stale data > no data)
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -244,6 +445,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         payload,
       });
       set((state) => ({ tasks: [task, ...state.tasks] }));
+      await emitYougileTasksUpdated(yougileContext.boardId);
       return task;
     } catch (e) {
       set({ error: String(e) });
@@ -264,6 +466,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
+      await emitYougileTasksUpdated(yougileContext.boardId);
       return updated;
     } catch (e) {
       set({ error: String(e) });
@@ -287,6 +490,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         taskId,
         columnId,
       });
+      await emitYougileTasksUpdated(yougileContext.boardId);
     } catch (e) {
       set({ error: String(e) });
       // Revert optimistic update by re-fetching
@@ -301,15 +505,86 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     // Optimistic update
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== taskId),
+      selectedTaskId: state.selectedTaskId === taskId ? null : state.selectedTaskId,
     }));
     try {
       await invoke('yougile_delete_task', {
         accountId: yougileContext.accountId,
         taskId,
       });
+      await emitYougileTasksUpdated(yougileContext.boardId);
     } catch (e) {
       set({ error: String(e) });
       void get().fetchTasks();
     }
+  },
+
+  hydrateSyncState: async () => {
+    if (!isTauri()) return;
+    const now = Date.now();
+    if (now - lastFetchTime < FETCH_DEBOUNCE_MS) return;
+    lastFetchTime = now;
+    try {
+      const syncState = await withTimeout(
+        invoke<YougileSyncState>('get_yougile_sync_state')
+      );
+      set((state) => applySyncState(state, syncState));
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  persistSyncState: async () => {
+    if (!isTauri()) return;
+    const state = get();
+    const syncState = toSyncState(
+      state.yougileEnabled ? state.activeSource : 'local',
+      state.yougileEnabled ? state.yougileContext : initialContext
+    );
+    try {
+      const saved = await invoke<YougileSyncState>('update_yougile_sync_state', {
+        state: syncState,
+      });
+      await emit(YOUGILE_SYNC_UPDATED_EVENT, saved);
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  listenForSyncUpdates: () => {
+    if (!isTauri()) return () => {};
+    const unlisten = listen<YougileSyncState>(YOUGILE_SYNC_UPDATED_EVENT, (event) => {
+      set((state) => applySyncState(state, event.payload));
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  },
+
+  listenForTaskUpdates: () => {
+    if (!isTauri()) return () => {};
+    const unlisten = listen<YougileTasksUpdatedPayload>(YOUGILE_TASKS_UPDATED_EVENT, (event) => {
+      const { activeSource, yougileContext, columns } = get();
+      const payloadBoardId = event.payload.boardId;
+
+      if (activeSource !== 'yougile' || !yougileContext.accountId || !yougileContext.boardId) {
+        return;
+      }
+      if (payloadBoardId && payloadBoardId !== yougileContext.boardId) {
+        return;
+      }
+
+      if (columns.length === 0) {
+        void get().fetchColumns(yougileContext.boardId).then(() => {
+          void get().fetchTasks();
+        });
+        return;
+      }
+
+      void get().fetchTasks();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   },
 }));

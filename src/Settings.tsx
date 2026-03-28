@@ -48,7 +48,7 @@ export default function Settings() {
     if (settings != null) {
       yougileStore.setYougileEnabled(settings.yougileEnabled);
     }
-  }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings, yougileStore.setYougileEnabled]);
 
   const saveVaultPath = async (val: string) => {
     try {
@@ -220,6 +220,7 @@ export default function Settings() {
                       yougileStore.setYougileEnabled(newValue);
                       if ('__TAURI_INTERNALS__' in window) {
                         void invoke<AppSettings>('update_yougile_enabled', { enabled: newValue });
+                        void emit('settings-updated');
                       }
                       // If disabling while on accounts tab, go back to general
                       if (!newValue && (activeTab as Tab) === 'accounts') {

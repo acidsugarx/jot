@@ -6,21 +6,28 @@ import { invoke } from '@tauri-apps/api/core';
 import App from './App';
 import Settings from './Settings';
 import Dashboard from './Dashboard';
+import { useYougileStore } from './store/use-yougile-store';
 import type { AppSettings } from './types';
 import './styles.css';
+
+const label = getCurrentWindow().label;
 
 // Apply saved theme before render to avoid flash
 if ('__TAURI_INTERNALS__' in window) {
   invoke<AppSettings>('get_settings')
     .then((settings) => {
       document.documentElement.setAttribute('data-theme', settings.theme);
-      // Set native window theme for macOS title bar
       void getCurrentWindow().setTheme(settings.theme === 'light' ? 'light' : 'dark');
     })
     .catch(() => {});
-}
 
-const label = getCurrentWindow().label;
+  // Only init Yougile sync for windows that need it (not settings)
+  if (label !== 'settings') {
+    void useYougileStore.getState().hydrateSyncState();
+    useYougileStore.getState().listenForSyncUpdates();
+    useYougileStore.getState().listenForTaskUpdates();
+  }
+}
 
 let Page = <App />;
 if (label === 'settings') {

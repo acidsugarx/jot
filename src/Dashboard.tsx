@@ -14,18 +14,24 @@ import {
   Tag,
   Archive,
   Plus,
+  Users,
 } from 'lucide-react';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { CalendarView } from '@/components/CalendarView';
 import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { SourceSwitcher } from '@/components/SourceSwitcher';
+import { YougileBreadcrumbBar } from '@/components/YougileBreadcrumbBar';
 import { YougileTaskEditor } from '@/components/YougileTaskEditor';
+import { HotkeyCheatSheet } from '@/components/HotkeyCheatSheet';
+import { ErrorBanner } from '@/components/ui/error-banner';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { Task, TaskPriority, KanbanColumn } from '@/types';
 import { CardTask } from '@/components/KanbanTaskCard';
+import type { YougileTask } from '@/types/yougile';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
+import { useVimBindings, ViewMode, type DeleteRequest } from '@/hooks/use-vim-bindings';
 
 const priorityDot = (p: TaskPriority) => {
   switch (p) {
@@ -64,6 +70,8 @@ interface ContextMenu {
   taskId: string;
 }
 
+type DeleteDialogState = DeleteRequest;
+
 type SidebarFilter = 'inbox' | 'today' | 'archived' | `tag:${string}`;
 
 function todayDateKey() {
@@ -76,6 +84,8 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('inbox');
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const [quickAddValue, setQuickAddValue] = useState('');
@@ -83,23 +93,46 @@ export default function Dashboard() {
   const {
     tasks,
     columns,
+    settings,
+    error: localError,
+    isLoading,
     fetchTasks,
     fetchColumns,
+    fetchSettings,
     listenForUpdates,
-    selectedTaskId,
-    selectTask,
     updateTaskStatus,
     deleteTask,
+    clearError: clearLocalError,
     isEditorOpen,
     setIsEditorOpen,
     isQuickAddOpen,
     setIsQuickAddOpen,
     createTask,
     openLinkedNote,
+    selectedTaskId: localSelectedTaskId,
+    selectTask: selectLocalTask,
   } = useTaskStore();
 
   const yougileStore = useYougileStore();
-  const isYougile = yougileStore.activeSource === 'yougile';
+  const setYougileEnabled = yougileStore.setYougileEnabled;
+  const hydrateYougileSyncState = yougileStore.hydrateSyncState;
+  const yougileActiveSource = yougileStore.activeSource;
+  const yougileAccountId = yougileStore.yougileContext.accountId;
+  const yougileProjectId = yougileStore.yougileContext.projectId;
+  const fetchYougileProjects = yougileStore.fetchProjects;
+  const fetchYougileBoards = yougileStore.fetchBoards;
+  const fetchYougileUsers = yougileStore.fetchUsers;
+  const isYougile = yougileStore.yougileEnabled && yougileStore.activeSource === 'yougile';
+  const yougileVisibleTasks = useMemo(
+    () => yougileStore.tasks.filter((task) => !task.deleted && !task.archived),
+    [yougileStore.tasks]
+  );
+
+  const syncYougileState = useCallback(async () => {
+    if (!yougileStore.yougileEnabled) return;
+    await hydrateYougileSyncState();
+    await useYougileStore.getState().fetchAccounts();
+  }, [hydrateYougileSyncState, yougileStore.yougileEnabled]);
 
   // Map Yougile columns to the KanbanColumn shape used by KanbanBoard
   const yougileColumnsAsKanban = useMemo((): KanbanColumn[] => {
@@ -119,24 +152,59 @@ export default function Dashboard() {
     for (const col of yougileStore.columns) {
       map.set(col.id, []);
     }
-    for (const task of yougileStore.tasks) {
+    for (const task of yougileVisibleTasks) {
       if (!task.columnId) continue;
       const existing = map.get(task.columnId);
       if (existing) existing.push(task);
       else map.set(task.columnId, [task]);
     }
     return map;
-  }, [isYougile, yougileStore.columns, yougileStore.tasks]);
+  }, [isYougile, yougileStore.columns, yougileVisibleTasks]);
+
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
+
+  useEffect(() => {
+    if (settings) {
+      setYougileEnabled(settings.yougileEnabled);
+    }
+  }, [settings, setYougileEnabled]);
+
+  useEffect(() => {
+    if (yougileStore.yougileEnabled) {
+      void syncYougileState();
+    }
+  }, [syncYougileState, yougileStore.yougileEnabled]);
+
+  useEffect(() => {
+    if (yougileActiveSource !== 'yougile' || !yougileAccountId) return;
+    void fetchYougileProjects();
+  }, [fetchYougileProjects, yougileActiveSource, yougileAccountId]);
+
+  useEffect(() => {
+    if (yougileActiveSource !== 'yougile' || !yougileProjectId) return;
+    void Promise.all([
+      fetchYougileBoards(yougileProjectId),
+      fetchYougileUsers(yougileProjectId),
+    ]);
+  }, [fetchYougileBoards, fetchYougileUsers, yougileActiveSource, yougileProjectId]);
 
   // Fetch Yougile columns + tasks when board selection changes
   useEffect(() => {
-    if (yougileStore.activeSource === 'yougile' && yougileStore.yougileContext.boardId) {
-      yougileStore.fetchColumns(yougileStore.yougileContext.boardId).then(() => {
+    const boardId = yougileStore.yougileContext.boardId;
+    if (yougileStore.activeSource === 'yougile' && boardId) {
+      yougileStore.fetchColumns(boardId).then(() => {
         void yougileStore.fetchTasks();
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [yougileStore.activeSource, yougileStore.yougileContext.boardId]);
+
+  useEffect(() => {
+    if (isYougile && yougileStore.yougileContext.projectId) {
+      void yougileStore.fetchUsers(yougileStore.yougileContext.projectId);
+    }
+  }, [isYougile, yougileStore.yougileContext.projectId, yougileStore.fetchUsers]);
 
   // Cycle to next column's statusKey, wrapping around
   const getNextStatus = (currentStatus: string): string => {
@@ -147,7 +215,15 @@ export default function Dashboard() {
     return next?.statusKey ?? currentStatus;
   };
 
-  useVimBindings(activeTab as ViewMode);
+  const requestDelete = useCallback((request: DeleteRequest) => {
+    setContextMenu(null);
+    setDeleteDialog(request);
+  }, []);
+
+  useVimBindings(activeTab as ViewMode, {
+    onRequestDelete: requestDelete,
+    onToggleHelp: () => setShowHelp((v) => !v),
+  });
 
   // Focus quick-add input when opened
   useEffect(() => {
@@ -165,6 +241,41 @@ export default function Dashboard() {
   useEffect(() => {
     return listenForUpdates();
   }, [listenForUpdates]);
+
+  useEffect(() => {
+    if (!isYougile || !yougileStore.yougileContext.boardId) return;
+
+    const intervalId = window.setInterval(() => {
+      const state = useYougileStore.getState();
+      if (document.visibilityState !== 'visible') return;
+      if (state.columns.length === 0) {
+        void state.fetchColumns(state.yougileContext.boardId!).then(() => {
+          void state.fetchTasks();
+        });
+        return;
+      }
+      void state.fetchTasks();
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isYougile, yougileStore.yougileContext.boardId]);
+
+  const lastDashFocusRef = useRef(0);
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused && yougileStore.yougileEnabled) {
+        const now = Date.now();
+        if (now - lastDashFocusRef.current > 2000) {
+          lastDashFocusRef.current = now;
+          void syncYougileState();
+        }
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [syncYougileState, yougileStore.yougileEnabled]);
 
   // Close context menu on any click
   useEffect(() => {
@@ -184,7 +295,10 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handler);
   }, [contextMenu]);
 
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId);
+  const selectedTask = tasks.find((t) => t.id === localSelectedTaskId);
+  const selectedYougileTask = yougileVisibleTasks.find(
+    (task) => task.id === yougileStore.selectedTaskId
+  );
 
   // All unique tags across active tasks
   const allTags = useMemo(() => {
@@ -197,6 +311,7 @@ export default function Dashboard() {
 
   // Apply sidebar filter first, then search query
   const sidebarFiltered = useMemo(() => {
+    if (isYougile) return [];
     if (sidebarFilter === 'inbox') {
       return tasks.filter((t) => t.status !== 'archived');
     }
@@ -215,7 +330,7 @@ export default function Dashboard() {
     }
     const tag = sidebarFilter.slice(4); // strip "tag:"
     return tasks.filter((t) => t.status !== 'archived' && t.tags.includes(tag));
-  }, [tasks, sidebarFilter]);
+  }, [isYougile, tasks, sidebarFilter]);
 
   const filtered = searchQuery.trim()
     ? sidebarFiltered.filter((t) => {
@@ -228,6 +343,16 @@ export default function Dashboard() {
       })
     : sidebarFiltered;
 
+  const filteredYougile = useMemo(() => {
+    if (!isYougile) return [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return yougileVisibleTasks;
+    return yougileVisibleTasks.filter((task) =>
+      task.title.toLowerCase().includes(q) ||
+      (task.description ?? '').toLowerCase().includes(q)
+    );
+  }, [isYougile, searchQuery, yougileVisibleTasks]);
+
   // Group for list view — ordered by column position, archived tasks last
   const groupedByColumn = useMemo(() => {
     return columns.map((col) => ({
@@ -236,16 +361,80 @@ export default function Dashboard() {
     }));
   }, [columns, filtered]);
 
+  const groupedYougileByColumn = useMemo(() => {
+    if (!isYougile) return [];
+    return yougileStore.columns.map((col) => ({
+      col,
+      items: filteredYougile.filter((task) => task.columnId === col.id),
+    }));
+  }, [isYougile, yougileStore.columns, filteredYougile]);
+
+  const buildDeleteRequest = useCallback((task: Task | YougileTask): DeleteDialogState => {
+    const source = 'columnId' in task ? 'yougile' : 'local';
+    const ordered = source === 'yougile'
+      ? yougileVisibleTasks
+      : activeTab === 'list'
+        ? tasks
+        : tasks;
+    const idx = ordered.findIndex((item) => item.id === task.id);
+    const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
+
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      source,
+      nextTaskId: nextTask?.id ?? null,
+    };
+  }, [activeTab, tasks, yougileVisibleTasks]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteDialog) return;
+
+    try {
+      if (deleteDialog.source === 'yougile') {
+        await yougileStore.deleteTask(deleteDialog.taskId);
+        yougileStore.selectTask(deleteDialog.nextTaskId);
+      } else {
+        await deleteTask(deleteDialog.taskId);
+        selectLocalTask(deleteDialog.nextTaskId);
+      }
+      setIsEditorOpen(false);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setDeleteDialog(null);
+    }
+  }, [deleteDialog, deleteTask, selectLocalTask, setIsEditorOpen, yougileStore]);
+
+  useEffect(() => {
+    if (!deleteDialog) return;
+
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'y' || event.key === 'Enter') {
+        event.preventDefault();
+        void confirmDelete();
+        return;
+      }
+      if (event.key === 'n' || event.key === 'Escape') {
+        event.preventDefault();
+        setDeleteDialog(null);
+      }
+    };
+
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [confirmDelete, deleteDialog]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, taskId: string) => {
     e.preventDefault();
-    selectTask(taskId);
+    selectLocalTask(taskId);
     setContextMenu({ x: e.clientX, y: e.clientY, taskId });
-  }, [selectTask]);
+  }, [selectLocalTask]);
 
   const contextTask = contextMenu ? tasks.find((t) => t.id === contextMenu.taskId) : null;
 
   const renderTaskRow = (t: Task) => {
-    const isSelected = selectedTaskId === t.id;
+    const isSelected = localSelectedTaskId === t.id;
     const isDone = t.status === 'done';
     const dot = priorityDot(t.priority);
     const colName = columns.find((c) => c.statusKey === t.status)?.name ?? t.status;
@@ -255,7 +444,7 @@ export default function Dashboard() {
       <div
         key={t.id}
         data-task-selected={isSelected ? 'true' : undefined}
-        onClick={() => selectTask(t.id)}
+        onClick={() => selectLocalTask(t.id)}
         onDoubleClick={() => setIsEditorOpen(true)}
         onContextMenu={(e) => handleContextMenu(e, t.id)}
         className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
@@ -294,8 +483,8 @@ export default function Dashboard() {
           {t.title}
         </span>
 
-        {/* Hover actions (mouse users) */}
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {/* Hover actions (visible when selected or hovered) */}
+        <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
           {/* Cycle status */}
           <button
             type="button"
@@ -314,7 +503,7 @@ export default function Dashboard() {
             title="Edit (e)"
             onClick={(e) => {
               e.stopPropagation();
-              selectTask(t.id);
+              selectLocalTask(t.id);
               setIsEditorOpen(true);
             }}
             className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
@@ -327,7 +516,7 @@ export default function Dashboard() {
             title="Delete (d)"
             onClick={(e) => {
               e.stopPropagation();
-              void deleteTask(t.id);
+              requestDelete(buildDeleteRequest(t));
             }}
             className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
           >
@@ -336,7 +525,7 @@ export default function Dashboard() {
         </div>
 
         {/* Right metadata (hidden when hover actions show) */}
-        <div className="flex shrink-0 items-center gap-2 group-hover:hidden">
+        <div className={`flex shrink-0 items-center gap-2 ${isSelected ? 'hidden' : 'group-hover:hidden'}`}>
           {t.linkedNotePath && (
             <button
               type="button"
@@ -376,6 +565,108 @@ export default function Dashboard() {
       </div>
     );
   };
+
+  const renderYougileTaskRow = (task: YougileTask) => {
+    const isSelected = yougileStore.selectedTaskId === task.id;
+    const isDone = task.completed;
+    const deadline = task.deadline?.deadline
+      ? new Date(task.deadline.deadline).toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+        })
+      : null;
+
+    return (
+      <div
+        key={task.id}
+        data-task-selected={isSelected ? 'true' : undefined}
+        onClick={() => yougileStore.selectTask(task.id)}
+        onDoubleClick={() => setIsEditorOpen(true)}
+        className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
+          isSelected
+            ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
+            : 'border-l-transparent hover:bg-zinc-900/40'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void yougileStore.updateTask(task.id, { completed: !task.completed });
+          }}
+          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
+            isDone
+              ? 'border-cyan-500/40 bg-cyan-500/20'
+              : 'border-zinc-700 hover:border-zinc-500'
+          }`}
+        >
+          {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+        </button>
+
+        <span className={`min-w-0 flex-1 truncate text-sm ${
+          isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
+        }`}>
+          {task.title}
+        </span>
+
+        <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+          <button
+            type="button"
+            title="Edit (e)"
+            onClick={(event) => {
+              event.stopPropagation();
+              yougileStore.selectTask(task.id);
+              setIsEditorOpen(true);
+            }}
+            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+          >
+            <PenLine className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            title="Delete (d)"
+            onClick={(event) => {
+              event.stopPropagation();
+              requestDelete(buildDeleteRequest(task));
+            }}
+            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+
+        <div className={`flex shrink-0 items-center gap-2 ${isSelected ? 'hidden' : 'group-hover:hidden'}`}>
+          {deadline && (
+            <span className="font-mono text-[10px] text-zinc-600">{deadline}</span>
+          )}
+          {task.assigned.length > 0 && (
+            <span className="flex items-center gap-1 font-mono text-[10px] text-zinc-600">
+              <Users className="h-2.5 w-2.5" />
+              {task.assigned.length}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderYougileSection = (label: string, items: YougileTask[]) => {
+    if (items.length === 0) return null;
+    return (
+      <div>
+        <div className="flex h-7 items-center px-4">
+          <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+            {label}
+          </span>
+          <span className="ml-1.5 font-mono text-[10px] text-zinc-700">{items.length}</span>
+        </div>
+        {items.map(renderYougileTaskRow)}
+      </div>
+    );
+  };
+
+  const visibleCount = isYougile ? filteredYougile.length : filtered.length;
+  const totalCount = isYougile ? yougileVisibleTasks.length : tasks.length;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[#111111] font-sans text-zinc-100 selection:bg-cyan-500/30">
@@ -446,15 +737,24 @@ export default function Dashboard() {
           </div>
 
           <span className="font-mono text-[10px] text-zinc-600">
-            {filtered.length}{searchQuery ? `/${tasks.length}` : ''} {tasks.length === 1 ? 'task' : 'tasks'}
+            {visibleCount}{searchQuery ? `/${totalCount}` : ''} {totalCount === 1 ? 'task' : 'tasks'}
           </span>
         </div>
       </div>
 
+      <YougileBreadcrumbBar />
+
+      {/* Error banner */}
+      <ErrorBanner
+        error={isYougile ? yougileStore.error : localError}
+        onRetry={isYougile ? () => { void yougileStore.fetchTasks(); } : () => { void fetchTasks(); }}
+        onDismiss={isYougile ? () => yougileStore.clearError() : clearLocalError}
+      />
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar — list view only */}
-        {activeTab === 'list' && (
+        {activeTab === 'list' && !isYougile && (
           <div className="flex w-40 shrink-0 flex-col border-r border-zinc-800/40 py-2">
             {/* Fixed filters */}
             {(
@@ -519,23 +819,51 @@ export default function Dashboard() {
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'list' && (
             <div className="mx-auto w-full max-w-3xl py-2">
-              {tasks.length === 0 ? (
+              {/* Loading skeletons — first load only */}
+              {((isYougile && yougileStore.isLoading && yougileVisibleTasks.length === 0) ||
+                (!isYougile && isLoading && tasks.length === 0)) ? (
+                <div className="space-y-1 px-4">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <Skeleton key={i} className="h-9 w-full" />
+                  ))}
+                </div>
+              ) : isYougile && !yougileStore.yougileContext.boardId ? (
+                <div className="flex h-48 flex-col items-center justify-center gap-1">
+                  <span className="text-sm text-zinc-600">Select a Yougile board</span>
+                  <span className="font-mono text-[10px] text-zinc-700">
+                    choose org / project / board above
+                  </span>
+                </div>
+              ) : isYougile && yougileVisibleTasks.length === 0 ? (
+                <div className="flex h-48 flex-col items-center justify-center gap-1">
+                  <span className="text-sm text-zinc-600">No Yougile tasks</span>
+                  <span className="font-mono text-[10px] text-zinc-700">
+                    press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">Opt+Space</kbd> to capture
+                  </span>
+                </div>
+              ) : !isYougile && tasks.length === 0 ? (
                 <div className="flex h-48 flex-col items-center justify-center gap-1">
                   <span className="text-sm text-zinc-600">No tasks</span>
                   <span className="font-mono text-[10px] text-zinc-700">
                     press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">Opt+Space</kbd> to capture
                   </span>
                 </div>
-              ) : filtered.length === 0 ? (
+              ) : (isYougile ? filteredYougile.length : filtered.length) === 0 ? (
                 <div className="flex h-48 flex-col items-center justify-center gap-1">
                   <span className="text-sm text-zinc-600">No matches</span>
                   <span className="font-mono text-[10px] text-zinc-700">
                     press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 py-px">esc</kbd> to clear
                   </span>
                 </div>
-              ) : sidebarFilter === 'archived' ? (
+              ) : !isYougile && sidebarFilter === 'archived' ? (
                 <div className="space-y-2">
                   {renderSection('Archived', filtered)}
+                </div>
+              ) : isYougile ? (
+                <div className="space-y-2">
+                  {groupedYougileByColumn.map(({ col, items }) =>
+                    renderYougileSection(col.title, items)
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -578,6 +906,8 @@ export default function Dashboard() {
                   tasks={[]}
                   yougileMode
                   yougileTasksRaw={yougileStore.tasks}
+                  onSelectTask={yougileStore.selectTask}
+                  onOpenEditor={() => setIsEditorOpen(true)}
                 />
               ) : (
                 <CalendarView tasks={tasks} />
@@ -587,20 +917,17 @@ export default function Dashboard() {
         </div>
 
         {/* Editor pane — local tasks */}
-        {!isYougile && selectedTaskId && isEditorOpen && selectedTask && (
+        {!isYougile && localSelectedTaskId && isEditorOpen && selectedTask && (
           <TaskEditorPane />
         )}
 
         {/* Editor pane — Yougile tasks */}
-        {isYougile && yougileStore.selectedTaskId && (() => {
-          const task = yougileStore.tasks.find((t) => t.id === yougileStore.selectedTaskId);
-          return task ? (
-            <YougileTaskEditor
-              task={task}
-              onClose={() => yougileStore.selectTask(null)}
-            />
-          ) : null;
-        })()}
+        {isYougile && isEditorOpen && selectedYougileTask && (
+          <YougileTaskEditor
+            task={selectedYougileTask}
+            onClose={() => setIsEditorOpen(false)}
+          />
+        )}
       </div>
 
       {/* Quick-add bar */}
@@ -616,7 +943,27 @@ export default function Dashboard() {
               onKeyDown={async (e) => {
                 if (e.key === 'Enter' && quickAddValue.trim()) {
                   e.preventDefault();
-                  await createTask({ rawInput: quickAddValue.trim() });
+                  if (isYougile) {
+                    if (!yougileStore.yougileContext.boardId) {
+                      return;
+                    }
+
+                    let firstColumn = yougileStore.columns[0];
+                    if (!firstColumn) {
+                      await yougileStore.fetchColumns(yougileStore.yougileContext.boardId);
+                      firstColumn = useYougileStore.getState().columns[0];
+                    }
+
+                    if (firstColumn) {
+                      await yougileStore.createTask({
+                        title: quickAddValue.trim(),
+                        rawInput: quickAddValue.trim(),
+                        columnId: firstColumn.id,
+                      });
+                    }
+                  } else {
+                    await createTask({ rawInput: quickAddValue.trim() });
+                  }
                   setQuickAddValue('');
                   setIsQuickAddOpen(false);
                 } else if (e.key === 'Escape') {
@@ -625,7 +972,11 @@ export default function Dashboard() {
                   setIsQuickAddOpen(false);
                 }
               }}
-              placeholder="Type a task… #tag !priority @zettel"
+              placeholder={
+                isYougile && !yougileStore.yougileContext.boardId
+                  ? 'Select a Yougile board first'
+                  : 'Type a task… #tag !priority @zettel'
+              }
               className="h-7 flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
             />
             <kbd className="shrink-0 font-mono text-[9px] text-zinc-700">enter create · esc cancel</kbd>
@@ -642,29 +993,63 @@ export default function Dashboard() {
           <span className="text-zinc-800">·</span>
           <span>x done</span>
           <span className="text-zinc-800">·</span>
-          <span>s cycle</span>
+          <span>n new</span>
+          {!isYougile && (
+            <>
+              <span className="text-zinc-800">·</span>
+              <span>s cycle</span>
+              <span className="text-zinc-800">·</span>
+              <span>a archive</span>
+              <span className="text-zinc-800">·</span>
+              <span>o note</span>
+            </>
+          )}
           <span className="text-zinc-800">·</span>
           <span>d delete</span>
           <span className="text-zinc-800">·</span>
-          <span>a archive</span>
-          <span className="text-zinc-800">·</span>
-          <span>n new</span>
-          <span className="text-zinc-800">·</span>
           <span>/ search</span>
-          <span className="text-zinc-800">·</span>
-          <span>o note</span>
         </div>
       </div>
 
-      {/* Yougile error toast */}
-      {yougileStore.error && (
-        <div className="fixed bottom-4 right-4 bg-red-500/10 border border-red-500/30 text-red-400 text-xs px-3 py-2 rounded-lg shadow-lg z-50 max-w-sm">
-          <div className="flex items-center justify-between gap-2">
-            <span>{yougileStore.error}</span>
-            <button onClick={() => yougileStore.clearError()} className="text-red-300 hover:text-red-200">x</button>
+      {deleteDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-[#171717] p-4 shadow-2xl">
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-red-400/80">
+              Confirm Delete
+            </div>
+            <div className="text-sm text-zinc-200">
+              Delete <span className="text-zinc-100">"{deleteDialog.taskTitle}"</span>?
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-600">
+              This cannot be undone.
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteDialog(null)}
+                className="rounded-md border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-200"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDelete()}
+                className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-400 transition-colors hover:bg-red-500/20"
+              >
+                Yes
+              </button>
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2 font-mono text-[10px] text-zinc-700">
+              <span>y yes</span>
+              <span className="text-zinc-800">·</span>
+              <span>n no</span>
+            </div>
           </div>
         </div>
       )}
+
+      {/* Hotkey Cheat Sheet */}
+      <HotkeyCheatSheet open={showHelp} onClose={() => setShowHelp(false)} isYougile={isYougile} />
 
       {/* Context Menu */}
       {contextMenu && contextTask && (
@@ -741,8 +1126,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => {
-              void deleteTask(contextTask.id);
-              setContextMenu(null);
+              requestDelete(buildDeleteRequest(contextTask));
             }}
             className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-red-400/80 hover:bg-zinc-800/60"
           >

@@ -1,23 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown } from 'lucide-react';
+import { formatYougileTrackedHours, getYougileTaskColorValue, YOUGILE_TASK_COLOR_OPTIONS } from '@/lib/yougile';
+import { escapeHtml } from '@/lib/formatting';
 import { useYougileStore } from '@/store/use-yougile-store';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
 
 export interface YougileTaskEditorProps {
   task: YougileTask;
   onClose: () => void;
+  embedded?: boolean;
 }
-
-const COLOR_OPTIONS = [
-  { value: null, label: 'None', cls: 'bg-zinc-700' },
-  { value: 'red', label: 'Red', cls: 'bg-red-500' },
-  { value: 'orange', label: 'Orange', cls: 'bg-orange-500' },
-  { value: 'yellow', label: 'Yellow', cls: 'bg-yellow-500' },
-  { value: 'green', label: 'Green', cls: 'bg-green-500' },
-  { value: 'blue', label: 'Blue', cls: 'bg-blue-500' },
-  { value: 'purple', label: 'Purple', cls: 'bg-purple-500' },
-  { value: 'pink', label: 'Pink', cls: 'bg-pink-500' },
-];
 
 function unixMsToDateInput(ms: number | null | undefined): string {
   if (!ms) return '';
@@ -41,81 +33,99 @@ function dateInputToUnixMs(value: string): number | undefined {
   }
 }
 
-function formatMinutes(minutes: number | null | undefined): string {
-  if (minutes == null) return '—';
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
+function looksLikeHtml(text: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(text);
 }
 
-function renderMarkdown(text: string): string {
-  const html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  const lines = html.split('\n');
-  const result: string[] = [];
-  let inCodeBlock = false;
-  let inList = false;
-
-  for (const line of lines) {
-    if (line.startsWith('```')) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      inCodeBlock = !inCodeBlock;
-      result.push(inCodeBlock ? '<pre><code>' : '</code></pre>');
-      continue;
-    }
-    if (inCodeBlock) { result.push(line); continue; }
-
-    let processed = line;
-
-    if (processed.startsWith('### ')) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = `<h3>${inlineFormat(processed.slice(4))}</h3>`;
-    } else if (processed.startsWith('## ')) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = `<h2>${inlineFormat(processed.slice(3))}</h2>`;
-    } else if (processed.startsWith('# ')) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = `<h1>${inlineFormat(processed.slice(2))}</h1>`;
-    } else if (processed.startsWith('&gt; ')) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = `<blockquote>${inlineFormat(processed.slice(5))}</blockquote>`;
-    } else if (/^[-*] /.test(processed)) {
-      if (!inList) { result.push('<ul>'); inList = true; }
-      processed = `<li>${inlineFormat(processed.slice(2))}</li>`;
-    } else if (processed.trim() === '') {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = '<br/>';
-    } else {
-      if (inList) { result.push('</ul>'); inList = false; }
-      processed = `<p>${inlineFormat(processed)}</p>`;
-    }
-
-    result.push(processed);
+function descriptionToEditorText(value: string | null | undefined): string {
+  const source = value ?? '';
+  if (!source || !looksLikeHtml(source)) {
+    return source;
   }
 
-  if (inList) result.push('</ul>');
-  if (inCodeBlock) result.push('</code></pre>');
-  return result.join('\n');
+  if (typeof DOMParser !== 'undefined') {
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    return (doc.body.innerText || doc.body.textContent || '').trim();
+  }
+
+  return source
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .trim();
 }
 
-function inlineFormat(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+function editorTextToDescriptionHtml(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  return trimmed
+    .split(/\n{2,}/)
+    .map((paragraph) => (
+      `<p>${paragraph.split('\n').map((line) => escapeHtml(line)).join('<br/>')}</p>`
+    ))
+    .join('');
 }
 
-export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
-  const { updateTask, moveTask, columns, users } = useYougileStore();
+function extractStickerValue(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value && typeof value === 'object') {
+    const candidate = value as Record<string, unknown>;
+    for (const key of ['title', 'name', 'value', 'id']) {
+      const nested = candidate[key];
+      if (typeof nested === 'string' && nested.trim()) {
+        return nested;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeStickerMap(stickers: Record<string, unknown> | undefined): Record<string, string> {
+  if (!stickers) return {};
+
+  return Object.entries(stickers).reduce<Record<string, string>>((acc, [key, value]) => {
+    const parsed = extractStickerValue(value);
+    if (parsed) {
+      acc[key] = parsed;
+    }
+    return acc;
+  }, {});
+}
+
+function formatStickerValue(value: unknown, fallback: string): string {
+  const parsed = extractStickerValue(value);
+  if (parsed) {
+    return parsed;
+  }
+  try {
+    return value && typeof value === 'object' ? JSON.stringify(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditorProps) {
+  const {
+    updateTask,
+    moveTask,
+    columns,
+    users,
+    stringStickers,
+    sprintStickers,
+    fetchUsers,
+    fetchStringStickers,
+    fetchSprintStickers,
+    yougileContext,
+  } = useYougileStore();
 
   const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description ?? '');
+  const [description, setDescription] = useState(descriptionToEditorText(task.description));
   const [descPreview, setDescPreview] = useState(false);
   const [columnId, setColumnId] = useState(task.columnId ?? '');
   const [deadlineValue, setDeadlineValue] = useState(
@@ -124,8 +134,13 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
   const [checklists, setChecklists] = useState<YougileChecklist[]>(
     task.checklists ? JSON.parse(JSON.stringify(task.checklists)) : []
   );
-  const [color, setColor] = useState(task.color ?? null);
+  const [color, setColor] = useState(task.color ?? 'task-primary');
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [assignedUserIds, setAssignedUserIds] = useState<string[]>(task.assigned);
+  const [showAssigneePicker, setShowAssigneePicker] = useState(false);
+  const [stickerValues, setStickerValues] = useState<Record<string, string>>(
+    normalizeStickerMap(task.stickers)
+  );
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
@@ -134,13 +149,39 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
   // Sync when task changes externally
   useEffect(() => {
     setTitle(task.title);
-    setDescription(task.description ?? '');
+    setDescription(descriptionToEditorText(task.description));
     setColumnId(task.columnId ?? '');
     setDeadlineValue(unixMsToDateInput(task.deadline?.deadline ?? null));
     setChecklists(task.checklists ? JSON.parse(JSON.stringify(task.checklists)) : []);
-    setColor(task.color ?? null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setColor(task.color ?? 'task-primary');
+    setAssignedUserIds(task.assigned);
+    setStickerValues(normalizeStickerMap(task.stickers));
+    setShowAssigneePicker(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: sync local state on task identity change, not on every task mutation
   }, [taskId]);
+
+  useEffect(() => {
+    if (yougileContext.projectId && users.length === 0) {
+      void fetchUsers(yougileContext.projectId);
+    }
+    if (yougileContext.boardId) {
+      if (stringStickers.length === 0) {
+        void fetchStringStickers(yougileContext.boardId);
+      }
+      if (sprintStickers.length === 0) {
+        void fetchSprintStickers(yougileContext.boardId);
+      }
+    }
+  }, [
+    fetchSprintStickers,
+    fetchStringStickers,
+    fetchUsers,
+    sprintStickers.length,
+    stringStickers.length,
+    users.length,
+    yougileContext.boardId,
+    yougileContext.projectId,
+  ]);
 
   // Auto-resize textareas
   const autoResize = useCallback((el: HTMLTextAreaElement | null) => {
@@ -175,9 +216,9 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
 
   const handleDescriptionBlur = () => {
     const val = description.trim();
-    const current = task.description ?? '';
+    const current = descriptionToEditorText(task.description);
     if (val !== current) {
-      void updateTask(task.id, { description: val || undefined });
+      void updateTask(task.id, { description: editorTextToDescriptionHtml(val) });
     }
   };
 
@@ -190,13 +231,27 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
     setDeadlineValue(value);
     const ms = dateInputToUnixMs(value);
     void updateTask(task.id, {
-      deadline: { deadline: ms, withTime: task.deadline?.withTime ?? false },
+      deadline: {
+        deadline: ms,
+        startDate: task.deadline?.startDate,
+        withTime: task.deadline?.withTime ?? false,
+        history: task.deadline?.history ?? [],
+        blockedPoints: task.deadline?.blockedPoints ?? [],
+        links: task.deadline?.links ?? [],
+      },
     });
   };
 
   const handleClearDeadline = () => {
     setDeadlineValue('');
-    void updateTask(task.id, { deadline: { deadline: undefined, withTime: false } });
+    void updateTask(task.id, {
+      deadline: {
+        deleted: true,
+        history: task.deadline?.history ?? [],
+        blockedPoints: task.deadline?.blockedPoints ?? [],
+        links: task.deadline?.links ?? [],
+      },
+    });
   };
 
   const handleToggleChecklistItem = (
@@ -217,14 +272,87 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
     void updateTask(task.id, { checklists: updated });
   };
 
-  const handleColorChange = (newColor: string | null) => {
+  const handleColorChange = (newColor: string) => {
     setColor(newColor);
     setShowColorPicker(false);
-    void updateTask(task.id, { color: newColor ?? undefined });
+    void updateTask(task.id, { color: newColor });
+  };
+
+  const handleToggleAssignee = (userId: string) => {
+    const nextAssigned = assignedUserIds.includes(userId)
+      ? assignedUserIds.filter((id) => id !== userId)
+      : [...assignedUserIds, userId];
+
+    setAssignedUserIds(nextAssigned);
+    void updateTask(task.id, { assigned: nextAssigned });
+  };
+
+  const persistStickerValue = (stickerId: string, rawValue: string) => {
+    const trimmed = rawValue.trim();
+    const nextValues = { ...stickerValues };
+
+    if (trimmed) {
+      nextValues[stickerId] = trimmed;
+      setStickerValues(nextValues);
+      void updateTask(task.id, { stickers: nextValues });
+      return;
+    }
+
+    delete nextValues[stickerId];
+    setStickerValues(nextValues);
+    void updateTask(task.id, {
+      stickers: {
+        ...nextValues,
+        [stickerId]: '-',
+      },
+    });
   };
 
   const currentColumn = columns.find((c) => c.id === columnId);
-  const colorOption = COLOR_OPTIONS.find((c) => c.value === color) ?? COLOR_OPTIONS[0]!;
+  const colorOption = YOUGILE_TASK_COLOR_OPTIONS.find((option) => option.value === color)
+    ?? YOUGILE_TASK_COLOR_OPTIONS[0]!;
+  const stickerDefinitions = useMemo(() => [
+    ...stringStickers.map((sticker) => ({
+      id: sticker.id,
+      name: sticker.name,
+      states: sticker.states.map((state) => ({
+        id: state.id,
+        name: state.name,
+        color: state.color,
+      })),
+      freeText: sticker.states.length === 0,
+    })),
+    ...sprintStickers.map((sticker) => ({
+      id: sticker.id,
+      name: sticker.name,
+      states: sticker.states.map((state) => ({
+        id: state.id,
+        name: state.name,
+        color: undefined,
+      })),
+      freeText: false,
+    })),
+  ], [stringStickers, sprintStickers]);
+  const stickerStateLookup = useMemo(() => stickerDefinitions.reduce<Record<string, { stickerName: string; valueName: string }>>(
+    (acc, sticker) => {
+      for (const state of sticker.states) {
+        acc[state.id] = {
+          stickerName: sticker.name,
+          valueName: state.name,
+        };
+      }
+      return acc;
+    },
+    {}
+  ), [stickerDefinitions]);
+  const stickerDefinitionLookup = useMemo(() => stickerDefinitions.reduce<Record<string, { name: string; freeText: boolean; states: Array<{ id: string; name: string; color?: string }> }>>(
+    (acc, sticker) => {
+      acc[sticker.id] = sticker;
+      return acc;
+    },
+    {}
+  ), [stickerDefinitions]);
+  const descriptionPreviewHtml = useMemo(() => editorTextToDescriptionHtml(description), [description]);
 
   const totalChecklistItems = checklists.reduce((sum, cl) => sum + cl.items.length, 0);
   const completedChecklistItems = checklists.reduce(
@@ -233,11 +361,18 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
   );
 
   return (
-    <div className="flex h-full w-[360px] shrink-0 flex-col border-l border-zinc-800/40 bg-[#141414]">
+    <div
+      className={`flex h-full shrink-0 flex-col bg-[#141414] ${
+        embedded ? 'w-full' : 'w-[360px] border-l border-zinc-800/40'
+      }`}
+    >
       {/* Header */}
       <div className="flex h-11 items-center justify-between border-b border-zinc-800/40 px-4">
         <div className="flex items-center gap-2">
-          <div className={`h-2 w-2 rounded-full ${colorOption.cls}`} />
+          <div
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: getYougileTaskColorValue(colorOption.value) ?? '#7B869E' }}
+          />
           <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
             Yougile Task
           </span>
@@ -293,7 +428,7 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
           {descPreview ? (
             <div
               className="prose-jot min-h-[2.5rem]"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(description) }}
+              dangerouslySetInnerHTML={{ __html: descriptionPreviewHtml ?? '<p></p>' }}
             />
           ) : (
             <textarea
@@ -312,7 +447,7 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
               }}
               rows={2}
               className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
-              placeholder="Add a description… (supports **bold**, *italic*, `code`)"
+              placeholder="Add a description…"
             />
           )}
         </div>
@@ -412,20 +547,24 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
                 onClick={() => setShowColorPicker(!showColorPicker)}
                 className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
               >
-                <div className={`h-3 w-3 rounded-full ${colorOption.cls}`} />
+                <div
+                  className="h-3 w-3 rounded-full"
+                  style={{ backgroundColor: getYougileTaskColorValue(colorOption.value) ?? '#7B869E' }}
+                />
                 <span className="font-mono text-[10px]">{colorOption.label}</span>
               </button>
               {showColorPicker && (
                 <div className="absolute right-0 top-full z-10 mt-1 flex flex-wrap gap-1 rounded-md border border-zinc-700 bg-[#1a1a1a] p-2 shadow-xl w-[140px]">
-                  {COLOR_OPTIONS.map((opt) => (
+                  {YOUGILE_TASK_COLOR_OPTIONS.map((opt) => (
                     <button
-                      key={String(opt.value)}
+                      key={opt.value}
                       type="button"
                       title={opt.label}
                       onClick={() => handleColorChange(opt.value)}
-                      className={`h-5 w-5 rounded-full transition-transform hover:scale-110 ${opt.cls} ${
+                      className={`h-5 w-5 rounded-full transition-transform hover:scale-110 ${
                         color === opt.value ? 'ring-2 ring-white/40 ring-offset-1 ring-offset-[#1a1a1a]' : ''
                       }`}
+                      style={{ backgroundColor: opt.hex }}
                     />
                   ))}
                 </div>
@@ -435,32 +574,74 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
         </div>
 
         {/* Assigned Users */}
-        {task.assigned.length > 0 && (
+        {(users.length > 0 || assignedUserIds.length > 0) && (
           <div className="border-b border-zinc-800/30 px-4 py-3">
-            <div className="mb-2 flex items-center gap-1.5">
-              <Users className="h-3 w-3 text-zinc-600" />
-              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-                Assigned ({task.assigned.length})
-              </span>
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Users className="h-3 w-3 text-zinc-600" />
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Assigned ({assignedUserIds.length})
+                </span>
+              </div>
+              {users.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAssigneePicker((open) => !open)}
+                  className="rounded px-1.5 py-0.5 font-mono text-[10px] text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+                >
+                  {showAssigneePicker ? 'Done' : 'Edit'}
+                </button>
+              )}
             </div>
-            <div className="flex flex-col gap-1">
-              {task.assigned.map((userId) => {
-                const user = users.find((u) => u.id === userId);
-                return (
-                  <div
-                    key={userId}
-                    className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2 py-1"
-                  >
-                    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 font-mono text-[9px] text-zinc-400">
-                      {user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
+            {assignedUserIds.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {assignedUserIds.map((userId) => {
+                  const user = users.find((u) => u.id === userId);
+                  return (
+                    <div
+                      key={userId}
+                      className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2 py-1"
+                    >
+                      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 font-mono text-[9px] text-zinc-400">
+                        {user?.realName?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
+                      </div>
+                      <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-400">
+                        {user?.realName ?? user?.email ?? userId}
+                      </span>
                     </div>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-400">
-                      {user?.name ?? user?.email ?? userId}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded border border-dashed border-zinc-800 px-2 py-2 font-mono text-[10px] text-zinc-700">
+                No assignees
+              </div>
+            )}
+            {showAssigneePicker && users.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1 rounded-md border border-zinc-800 bg-zinc-900/40 p-1">
+                {users.map((user) => {
+                  const isAssigned = assignedUserIds.includes(user.id);
+                  const label = user.realName ?? user.email ?? user.id;
+                  return (
+                    <button
+                      key={user.id}
+                      type="button"
+                      onClick={() => handleToggleAssignee(user.id)}
+                      className={`flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                        isAssigned ? 'bg-cyan-500/10 text-zinc-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                      }`}
+                    >
+                      {isAssigned ? (
+                        <CheckSquare className="h-3 w-3 shrink-0 text-cyan-400" />
+                      ) : (
+                        <Square className="h-3 w-3 shrink-0 text-zinc-700" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-xs">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -534,14 +715,14 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
               <div className="flex flex-col gap-0.5">
                 <span className="font-mono text-[9px] uppercase tracking-wider text-zinc-700">Plan</span>
                 <span className="font-mono text-xs text-zinc-400">
-                  {formatMinutes(task.timeTracking.plan)}
+                  {formatYougileTrackedHours(task.timeTracking.plan)}
                 </span>
               </div>
               <div className="h-8 w-px bg-zinc-800" />
               <div className="flex flex-col gap-0.5">
                 <span className="font-mono text-[9px] uppercase tracking-wider text-zinc-700">Logged</span>
                 <span className="font-mono text-xs text-zinc-400">
-                  {formatMinutes(task.timeTracking.work)}
+                  {formatYougileTrackedHours(task.timeTracking.work)}
                 </span>
               </div>
               {task.timeTracking.plan != null && task.timeTracking.work != null && (
@@ -554,7 +735,7 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
                         ? 'text-red-400'
                         : 'text-zinc-400'
                     }`}>
-                      {formatMinutes(
+                      {formatYougileTrackedHours(
                         Math.max(0, (task.timeTracking.plan ?? 0) - (task.timeTracking.work ?? 0))
                       )}
                     </span>
@@ -566,23 +747,86 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
         )}
 
         {/* Stickers / labels */}
-        {task.stickers && Object.keys(task.stickers).length > 0 && (
+        {(stickerDefinitions.length > 0 || Object.keys(stickerValues).length > 0) && (
           <div className="border-b border-zinc-800/30 px-4 py-3">
             <div className="mb-2">
               <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
                 Stickers
               </span>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(task.stickers).map(([key, value]) => (
-                <span
-                  key={key}
-                  className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
-                >
-                  {value || key}
-                </span>
-              ))}
-            </div>
+
+            {stickerDefinitions.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {stickerDefinitions.map((sticker) => {
+                  const currentValue = stickerValues[sticker.id] ?? '';
+                  return (
+                    <div key={sticker.id} className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">
+                        {sticker.name}
+                      </span>
+                      {sticker.freeText ? (
+                        <input
+                          type="text"
+                          value={currentValue}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setStickerValues((current) => {
+                              const next = { ...current };
+                              if (nextValue.trim()) {
+                                next[sticker.id] = nextValue;
+                              } else {
+                                delete next[sticker.id];
+                              }
+                              return next;
+                            });
+                          }}
+                          onBlur={(event) => persistStickerValue(sticker.id, event.target.value)}
+                          className="w-40 rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-300 outline-none placeholder:text-zinc-700"
+                          placeholder="Value"
+                        />
+                      ) : (
+                        <select
+                          value={currentValue}
+                          onChange={(event) => persistStickerValue(sticker.id, event.target.value)}
+                          className="w-40 bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
+                        >
+                          <option value="">Not set</option>
+                          <option value="empty">Empty</option>
+                          {sticker.states.map((state) => (
+                            <option key={state.id} value={state.id}>
+                              {state.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {Object.entries(stickerValues).length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {Object.entries(stickerValues).map(([key, value]) => {
+                  const resolvedState = stickerStateLookup[value];
+                  const resolvedSticker = stickerDefinitionLookup[key];
+                  const label = resolvedState
+                    ? `${resolvedState.stickerName}: ${resolvedState.valueName}`
+                    : resolvedSticker
+                      ? `${resolvedSticker.name}: ${value}`
+                      : formatStickerValue(value, key);
+
+                  return (
+                    <span
+                      key={key}
+                      className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
+                    >
+                      {label}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

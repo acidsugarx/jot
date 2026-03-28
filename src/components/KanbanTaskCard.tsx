@@ -3,7 +3,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
 import { YougileTask } from '@/types/yougile';
 import { FileText, Users } from 'lucide-react';
+import { getYougileTaskColorValue } from '@/lib/yougile';
 import { useTaskStore } from '@/store/use-task-store';
+import { useYougileStore } from '@/store/use-yougile-store';
 
 // Unified card item — either a local Task or a YougileTask
 export type CardTask = Task | YougileTask;
@@ -25,8 +27,17 @@ const priorityDot: Record<string, string> = {
 };
 
 export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
-  const { selectTask, selectedTaskId, setIsEditorOpen } = useTaskStore();
-  const isSelected = task.id === selectedTaskId;
+  const {
+    selectTask: selectLocalTask,
+    selectedTaskId: localSelectedTaskId,
+    setIsEditorOpen,
+  } = useTaskStore();
+  const {
+    selectTask: selectYougileTask,
+    selectedTaskId: yougileSelectedTaskId,
+  } = useYougileStore();
+  const isYougile = isYougileTask(task);
+  const isSelected = task.id === (isYougile ? yougileSelectedTaskId : localSelectedTaskId);
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'Task', task },
@@ -47,20 +58,20 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
     );
   }
 
-  if (isYougileTask(task)) {
+  if (isYougile) {
     // Yougile task rendering
     const deadlineTs = task.deadline?.deadline;
     const deadlineStr = deadlineTs
       ? new Date(deadlineTs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
       : null;
     const isDone = task.completed;
-    const colorStripe = task.color && task.color !== '' ? task.color : null;
+    const colorStripe = getYougileTaskColorValue(task.color);
 
     return (
       <div
         ref={setNodeRef}
         style={style}
-        onClick={() => selectTask(task.id)}
+        onClick={() => selectYougileTask(task.id)}
         onDoubleClick={() => setIsEditorOpen(true)}
         {...attributes}
         {...listeners}
@@ -110,7 +121,7 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
     <div
       ref={setNodeRef}
       style={style}
-      onClick={() => selectTask(task.id)}
+      onClick={() => selectLocalTask(task.id)}
       onDoubleClick={() => setIsEditorOpen(true)}
       {...attributes}
       {...listeners}
