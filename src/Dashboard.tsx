@@ -21,7 +21,8 @@ import { TaskEditorPane } from '@/components/TaskEditorPane';
 import { SourceSwitcher } from '@/components/SourceSwitcher';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
-import { Task, TaskPriority } from '@/types';
+import { Task, TaskPriority, KanbanColumn } from '@/types';
+import { CardTask } from '@/components/KanbanTaskCard';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode } from '@/hooks/use-vim-bindings';
 
@@ -97,6 +98,34 @@ export default function Dashboard() {
   } = useTaskStore();
 
   const yougileStore = useYougileStore();
+  const isYougile = yougileStore.activeSource === 'yougile';
+
+  // Map Yougile columns to the KanbanColumn shape used by KanbanBoard
+  const yougileColumnsAsKanban = useMemo((): KanbanColumn[] => {
+    if (!isYougile) return [];
+    return yougileStore.columns.map((col, idx) => ({
+      id: col.id,
+      name: col.title,
+      statusKey: col.id,
+      position: idx,
+    }));
+  }, [isYougile, yougileStore.columns]);
+
+  // Map Yougile tasks grouped by columnId for KanbanBoard
+  const yougileTasksByColumn = useMemo((): Map<string, CardTask[]> => {
+    if (!isYougile) return new Map();
+    const map = new Map<string, CardTask[]>();
+    for (const col of yougileStore.columns) {
+      map.set(col.id, []);
+    }
+    for (const task of yougileStore.tasks) {
+      if (!task.columnId) continue;
+      const existing = map.get(task.columnId);
+      if (existing) existing.push(task);
+      else map.set(task.columnId, [task]);
+    }
+    return map;
+  }, [isYougile, yougileStore.columns, yougileStore.tasks]);
 
   // Fetch Yougile columns + tasks when board selection changes
   useEffect(() => {
@@ -519,13 +548,28 @@ export default function Dashboard() {
 
           {activeTab === 'kanban' && (
             <div className="h-full w-full">
-              <KanbanBoard />
+              {isYougile ? (
+                <KanbanBoard
+                  yougileColumns={yougileColumnsAsKanban}
+                  yougileTasksByColumn={yougileTasksByColumn}
+                />
+              ) : (
+                <KanbanBoard />
+              )}
             </div>
           )}
 
           {activeTab === 'calendar' && (
             <div className="h-full w-full">
-              <CalendarView tasks={tasks} />
+              {isYougile ? (
+                <CalendarView
+                  tasks={[]}
+                  yougileMode
+                  yougileTasksRaw={yougileStore.tasks}
+                />
+              ) : (
+                <CalendarView tasks={tasks} />
+              )}
             </div>
           )}
         </div>

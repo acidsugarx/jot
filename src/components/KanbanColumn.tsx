@@ -3,16 +3,17 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { GripVertical, Trash2 } from 'lucide-react';
-import { Task, KanbanColumn as KanbanColumnType } from '@/types';
-import { KanbanTaskCard } from './KanbanTaskCard';
+import { KanbanColumn as KanbanColumnType } from '@/types';
+import { KanbanTaskCard, CardTask } from './KanbanTaskCard';
 import { useTaskStore } from '@/store/use-task-store';
 
 interface ColumnProps {
   column: KanbanColumnType;
-  tasks: Task[];
+  tasks: CardTask[];
+  readOnly?: boolean;
 }
 
-export function KanbanColumn({ column, tasks }: ColumnProps) {
+export function KanbanColumn({ column, tasks, readOnly }: ColumnProps) {
   const { updateColumn, deleteColumn } = useTaskStore();
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(column.name);
@@ -72,18 +73,20 @@ export function KanbanColumn({ column, tasks }: ColumnProps) {
     >
       {/* Header */}
       <div className="group/header flex h-8 items-center gap-1 border-b border-zinc-800/30 px-2">
-        {/* Drag handle */}
-        <button
-          {...attributes}
-          {...listeners}
-          type="button"
-          className="shrink-0 cursor-grab p-0.5 text-zinc-700 hover:text-zinc-500 active:cursor-grabbing transition-colors"
-        >
-          <GripVertical className="h-3 w-3" />
-        </button>
+        {/* Drag handle — hidden in read-only (Yougile) mode */}
+        {!readOnly && (
+          <button
+            {...attributes}
+            {...listeners}
+            type="button"
+            className="shrink-0 cursor-grab p-0.5 text-zinc-700 hover:text-zinc-500 active:cursor-grabbing transition-colors"
+          >
+            <GripVertical className="h-3 w-3" />
+          </button>
+        )}
 
-        {/* Column name — double-click to rename */}
-        {isRenaming ? (
+        {/* Column name — double-click to rename (local only) */}
+        {!readOnly && isRenaming ? (
           <input
             ref={renameRef}
             type="text"
@@ -98,8 +101,8 @@ export function KanbanColumn({ column, tasks }: ColumnProps) {
           />
         ) : (
           <span
-            onDoubleClick={() => setIsRenaming(true)}
-            title="Double-click to rename"
+            onDoubleClick={() => { if (!readOnly) setIsRenaming(true); }}
+            title={readOnly ? undefined : 'Double-click to rename'}
             className="min-w-0 flex-1 truncate font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600 cursor-default select-none"
           >
             {column.name}
@@ -109,8 +112,8 @@ export function KanbanColumn({ column, tasks }: ColumnProps) {
         {/* Task count */}
         <span className="shrink-0 font-mono text-[10px] text-zinc-700">{tasks.length}</span>
 
-        {/* Delete (only shown when column is empty) */}
-        {tasks.length === 0 && (
+        {/* Delete (only shown when column is empty, local only) */}
+        {!readOnly && tasks.length === 0 && (
           <button
             type="button"
             onClick={handleDelete}

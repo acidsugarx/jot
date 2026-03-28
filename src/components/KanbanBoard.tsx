@@ -13,31 +13,50 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, arrayMove } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import { KanbanColumn } from './KanbanColumn';
-import { KanbanTaskCard } from './KanbanTaskCard';
+import { KanbanTaskCard, CardTask } from './KanbanTaskCard';
 import { Task, KanbanColumn as KanbanColumnType } from '@/types';
 import { useTaskStore } from '@/store/use-task-store';
+import { useYougileStore } from '@/store/use-yougile-store';
 
-export function KanbanBoard() {
+interface KanbanBoardProps {
+  // When provided, board operates in Yougile mode (read-only columns, external move)
+  yougileColumns?: KanbanColumnType[];
+  yougileTasksByColumn?: Map<string, CardTask[]>;
+}
+
+export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoardProps = {}) {
   const { tasks, columns, fetchColumns, updateTaskStatus, createColumn, reorderColumns } = useTaskStore();
+  const yougileStore = useYougileStore();
 
-  // Local column order for optimistic drag-to-reorder
+  const isYougile = !!(yougileColumns && yougileTasksByColumn);
+
+  // Local column order for optimistic drag-to-reorder (local mode only)
   const [localColumns, setLocalColumns] = useState<KanbanColumnType[]>([]);
-  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [activeTask, setActiveTask] = useState<CardTask | null>(null);
   const [activeColumn, setActiveColumn] = useState<KanbanColumnType | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
   const addInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    void fetchColumns();
-  }, [fetchColumns]);
+    if (!isYougile) {
+      void fetchColumns();
+    }
+  }, [fetchColumns, isYougile]);
 
   // Keep local order in sync when store updates (but not during drag)
   useEffect(() => {
-    if (!activeColumn && !activeTask) {
+    if (!isYougile && !activeColumn && !activeTask) {
       setLocalColumns(columns);
     }
-  }, [columns, activeColumn, activeTask]);
+  }, [columns, activeColumn, activeTask, isYougile]);
+
+  // Sync Yougile columns into localColumns
+  useEffect(() => {
+    if (isYougile && yougileColumns) {
+      setLocalColumns(yougileColumns);
+    }
+  }, [isYougile, yougileColumns]);
 
   useEffect(() => {
     if (isAddingColumn) {
@@ -55,7 +74,7 @@ export function KanbanBoard() {
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
     if (active.data.current?.type === 'Task') {
-      setActiveTask(active.data.current.task as Task);
+      setActiveTask(active.data.current.task as CardTask);
     } else if (active.data.current?.type === 'Column') {
       setActiveColumn(active.data.current.column as KanbanColumnType);
     }
@@ -75,8 +94,8 @@ export function KanbanBoard() {
     const isActiveTask = active.data.current?.type === 'Task';
     const isOverColumn = over.data.current?.type === 'Column';
 
-    // Column reorder
-    if (isActiveColumn && isOverColumn) {
+    // Column reorder — only in local mode
+    if (!isYougile && isActiveColumn && isOverColumn) {
       const from = localColumns.findIndex((c) => c.id === activeId);
       const to = localColumns.findIndex((c) => c.id === overId);
       const reordered = arrayMove(localColumns, from, to);
@@ -87,10 +106,17 @@ export function KanbanBoard() {
 
     // Task dropped onto a column header
     if (isActiveTask && isOverColumn) {
-      const draggedTask = active.data.current?.task as Task;
+      const draggedTask = active.data.current?.task as CardTask;
       const targetCol = localColumns.find((c) => c.id === overId);
-      if (targetCol && draggedTask.status !== targetCol.statusKey) {
-        void updateTaskStatus({ id: draggedTask.id, status: targetCol.statusKey });
+      if (!targetCol) return;
+
+      if (isYougile) {
+        void yougileStore.moveTask(draggedTask.id, targetCol.id);
+      } else {
+        const localTask = draggedTask as Task;
+        if (localTask.status !== targetCol.statusKey) {
+          void updateTaskStatus({ id: localTask.id, status: targetCol.statusKey });
+        }
       }
     }
   };
@@ -122,57 +148,66 @@ export function KanbanBoard() {
       >
         <div className="flex gap-3">
           <SortableContext items={columnIds}>
-            {localColumns.map((col) => (
-              <KanbanColumn
-                key={col.id}
-                column={col}
-                tasks={tasks.filter((t) => t.status === col.statusKey)}
-              />
-            ))}
+            {localColumns.map((col) => {
+              const colTasks: CardTask[] = isYougile
+                ? (yougileTasksByColumn!.get(col.id) ?? [])
+                : tasks.filter((t) => t.status === col.statusKey);
+
+              return (
+                <KanbanColumn
+                  key={col.id}
+                  column={col}
+                  tasks={colTasks}
+                  readOnly={isYougile}
+                />
+              );
+            })}
           </SortableContext>
 
-          {/* Add column */}
-          {isAddingColumn ? (
-            <div className="flex w-[260px] shrink-0 flex-col rounded-md border border-zinc-700/40 bg-[#141414] p-2">
-              <input
-                ref={addInputRef}
-                type="text"
-                value={newColumnName}
-                onChange={(e) => setNewColumnName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { void handleAddColumn(); }
-                  if (e.key === 'Escape') { setIsAddingColumn(false); setNewColumnName(''); }
-                }}
-                onBlur={() => void handleAddColumn()}
-                placeholder="Column name…"
-                className="rounded bg-zinc-900/60 px-2 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-700 outline-none focus:ring-1 focus:ring-cyan-500/30"
-              />
-              <div className="mt-1.5 flex gap-1">
-                <button
-                  type="button"
-                  onMouseDown={(e) => { e.preventDefault(); void handleAddColumn(); }}
-                  className="rounded px-2 py-1 text-xs text-cyan-400 hover:bg-zinc-800 transition-colors"
-                >
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setIsAddingColumn(false); setNewColumnName(''); }}
-                  className="rounded px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-800 transition-colors"
-                >
-                  Cancel
-                </button>
+          {/* Add column — local mode only */}
+          {!isYougile && (
+            isAddingColumn ? (
+              <div className="flex w-[260px] shrink-0 flex-col rounded-md border border-zinc-700/40 bg-[#141414] p-2">
+                <input
+                  ref={addInputRef}
+                  type="text"
+                  value={newColumnName}
+                  onChange={(e) => setNewColumnName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { void handleAddColumn(); }
+                    if (e.key === 'Escape') { setIsAddingColumn(false); setNewColumnName(''); }
+                  }}
+                  onBlur={() => void handleAddColumn()}
+                  placeholder="Column name…"
+                  className="rounded bg-zinc-900/60 px-2 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-700 outline-none focus:ring-1 focus:ring-cyan-500/30"
+                />
+                <div className="mt-1.5 flex gap-1">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); void handleAddColumn(); }}
+                    className="rounded px-2 py-1 text-xs text-cyan-400 hover:bg-zinc-800 transition-colors"
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setIsAddingColumn(false); setNewColumnName(''); }}
+                    className="rounded px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setIsAddingColumn(true)}
-              className="flex h-9 w-[260px] shrink-0 items-center gap-2 rounded-md border border-dashed border-zinc-800 px-3 text-zinc-600 hover:border-zinc-700 hover:text-zinc-400 transition-colors"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span className="text-sm">Add column</span>
-            </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsAddingColumn(true)}
+                className="flex h-9 w-[260px] shrink-0 items-center gap-2 rounded-md border border-dashed border-zinc-800 px-3 text-zinc-600 hover:border-zinc-700 hover:text-zinc-400 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span className="text-sm">Add column</span>
+              </button>
+            )
           )}
         </div>
 

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTaskStore } from '@/store/use-task-store';
 import { Task, TaskPriority } from '@/types';
+import { YougileTask } from '@/types/yougile';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -21,33 +22,84 @@ function toLocalDateKey(isoString: string): string {
   return `${year}-${month}-${day}`;
 }
 
+function tsToLocalDateKey(ts: number): string {
+  const d = new Date(ts);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function todayKey(): string {
   return toLocalDateKey(new Date().toISOString());
 }
 
-interface Props {
-  tasks: Task[];
+// Normalised task shape used internally by the calendar
+interface CalendarTask {
+  id: string;
+  title: string;
+  dateKey: string | null;
+  isDone: boolean;
+  priority?: string;
+  isYougile?: boolean;
 }
 
-export function CalendarView({ tasks }: Props) {
+function normaliseLocalTask(t: Task): CalendarTask {
+  return {
+    id: t.id,
+    title: t.title,
+    dateKey: t.dueDate ? toLocalDateKey(t.dueDate) : null,
+    isDone: t.status === 'done',
+    priority: t.priority,
+    isYougile: false,
+  };
+}
+
+function normaliseYougileTask(t: YougileTask): CalendarTask {
+  return {
+    id: t.id,
+    title: t.title,
+    dateKey: t.deadline?.deadline != null ? tsToLocalDateKey(t.deadline.deadline) : null,
+    isDone: t.completed,
+    isYougile: true,
+  };
+}
+
+interface Props {
+  tasks: Task[];
+  yougileMode?: boolean;
+  yougileTasksRaw?: YougileTask[];
+}
+
+export function CalendarView({ tasks, yougileMode, yougileTasksRaw }: Props) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth()); // 0-indexed
 
   const { selectTask, setIsEditorOpen } = useTaskStore();
 
+  // Normalise to a single list of CalendarTask
+  const allTasks: CalendarTask[] = useMemo(() => {
+    if (yougileMode && yougileTasksRaw) {
+      return yougileTasksRaw
+        .filter((t) => !t.archived && !t.deleted)
+        .map(normaliseYougileTask);
+    }
+    return tasks.map(normaliseLocalTask);
+  }, [tasks, yougileMode, yougileTasksRaw]);
+
   // Group tasks by date key
   const tasksByDate = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    for (const task of tasks) {
-      if (!task.dueDate || task.status === 'archived') continue;
-      const key = toLocalDateKey(task.dueDate);
-      const existing = map.get(key);
+    const map = new Map<string, CalendarTask[]>();
+    for (const task of allTasks) {
+      if (!task.dateKey) continue;
+      // For local tasks, skip archived
+      const existing = map.get(task.dateKey);
       if (existing) existing.push(task);
-      else map.set(key, [task]);
+      else map.set(task.dateKey, [task]);
     }
     return map;
-  }, [tasks]);
+  }, [allTasks]);
 
   const prevMonth = () => {
     if (month === 0) { setMonth(11); setYear((y) => y - 1); }
@@ -69,9 +121,9 @@ export function CalendarView({ tasks }: Props) {
   const tKey = todayKey();
 
   // Tasks without a due date (shown in sidebar)
-  const unscheduled = tasks.filter((t) => !t.dueDate && t.status !== 'archived' && t.status !== 'done');
+  const unscheduled = allTasks.filter((t) => !t.dateKey && !t.isDone);
 
-  const handleTaskClick = (e: React.MouseEvent, task: Task) => {
+  const handleTaskClick = (e: React.MouseEvent, task: CalendarTask) => {
     e.stopPropagation();
     selectTask(task.id);
     setIsEditorOpen(true);
@@ -140,15 +192,14 @@ export function CalendarView({ tasks }: Props) {
                 {/* Task pills */}
                 <div className="flex flex-col gap-0.5 overflow-hidden">
                   {dayTasks.slice(0, 3).map((task) => {
-                    const dot = priorityDot[task.priority as TaskPriority];
-                    const isDone = task.status === 'done';
+                    const dot = task.priority ? priorityDot[task.priority as TaskPriority] : null;
                     return (
                       <button
                         key={task.id}
                         type="button"
                         onClick={(e) => handleTaskClick(e, task)}
                         className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left transition-colors hover:bg-zinc-700/60 ${
-                          isDone ? 'opacity-40' : ''
+                          task.isDone ? 'opacity-40' : ''
                         }`}
                       >
                         {dot ? (
@@ -157,7 +208,7 @@ export function CalendarView({ tasks }: Props) {
                           <div className="w-1 shrink-0" />
                         )}
                         <span className={`truncate font-sans text-[10px] leading-tight ${
-                          isDone ? 'line-through text-zinc-600' : 'text-zinc-400 group-hover:text-zinc-200'
+                          task.isDone ? 'line-through text-zinc-600' : 'text-zinc-400 group-hover:text-zinc-200'
                         }`}>
                           {task.title}
                         </span>
@@ -187,7 +238,7 @@ export function CalendarView({ tasks }: Props) {
           </div>
           <div className="flex-1 overflow-y-auto">
             {unscheduled.map((task) => {
-              const dot = priorityDot[task.priority as TaskPriority];
+              const dot = task.priority ? priorityDot[task.priority as TaskPriority] : null;
               return (
                 <button
                   key={task.id}
