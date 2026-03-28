@@ -1,5 +1,5 @@
-use reqwest::{Client, StatusCode};
 use super::models::*;
+use reqwest::{Client, StatusCode};
 
 const BASE_URL: &str = "https://yougile.com/api-v2";
 
@@ -30,7 +30,11 @@ impl YougileClient {
         resp.json().await.map_err(|e| format!("Parse error: {e}"))
     }
 
-    pub async fn create_api_key(login: &str, password: &str, company_id: &str) -> Result<String, String> {
+    pub async fn create_api_key(
+        login: &str,
+        password: &str,
+        company_id: &str,
+    ) -> Result<String, String> {
         let http = Client::new();
         let resp = http
             .post(format!("{BASE_URL}/auth/keys"))
@@ -43,7 +47,8 @@ impl YougileClient {
             .await
             .map_err(|e| format!("Network error: {e}"))?;
         Self::check_status(&resp)?;
-        let key_resp: AuthKeyResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+        let key_resp: AuthKeyResponse =
+            resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
         Ok(key_resp.key)
     }
 
@@ -56,21 +61,25 @@ impl YougileClient {
     // --- Boards ---
 
     pub async fn get_boards(&self, project_id: &str) -> Result<Vec<YougileBoard>, String> {
-        self.get_list_with_param("/boards", "projectId", project_id).await
+        self.get_list_with_param("/boards", "projectId", project_id)
+            .await
     }
 
     // --- Columns ---
 
     pub async fn get_columns(&self, board_id: &str) -> Result<Vec<YougileColumn>, String> {
-        self.get_list_with_param("/columns", "boardId", board_id).await
+        self.get_list_with_param("/columns", "boardId", board_id)
+            .await
     }
 
     // --- Tasks ---
 
     pub async fn get_tasks(&self, column_id: &str) -> Result<Vec<YougileTask>, String> {
-        self.get_list_with_param("/tasks", "columnId", column_id).await
+        self.get_list_with_param("/tasks", "columnId", column_id)
+            .await
     }
 
+    #[allow(dead_code)]
     pub async fn get_task(&self, task_id: &str) -> Result<YougileTask, String> {
         self.get(&format!("/tasks/{task_id}")).await
     }
@@ -79,7 +88,11 @@ impl YougileClient {
         self.post("/tasks", payload).await
     }
 
-    pub async fn update_task(&self, task_id: &str, payload: &UpdateYougileTask) -> Result<YougileTask, String> {
+    pub async fn update_task(
+        &self,
+        task_id: &str,
+        payload: &UpdateYougileTask,
+    ) -> Result<YougileTask, String> {
         self.put(&format!("/tasks/{task_id}"), payload).await
     }
 
@@ -98,7 +111,8 @@ impl YougileClient {
             color: None,
             checklists: None,
         };
-        self.put::<_, serde_json::Value>(&format!("/tasks/{task_id}"), &payload).await?;
+        self.put::<_, serde_json::Value>(&format!("/tasks/{task_id}"), &payload)
+            .await?;
         Ok(())
     }
 
@@ -123,14 +137,19 @@ impl YougileClient {
     // --- Users ---
 
     pub async fn get_users(&self, project_id: &str) -> Result<Vec<YougileUser>, String> {
-        self.get_list_with_param("/users", "projectId", project_id).await
+        self.get_list_with_param("/users", "projectId", project_id)
+            .await
     }
 
     // --- Chat Subscribers ---
 
+    #[allow(dead_code)]
     pub async fn get_task_chat_subscribers(&self, task_id: &str) -> Result<Vec<String>, String> {
         let resp = self
-            .authed_request(reqwest::Method::GET, &format!("/tasks/{task_id}/chat-subscribers"))
+            .authed_request(
+                reqwest::Method::GET,
+                &format!("/tasks/{task_id}/chat-subscribers"),
+            )
             .send()
             .await
             .map_err(|e| format!("Network error: {e}"))?;
@@ -138,7 +157,11 @@ impl YougileClient {
         let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
         Ok(body
             .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
@@ -156,7 +179,8 @@ impl YougileClient {
                 .await
                 .map_err(|e| format!("Network error: {e}"))?;
             Self::check_status(&resp)?;
-            let page: YougileListResponse<T> = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+            let page: YougileListResponse<T> =
+                resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
             let count = page.content.len();
             all.extend(page.content);
             if count < limit as usize {
@@ -188,7 +212,8 @@ impl YougileClient {
                 .await
                 .map_err(|e| format!("Network error: {e}"))?;
             Self::check_status(&resp)?;
-            let page: YougileListResponse<T> = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+            let page: YougileListResponse<T> =
+                resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
             let count = page.content.len();
             all.extend(page.content);
             if count < limit as usize {
@@ -199,6 +224,7 @@ impl YougileClient {
         Ok(all)
     }
 
+    #[allow(dead_code)]
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let resp = self
             .authed_request(reqwest::Method::GET, path)

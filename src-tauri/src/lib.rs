@@ -396,7 +396,20 @@ pub fn run() {
             delete_tag,
             get_task_tags,
             set_task_tags,
-            get_subtasks
+            get_subtasks,
+            yougile::commands::yougile_login,
+            yougile::commands::yougile_add_account,
+            yougile::commands::yougile_remove_account,
+            yougile::commands::yougile_get_accounts,
+            yougile::commands::yougile_get_projects,
+            yougile::commands::yougile_get_boards,
+            yougile::commands::yougile_get_columns,
+            yougile::commands::yougile_get_users,
+            yougile::commands::yougile_get_tasks,
+            yougile::commands::yougile_create_task,
+            yougile::commands::yougile_update_task,
+            yougile::commands::yougile_move_task,
+            yougile::commands::yougile_delete_task
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
