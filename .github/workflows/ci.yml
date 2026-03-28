@@ -76,9 +76,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Update npm
-        run: npm install -g npm@latest
-
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
