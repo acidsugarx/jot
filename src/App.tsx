@@ -915,7 +915,7 @@ function App() {
                     key={board.id}
                     value={`board-${board.id}`}
                     onSelect={() => {
-                      setYougileContext({ boardId: board.id, boardName: board.name });
+                      setYougileContext({ boardId: board.id, boardName: board.title });
                       void fetchYougileColumns(board.id);
                       setActiveSource('yougile');
                       setPickerMode('none');
@@ -924,7 +924,7 @@ function App() {
                   >
                     <div className="flex items-center gap-2.5">
                       <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
-                      <span className="text-zinc-200">{board.name}</span>
+                      <span className="text-zinc-200">{board.title}</span>
                     </div>
                     {yougileContext.boardId === board.id && <Check className="h-3 w-3 text-cyan-400" />}
                   </Command.Item>

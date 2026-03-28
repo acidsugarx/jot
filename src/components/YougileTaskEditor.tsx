@@ -32,12 +32,12 @@ function unixMsToDateInput(ms: number | null | undefined): string {
   }
 }
 
-function dateInputToUnixMs(value: string): number | null {
-  if (!value) return null;
+function dateInputToUnixMs(value: string): number | undefined {
+  if (!value) return undefined;
   try {
     return new Date(value + 'T00:00:00').getTime();
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -190,26 +190,26 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
     setDeadlineValue(value);
     const ms = dateInputToUnixMs(value);
     void updateTask(task.id, {
-      deadline: { deadline: ms, type: task.deadline?.type ?? null },
+      deadline: { deadline: ms, withTime: task.deadline?.withTime ?? false },
     });
   };
 
   const handleClearDeadline = () => {
     setDeadlineValue('');
-    void updateTask(task.id, { deadline: { deadline: null, type: null } });
+    void updateTask(task.id, { deadline: { deadline: undefined, withTime: false } });
   };
 
   const handleToggleChecklistItem = (
     clIdx: number,
     itemIdx: number,
-    isCompleted: boolean
+    completed: boolean
   ) => {
     const updated = checklists.map((cl, ci) => {
       if (ci !== clIdx) return cl;
       return {
         ...cl,
         items: cl.items.map((item, ii) =>
-          ii === itemIdx ? { ...item, isCompleted } : item
+          ii === itemIdx ? { ...item, completed } : item
         ),
       };
     });
@@ -228,7 +228,7 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
 
   const totalChecklistItems = checklists.reduce((sum, cl) => sum + cl.items.length, 0);
   const completedChecklistItems = checklists.reduce(
-    (sum, cl) => sum + cl.items.filter((i) => i.isCompleted).length,
+    (sum, cl) => sum + cl.items.filter((i) => i.completed).length,
     0
   );
 
@@ -452,10 +452,10 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
                     className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2 py-1"
                   >
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 font-mono text-[9px] text-zinc-400">
-                      {user?.realName?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
+                      {user?.name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
                     </div>
                     <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-400">
-                      {user?.realName ?? user?.email ?? userId}
+                      {user?.name ?? user?.email ?? userId}
                     </span>
                   </div>
                 );
@@ -499,16 +499,16 @@ export function YougileTaskEditor({ task, onClose }: YougileTaskEditorProps) {
                       <button
                         key={itemIdx}
                         type="button"
-                        onClick={() => handleToggleChecklistItem(clIdx, itemIdx, !item.isCompleted)}
+                        onClick={() => handleToggleChecklistItem(clIdx, itemIdx, !item.completed)}
                         className="flex items-start gap-2 rounded px-1 py-0.5 text-left hover:bg-zinc-800/40 transition-colors"
                       >
-                        {item.isCompleted ? (
+                        {item.completed ? (
                           <CheckSquare className="mt-px h-3 w-3 shrink-0 text-cyan-400" />
                         ) : (
                           <Square className="mt-px h-3 w-3 shrink-0 text-zinc-600" />
                         )}
                         <span className={`text-xs leading-relaxed ${
-                          item.isCompleted ? 'text-zinc-600 line-through' : 'text-zinc-400'
+                          item.completed ? 'text-zinc-600 line-through' : 'text-zinc-400'
                         }`}>
                           {item.title}
                         </span>

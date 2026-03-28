@@ -64,6 +64,10 @@ Located in `src-tauri/src/`:
 | `db.rs` | SQLite CRUD operations, database migrations, zettel note creation |
 | `models.rs` | Type definitions (Task, TaskStatus, TaskPriority, AppSettings) |
 | `parser.rs` | NLP parser for raw input (extracts #tags, !priority, dates, @zettel) |
+| `yougile/client.rs` | HTTP client (reqwest), all Yougile API calls with pagination |
+| `yougile/models.rs` | Yougile API DTOs |
+| `yougile/auth.rs` | Login flow, API key management |
+| `yougile/commands.rs` | Tauri IPC command handlers for Yougile operations |
 
 ### Frontend (React + TypeScript)
 
@@ -80,6 +84,13 @@ Located in `src/`. Uses `@` path alias mapped to `src/` (configured in `vite.con
 | `components/CalendarView.tsx` | Month-view calendar with task dots and day detail |
 | `components/TaskEditorPane.tsx` | Slide-in panel for inline editing (title, description, status, priority, due date, tags) |
 | `types.ts` | TypeScript interfaces matching Rust backend |
+| `types/yougile.ts` | TypeScript interfaces for Yougile entities |
+| `store/use-yougile-store.ts` | Zustand store for Yougile state, navigation, CRUD |
+| `components/SourceSwitcher.tsx` | Local/Yougile toggle + org/project/board breadcrumb |
+| `components/YougileTaskEditor.tsx` | Task editor for Yougile-specific fields |
+| `components/ChecklistEditor.tsx` | Checklist UI (shared by local + Yougile) |
+| `components/SubtaskList.tsx` | Subtask list UI (shared by local + Yougile) |
+| `components/AccountsSettings.tsx` | Yougile accounts management tab in Settings |
 | `components/ui/` | shadcn/ui components (Badge, Button, ScrollArea, Tabs) |
 
 ## Key Patterns
@@ -262,6 +273,25 @@ When `@zettel` is in input:
 4. Returns absolute path, stored in `task.linked_note_path`
 5. Clicking "Note" button opens via OS default (Obsidian, Neovim, etc.)
 
+### Yougile Integration
+
+Jot supports Yougile as a live remote data source. When enabled (Settings > General > Yougile Integration), users can switch between local SQLite tasks and Yougile tasks.
+
+**Architecture:**
+- All Yougile HTTP calls live in `src-tauri/src/yougile/` (Rust)
+- Frontend uses a separate Zustand store (`use-yougile-store.ts`)
+- Separate `yougile_*` IPC commands — not shared with local commands
+
+**Data flow:** Always-live — no local cache. Every view mount fetches from the API. Optimistic UI for mutations with revert on failure.
+
+**Auth:** JWT API keys minted via email/password, stored in `yougile_accounts` SQLite table. Keys don't expire.
+
+**Kill switch:** `settings.yougile_enabled` — off by default. Hides all Yougile UI when disabled.
+
+**IPC commands:**
+- Yougile: `yougile_login`, `yougile_add_account`, `yougile_remove_account`, `yougile_get_accounts`, `yougile_get_projects`, `yougile_get_boards`, `yougile_get_columns`, `yougile_get_users`, `yougile_get_tasks`, `yougile_create_task`, `yougile_update_task`, `yougile_move_task`, `yougile_delete_task`
+- Local enhancements: `get_checklists`, `create_checklist`, `add_checklist_item`, `update_checklist_item`, `delete_checklist`, `delete_checklist_item`, `get_tags`, `create_tag`, `update_tag`, `delete_tag`, `get_task_tags`, `set_task_tags`, `get_subtasks`
+
 ## Database Schema
 
 SQLite located at OS AppData directory (`jot.db`):
@@ -295,6 +325,42 @@ CREATE TABLE kanban_columns (
     position INTEGER NOT NULL DEFAULT 0
 );
 -- Seeded with defaults: (To Do/todo), (In Progress/in_progress), (Done/done)
+
+CREATE TABLE checklists (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE checklist_items (
+    id TEXT PRIMARY KEY,
+    checklist_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#6b7280'
+);
+
+CREATE TABLE task_tags (
+    task_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY (task_id, tag_id)
+);
+
+CREATE TABLE yougile_accounts (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    company_id TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 ```
 
 ## Common Issues

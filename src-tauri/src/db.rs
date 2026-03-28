@@ -422,7 +422,11 @@ pub fn update_yougile_enabled(
         .lock()
         .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
 
-    save_setting(&connection, "yougile_enabled", Some(if enabled { "true" } else { "false" }))?;
+    save_setting(
+        &connection,
+        "yougile_enabled",
+        Some(if enabled { "true" } else { "false" }),
+    )?;
 
     load_settings(&connection)
 }

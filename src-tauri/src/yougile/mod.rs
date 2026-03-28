@@ -1,4 +1,4 @@
-pub mod models;
-pub mod client;
 pub mod auth;
+pub mod client;
 pub mod commands;
+pub mod models;

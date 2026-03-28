@@ -222,7 +222,7 @@ export default function Settings() {
                         void invoke<AppSettings>('update_yougile_enabled', { enabled: newValue });
                       }
                       // If disabling while on accounts tab, go back to general
-                      if (!newValue && activeTab === 'accounts') {
+                      if (!newValue && (activeTab as Tab) === 'accounts') {
                         setActiveTab('general');
                       }
                     }}
