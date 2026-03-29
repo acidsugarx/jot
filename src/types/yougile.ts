@@ -173,6 +173,16 @@ export interface UpdateYougileTask {
   timer?: YougileTimer;
 }
 
+export interface YougileChatMessage {
+  id: number;
+  fromUserId: string;
+  text: string;
+  textHtml?: string;
+  label?: string;
+  editTimestamp?: number;
+  deleted: boolean;
+}
+
 export interface YougileContext {
   accountId: string | null;
   projectId: string | null;

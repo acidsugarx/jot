@@ -472,12 +472,26 @@ function App() {
     return [...activeTasks.map((task) => ({ id: task.id, label: task.title })), ...actionItems];
   }, [activeTasks, hasQuery, query, actionItems]);
 
+  // Picker items for vim navigation inside org/project/board pickers
+  const pickerItems = useMemo((): { id: string }[] => {
+    if (pickerMode === 'org') return accounts;
+    if (pickerMode === 'project') return projects;
+    if (pickerMode === 'board') return boards;
+    return [];
+  }, [pickerMode, accounts, projects, boards]);
+
+  // Reset selection when picker mode or its items change
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [pickerMode]);
+
   // Clamp selectedIndex when items change
   useEffect(() => {
-    if (selectedIndex >= normalModeItems.length) {
-      setSelectedIndex(Math.max(0, normalModeItems.length - 1));
+    const items = pickerMode !== 'none' ? pickerItems : normalModeItems;
+    if (selectedIndex >= items.length) {
+      setSelectedIndex(Math.max(0, items.length - 1));
     }
-  }, [normalModeItems.length, selectedIndex]);
+  }, [normalModeItems, pickerItems, pickerMode, selectedIndex]);
 
   useEffect(() => {
     void fetchSettings();
@@ -855,6 +869,54 @@ function App() {
       const tag = document.activeElement?.tagName;
       if (tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+      // Picker mode — vim keys navigate org/project/board lists
+      if (pickerMode !== 'none') {
+        switch (e.key) {
+          case 'j':
+          case 'ArrowDown':
+            e.preventDefault();
+            setSelectedIndex((i) => Math.min(i + 1, pickerItems.length - 1));
+            return;
+          case 'k':
+          case 'ArrowUp':
+            e.preventDefault();
+            setSelectedIndex((i) => Math.max(i - 1, 0));
+            return;
+          case 'g':
+            e.preventDefault();
+            setSelectedIndex(0);
+            return;
+          case 'G':
+            e.preventDefault();
+            setSelectedIndex(pickerItems.length - 1);
+            return;
+          case 'Enter':
+          case 'e': {
+            e.preventDefault();
+            const pick = pickerItems[selectedIndex];
+            if (!pick) return;
+            if (pickerMode === 'org') void handleSelectAccount(pick.id);
+            else if (pickerMode === 'project') void handleSelectProject(pick.id);
+            else if (pickerMode === 'board') void handleSelectBoard(pick.id);
+            return;
+          }
+          case 'Escape':
+            e.preventDefault();
+            if (pickerMode === 'board') setPickerMode('project');
+            else if (pickerMode === 'project') setPickerMode('org');
+            else setPickerMode('none');
+            return;
+          case 'i':
+            e.preventDefault();
+            setMode('insert');
+            requestAnimationFrame(() => inputRef.current?.focus());
+            return;
+          default:
+            if (!e.metaKey && !e.ctrlKey) e.preventDefault();
+            return;
+        }
+      }
+
       const item = normalModeItems[selectedIndex];
 
       switch (e.key) {
@@ -948,9 +1010,14 @@ function App() {
     handleCreateTask,
     handleDeleteTask,
     handleOpenNote,
+    handleSelectAccount,
+    handleSelectBoard,
+    handleSelectProject,
     handleToggleStatus,
     mode,
     normalModeItems,
+    pickerItems,
+    pickerMode,
     selectedIndex,
   ]);
 
@@ -1153,12 +1220,16 @@ function App() {
                 heading={pickerMode === 'org' ? 'Select Organization' : pickerMode === 'project' ? 'Select Project' : 'Select Board'}
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
-                {pickerMode === 'org' && accounts.map((account) => (
+                {pickerMode === 'org' && accounts.map((account, idx) => (
                   <Command.Item
                     key={account.id}
                     value={`org-${account.id}`}
                     onSelect={() => void handleSelectAccount(account.id)}
-                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      mode === 'normal' && selectedIndex === idx
+                        ? 'bg-zinc-900/80'
+                        : 'data-[selected=true]:bg-zinc-900/80'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <Globe className="h-3.5 w-3.5 text-zinc-500" />
@@ -1177,12 +1248,16 @@ function App() {
                     No connected Yougile accounts. Open Settings and add one first.
                   </div>
                 )}
-                {pickerMode === 'project' && projects.map((project) => (
+                {pickerMode === 'project' && projects.map((project, idx) => (
                   <Command.Item
                     key={project.id}
                     value={`project-${project.id}`}
                     onSelect={() => void handleSelectProject(project.id)}
-                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      mode === 'normal' && selectedIndex === idx
+                        ? 'bg-zinc-900/80'
+                        : 'data-[selected=true]:bg-zinc-900/80'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />
@@ -1196,12 +1271,16 @@ function App() {
                     No projects found in this organization.
                   </div>
                 )}
-                {pickerMode === 'board' && boards.map((board) => (
+                {pickerMode === 'board' && boards.map((board, idx) => (
                   <Command.Item
                     key={board.id}
                     value={`board-${board.id}`}
                     onSelect={() => void handleSelectBoard(board.id)}
-                    className="flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors data-[selected=true]:bg-zinc-900/80"
+                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      mode === 'normal' && selectedIndex === idx
+                        ? 'bg-zinc-900/80'
+                        : 'data-[selected=true]:bg-zinc-900/80'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5">
                       <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />

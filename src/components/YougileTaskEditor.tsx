@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown } from 'lucide-react';
+import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn } from 'lucide-react';
 import { formatYougileTrackedHours, getYougileTaskColorValue, YOUGILE_TASK_COLOR_OPTIONS } from '@/lib/yougile';
 import { escapeHtml } from '@/lib/formatting';
 import { useYougileStore } from '@/store/use-yougile-store';
@@ -122,6 +122,12 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     fetchStringStickers,
     fetchSprintStickers,
     yougileContext,
+    chatMessages,
+    chatLoading,
+    companyUsers,
+    fetchChatMessages,
+    sendChatMessage,
+    fetchCompanyUsers,
   } = useYougileStore();
 
   const [title, setTitle] = useState(task.title);
@@ -142,9 +148,31 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     normalizeStickerMap(task.stickers)
   );
 
+  const [showChat, setShowChat] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
   const taskId = task.id;
+
+  // Fetch chat when opening the chat panel
+  useEffect(() => {
+    if (showChat) {
+      void fetchChatMessages(taskId);
+      void fetchCompanyUsers();
+    }
+  }, [showChat, taskId, fetchChatMessages, fetchCompanyUsers]);
+
+  // Scroll chat to bottom when messages update
+  useEffect(() => {
+    if (showChat) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, showChat]);
 
   // Sync when task changes externally
   useEffect(() => {
@@ -307,6 +335,18 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
       },
     });
   };
+
+  const handleSendMessage = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    setChatSending(true);
+    const ok = await sendChatMessage(taskId, text);
+    setChatSending(false);
+    if (ok) {
+      setChatInput('');
+      requestAnimationFrame(() => chatInputRef.current?.focus());
+    }
+  }, [chatInput, sendChatMessage, taskId]);
 
   const currentColumn = columns.find((c) => c.id === columnId);
   const colorOption = YOUGILE_TASK_COLOR_OPTIONS.find((option) => option.value === color)
@@ -831,10 +871,160 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
         )}
       </div>
 
+      {/* Chat / Discussion */}
+      {showChat && (
+        <div className="flex min-h-0 flex-1 flex-col border-t border-zinc-800/40">
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            {chatLoading && chatMessages.length === 0 ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-600" />
+              </div>
+            ) : chatMessages.length === 0 ? (
+              <div className="py-6 text-center font-mono text-[10px] text-zinc-700">
+                No messages yet
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {chatMessages.map((msg) => {
+                  const user = users.find((u) => u.id === msg.fromUserId)
+                    ?? companyUsers.find((u) => u.id === msg.fromUserId)
+                    ?? users.find((u) => u.email === msg.fromUserId)
+                    ?? companyUsers.find((u) => u.email === msg.fromUserId);
+                  // Use || not ?? so empty strings fall through
+                  const name = user?.realName
+                    || user?.email?.split('@')[0]
+                    || (msg.fromUserId.includes('@') ? msg.fromUserId.split('@')[0] : null)
+                    || msg.fromUserId.slice(0, 8);
+                  const time = new Date(msg.id).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+                  // Resolve Yougile internal file paths to full URLs
+                  let html = msg.textHtml ?? '';
+                  if (html) {
+                    html = html.replace(
+                      /(?:src|href)="(\/user-data\/[^"]+)"/g,
+                      (_, path) => `src="https://yougile.com${path}"`
+                    );
+                  }
+                  const hasHtml = html && looksLikeHtml(html);
+                  // Also check plain text for file references
+                  const fileMatch = !hasHtml && msg.text.match(
+                    /\/(?:root\/#file:)?\/?(user-data\/[a-f0-9-]+\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg))/i
+                  );
+                  return (
+                    <div key={msg.id} className="group">
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-mono text-[10px] font-medium text-zinc-400">
+                          {name}
+                        </span>
+                        <span className="font-mono text-[9px] text-zinc-700">
+                          {time}
+                        </span>
+                      </div>
+                      {hasHtml ? (
+                        <div
+                          className="prose-jot mt-0.5 text-xs leading-relaxed text-zinc-400 [&_img]:max-w-full [&_img]:max-h-48 [&_img]:rounded [&_img]:my-1 [&_img]:cursor-pointer"
+                          dangerouslySetInnerHTML={{ __html: html }}
+                          onClick={(e) => {
+                            const img = (e.target as HTMLElement).closest('img');
+                            if (img?.src) setPreviewImage(img.src);
+                          }}
+                        />
+                      ) : fileMatch ? (
+                        <div className="mt-0.5">
+                          {msg.text.indexOf('/root/#file:') > 0 && (
+                            <div className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">
+                              {msg.text.slice(0, msg.text.indexOf('/root/#file:')).trim()}
+                            </div>
+                          )}
+                          <div className="group/img relative mt-1 inline-block">
+                            <img
+                              src={`https://yougile.com/${fileMatch[1]!.split('?')[0]}`}
+                              alt=""
+                              className="max-w-full max-h-48 rounded cursor-pointer"
+                              onClick={() => setPreviewImage(`https://yougile.com/${fileMatch[1]!.split('?')[0]}`)}
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setPreviewImage(`https://yougile.com/${fileMatch[1]!.split('?')[0]}`)}
+                              className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover/img:opacity-100"
+                            >
+                              <ZoomIn className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">
+                          {msg.text}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
+          <div className="border-t border-zinc-800/30 px-4 py-2">
+            <div className="flex items-end gap-2">
+              <textarea
+                ref={chatInputRef}
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSendMessage();
+                  }
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setChatInput('');
+                    setShowChat(false);
+                  }
+                }}
+                rows={1}
+                placeholder="Write a message…"
+                className="min-h-[28px] flex-1 resize-none rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-xs text-zinc-300 outline-none placeholder:text-zinc-700 focus:border-zinc-700"
+              />
+              <button
+                type="button"
+                disabled={chatSending || !chatInput.trim()}
+                onClick={() => void handleSendMessage()}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-cyan-500/10 text-cyan-400 transition-colors hover:bg-cyan-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {chatSending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3" />
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="border-t border-zinc-800/40 px-4 py-1.5">
         <div className="flex items-center justify-between font-mono text-[10px] text-zinc-700">
-          <span>{task.id.slice(0, 8)}</span>
+          <div className="flex items-center gap-2">
+            <span>{task.id.slice(0, 8)}</span>
+            <button
+              type="button"
+              onClick={() => setShowChat(!showChat)}
+              className={`flex items-center gap-1 rounded px-1 py-0.5 transition-colors ${
+                showChat
+                  ? 'bg-cyan-500/10 text-cyan-400'
+                  : 'text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400'
+              }`}
+            >
+              <MessageCircle className="h-3 w-3" />
+              <span>Chat</span>
+            </button>
+          </div>
           {task.timestamp && (
             <span>
               {new Date(task.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -842,6 +1032,27 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
           )}
         </div>
       </div>
+
+      {/* Image preview overlay */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-zoom-out"
+          onClick={() => setPreviewImage(null)}
+        >
+          <img
+            src={previewImage}
+            alt="Preview"
+            className="max-h-[90vh] max-w-[90vw] rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            className="absolute top-4 right-4 text-white/70 hover:text-white text-3xl font-light"
+            onClick={() => setPreviewImage(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }

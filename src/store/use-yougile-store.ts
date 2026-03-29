@@ -12,6 +12,7 @@ import type {
   YougileSprintSticker,
   YougileContext,
   YougileCompany,
+  YougileChatMessage,
   CreateYougileTask,
   UpdateYougileTask,
   YougileSyncState,
@@ -100,6 +101,14 @@ interface YougileState {
   updateTask: (taskId: string, payload: UpdateYougileTask) => Promise<YougileTask | null>;
   moveTask: (taskId: string, columnId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
+
+  // Chat
+  chatMessages: YougileChatMessage[];
+  chatLoading: boolean;
+  companyUsers: YougileUser[];
+  fetchChatMessages: (taskId: string) => Promise<void>;
+  sendChatMessage: (taskId: string, text: string) => Promise<boolean>;
+  fetchCompanyUsers: () => Promise<void>;
 
   // Cross-window sync
   hydrateSyncState: () => Promise<void>;
@@ -516,6 +525,65 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       void get().fetchTasks();
+    }
+  },
+
+  chatMessages: [],
+  chatLoading: false,
+  companyUsers: [],
+
+  fetchCompanyUsers: async () => {
+    if (!isTauri()) return;
+    const { yougileContext, companyUsers } = get();
+    if (!yougileContext.accountId || companyUsers.length > 0) return;
+    try {
+      const users = await withTimeout(
+        invoke<YougileUser[]>('yougile_get_all_users', {
+          accountId: yougileContext.accountId,
+        })
+      );
+      set({ companyUsers: users });
+    } catch {
+      // non-critical, fall back to project users
+    }
+  },
+
+  fetchChatMessages: async (taskId) => {
+    if (!isTauri()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return;
+    set({ chatLoading: true });
+    try {
+      const messages = await withTimeout(
+        invoke<YougileChatMessage[]>('yougile_get_chat_messages', {
+          accountId: yougileContext.accountId,
+          taskId,
+        })
+      );
+      set({ chatMessages: messages.filter((m) => !m.deleted), chatLoading: false });
+    } catch (e) {
+      set({ error: String(e), chatLoading: false });
+    }
+  },
+
+  sendChatMessage: async (taskId, text) => {
+    if (!isTauri()) return false;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return false;
+    try {
+      await withTimeout(
+        invoke('yougile_send_chat_message', {
+          accountId: yougileContext.accountId,
+          taskId,
+          text,
+        })
+      );
+      // Refresh messages after send
+      await get().fetchChatMessages(taskId);
+      return true;
+    } catch (e) {
+      set({ error: String(e) });
+      return false;
     }
   },
 

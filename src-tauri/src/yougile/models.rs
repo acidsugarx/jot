@@ -282,6 +282,39 @@ pub struct YougileTask {
     pub timestamp: Option<i64>,
 }
 
+// ── Chat messages ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: i64,
+    pub from_user_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub text_html: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub edit_timestamp: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_nullable_bool")]
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChatMessage {
+    pub text: String,
+    pub text_html: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageIdResponse {
+    pub id: i64,
+}
+
 // ── API response wrapper ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

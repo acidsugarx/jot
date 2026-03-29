@@ -409,6 +409,7 @@ pub fn run() {
             yougile::commands::yougile_get_boards,
             yougile::commands::yougile_get_columns,
             yougile::commands::yougile_get_users,
+            yougile::commands::yougile_get_all_users,
             yougile::commands::yougile_get_string_stickers,
             yougile::commands::yougile_get_sprint_stickers,
             yougile::commands::yougile_get_tasks,
@@ -416,7 +417,9 @@ pub fn run() {
             yougile::commands::yougile_create_task,
             yougile::commands::yougile_update_task,
             yougile::commands::yougile_move_task,
-            yougile::commands::yougile_delete_task
+            yougile::commands::yougile_delete_task,
+            yougile::commands::yougile_get_chat_messages,
+            yougile::commands::yougile_send_chat_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

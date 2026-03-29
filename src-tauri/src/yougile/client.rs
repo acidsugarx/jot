@@ -176,6 +176,10 @@ impl YougileClient {
             .await
     }
 
+    pub async fn get_all_users(&self) -> Result<Vec<YougileUser>, String> {
+        self.get_list("/users").await
+    }
+
     // --- Stickers ---
 
     pub async fn get_string_stickers(
@@ -191,6 +195,39 @@ impl YougileClient {
         board_id: &str,
     ) -> Result<Vec<YougileSprintSticker>, String> {
         self.get_list_with_param("/sprint-stickers", "boardId", board_id)
+            .await
+    }
+
+    // --- Chat Messages ---
+
+    pub async fn get_chat_messages(
+        &self,
+        chat_id: &str,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Vec<ChatMessage>, String> {
+        let limit = limit.unwrap_or(50);
+        let offset = offset.unwrap_or(0);
+        let resp = self
+            .authed_request(reqwest::Method::GET, &format!("/chats/{chat_id}/messages"))
+            .query(&[
+                ("limit", limit.to_string()),
+                ("offset", offset.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {e}"))?;
+        let resp = Self::check_status(resp).await?;
+        let page: YougileListResponse<ChatMessage> = Self::parse_json(resp).await?;
+        Ok(page.content)
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        chat_id: &str,
+        payload: &CreateChatMessage,
+    ) -> Result<ChatMessageIdResponse, String> {
+        self.post(&format!("/chats/{chat_id}/messages"), payload)
             .await
     }
 

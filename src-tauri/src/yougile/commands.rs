@@ -80,6 +80,37 @@ pub fn yougile_get_accounts(
     crate::db::get_yougile_accounts_impl(&state)
 }
 
+// --- Chat Commands ---
+
+#[tauri::command]
+pub async fn yougile_get_chat_messages(
+    account_id: String,
+    task_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<ChatMessage>, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_chat_messages(&task_id, limit, offset).await
+}
+
+#[tauri::command]
+pub async fn yougile_send_chat_message(
+    account_id: String,
+    task_id: String,
+    text: String,
+    state: State<'_, DatabaseState>,
+) -> Result<ChatMessageIdResponse, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    let html = format!("<p>{}</p>", text.replace('\n', "<br>"));
+    let payload = CreateChatMessage {
+        text: text.clone(),
+        text_html: html,
+        label: None,
+    };
+    client.send_chat_message(&task_id, &payload).await
+}
+
 // --- Navigation Commands ---
 
 #[tauri::command]
@@ -119,6 +150,15 @@ pub async fn yougile_get_users(
 ) -> Result<Vec<YougileUser>, String> {
     let client = auth::client_for_account(&state, &account_id)?;
     client.get_users(&project_id).await
+}
+
+#[tauri::command]
+pub async fn yougile_get_all_users(
+    account_id: String,
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<YougileUser>, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_all_users().await
 }
 
 #[tauri::command]
