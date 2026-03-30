@@ -102,33 +102,27 @@ jobs:
 
       - name: Update cask
         working-directory: tap
+        env:
+          CASK_VER: ${{ steps.version.outputs.VERSION }}
+          CASK_SHA: ${{ steps.sha.outputs.AARCH64_SHA }}
+          CASK_DMG: ${{ steps.sha.outputs.DMG_NAME }}
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          AARCH64_SHA="${{ steps.sha.outputs.AARCH64_SHA }}"
-          DMG_NAME="${{ steps.sha.outputs.DMG_NAME }}"
           mkdir -p Casks
-          cat > Casks/jot.rb << CASK
-        cask "jot" do
-          version "${VERSION}"
-          sha256 "${AARCH64_SHA}"
-
-          url "https://github.com/acidsugarx/jot/releases/download/v${VERSION}/${DMG_NAME}"
-          name "Jot"
-          desc "Keyboard-first task manager"
-          homepage "https://github.com/acidsugarx/jot"
-
-          depends_on macos: ">= :ventura"
-
-          app "jot.app"
-
-          zap trash: [
-            "~/Library/Application Support/com.jot.app",
-            "~/Library/Caches/com.jot.app",
-            "~/Library/Preferences/com.jot.app.plist",
-          ]
-        end
-        CASK
-          sed -i 's/^        //' Casks/jot.rb
+          printf 'cask "jot" do\n' > Casks/jot.rb
+          printf '  version "%s"\n' "$CASK_VER" >> Casks/jot.rb
+          printf '  sha256 "%s"\n\n' "$CASK_SHA" >> Casks/jot.rb
+          printf '  url "https://github.com/acidsugarx/jot/releases/download/v%s/%s"\n' "$CASK_VER" "$CASK_DMG" >> Casks/jot.rb
+          printf '  name "Jot"\n' >> Casks/jot.rb
+          printf '  desc "Keyboard-first task manager"\n' >> Casks/jot.rb
+          printf '  homepage "https://github.com/acidsugarx/jot"\n\n' >> Casks/jot.rb
+          printf '  depends_on macos: ">= :ventura"\n\n' >> Casks/jot.rb
+          printf '  app "jot.app"\n\n' >> Casks/jot.rb
+          printf '  zap trash: [\n' >> Casks/jot.rb
+          printf '    "~/Library/Application Support/com.jot.app",\n' >> Casks/jot.rb
+          printf '    "~/Library/Caches/com.jot.app",\n' >> Casks/jot.rb
+          printf '    "~/Library/Preferences/com.jot.app.plist",\n' >> Casks/jot.rb
+          printf '  ]\n' >> Casks/jot.rb
+          printf 'end\n' >> Casks/jot.rb
 
       - name: Commit and push
         working-directory: tap
