@@ -3,12 +3,16 @@ import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
 import { YougileTask } from '@/types/yougile';
 import { FileText, Users } from 'lucide-react';
-import { getYougileTaskColorValue, PRIORITY_DOT_CLASS, isYougileTask } from '@/lib/yougile';
+import { getYougileTaskColorValue, PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 
 // Unified card item — either a local Task or a YougileTask
 export type CardTask = Task | YougileTask;
+
+function isYougile(task: CardTask): task is YougileTask {
+  return 'columnId' in task && (task as YougileTask).columnId !== undefined;
+}
 
 interface TaskCardProps {
   task: CardTask;
@@ -25,8 +29,8 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
     selectTask: selectYougileTask,
     selectedTaskId: yougileSelectedTaskId,
   } = useYougileStore();
-  const isYougile = isYougileTask(task);
-  const isSelected = task.id === (isYougile ? yougileSelectedTaskId : localSelectedTaskId);
+  const isYougileCard = isYougile(task);
+  const isSelected = task.id === (isYougileCard ? yougileSelectedTaskId : localSelectedTaskId);
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'Task', task },
@@ -47,7 +51,7 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
     );
   }
 
-  if (isYougile) {
+  if (isYougileCard) {
     // Yougile task rendering
     const deadlineTs = task.deadline?.deadline;
     const deadlineStr = deadlineTs

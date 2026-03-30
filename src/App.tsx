@@ -26,7 +26,6 @@ import { tokenize, toDateInputValue } from '@/lib/formatting';
 import { priorityOptions, priorityColor } from '@/lib/constants';
 import type { Task, TaskPriority, TaskStatus } from '@/types';
 import type { YougileTask } from '@/types/yougile';
-import { isYougileTask as checkYougileTask } from '@/lib/yougile';
 
 type CaptureMode = 'insert' | 'normal';
 type PickerMode = 'none' | 'org' | 'project' | 'board';
@@ -41,7 +40,7 @@ const MAX_VISIBLE_TASKS = 8;
 const EDITOR_HEIGHT = 340;
 
 function isYougileTask(task: Task | YougileTask): task is YougileTask {
-  return checkYougileTask(task);
+  return 'columnId' in task && (task as YougileTask).columnId !== undefined;
 }
 
 // ── Inline Task Editor ────────────────────────────────────────────────────────

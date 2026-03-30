@@ -35,7 +35,7 @@ export function formatYougileTrackedHours(hours: number | null | undefined): str
  * Type guard: true when the task comes from Yougile (has `columnId`).
  * Works with both `Task | YougileTask` and `CardTask` union types.
  */
-export function isYougileTask(task: { columnId?: unknown }): boolean {
+export function isYougileTask(task: Record<string, unknown>): boolean {
   return 'columnId' in task && task.columnId !== undefined;
 }
 
