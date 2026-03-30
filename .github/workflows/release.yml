@@ -100,42 +100,41 @@ jobs:
           token: ${{ secrets.TAP_TOKEN }}
           path: tap
 
-      - name: Update formula
+      - name: Update cask
         working-directory: tap
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           AARCH64_SHA="${{ steps.sha.outputs.AARCH64_SHA }}"
           DMG_NAME="${{ steps.sha.outputs.DMG_NAME }}"
-          
-          cat > Formula/jot.rb << EOF
-          class Jot < Formula
-            desc "Keyboard-first task manager with local-first storage"
-            homepage "https://github.com/acidsugarx/jot"
-            version "${VERSION}"
-            license "MIT"
+          mkdir -p Casks
+          cat > Casks/jot.rb << CASK
+        cask "jot" do
+          version "${VERSION}"
+          sha256 "${AARCH64_SHA}"
 
-            on_macos do
-              on_arm do
-                url "https://github.com/acidsugarx/jot/releases/download/v${VERSION}/${DMG_NAME}"
-                sha256 "${AARCH64_SHA}"
-              end
-            end
+          url "https://github.com/acidsugarx/jot/releases/download/v${VERSION}/${DMG_NAME}"
+          name "Jot"
+          desc "Keyboard-first task manager"
+          homepage "https://github.com/acidsugarx/jot"
 
-            def install
-              app.install "jot.app"
-            end
+          depends_on macos: ">= :ventura"
 
-            test do
-              assert_path_exists bin.parent/"jot.app"
-            end
-          end
-          EOF
+          app "jot.app"
+
+          zap trash: [
+            "~/Library/Application Support/com.jot.app",
+            "~/Library/Caches/com.jot.app",
+            "~/Library/Preferences/com.jot.app.plist",
+          ]
+        end
+        CASK
+          sed -i 's/^        //' Casks/jot.rb
 
       - name: Commit and push
         working-directory: tap
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/jot.rb
+          git add Casks/jot.rb
           git commit -m "Update jot to v${{ steps.version.outputs.VERSION }}"
           git push

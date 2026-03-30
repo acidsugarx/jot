@@ -1,56 +1,90 @@
+<div align="center">
+
 # jot
+
+Capture thoughts before they escape.
+
+Keyboard-first task manager for people who think in keystrokes.
 
 [![CI](https://github.com/acidsugarx/jot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/acidsugarx/jot/actions/workflows/ci.yml)
 [![Release](https://github.com/acidsugarx/jot/actions/workflows/release.yml/badge.svg)](https://github.com/acidsugarx/jot/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 
-Keyboard-first task manager and Zettelkasten bridge. Runs as a system tray daemon with a Raycast-style capture bar that overlays fullscreen apps.
+</div>
 
-Built with Tauri v2 (Rust) + React + TypeScript.
+---
 
-## Platform Support
+`Opt+Space` → type a thought → done.
 
-Jot is primarily built and tested on macOS right now.
-Windows and Linux builds are configured, but they have not been tested yet.
+No windows to open, no buttons to click. jot lives in your menu bar and shows up when you need it — even over fullscreen apps.
 
-If you try Jot on Windows or Linux and hit a bug, missing behavior, or packaging issue, please open an issue in `acidsugarx/jot`.
-Bug reports and fix requests are very welcome.
+```
+Meeting with Sarah friday #work !high @zettel
+```
+
+Tags, priority, due date, and a linked note — all from one line. No forms, no clicks.
+
+## Why jot?
+
+**You're in a meeting.** Someone says "we need to follow up on the API migration." You hit `Opt+Space`, type the task, and you're back to paying attention. Two seconds, zero context switch.
+
+**You're coding.** You're in the zone and remember a bug. `Opt+Space`, type it, back to coding. Your flow never breaks.
+
+**You're in fullscreen.** Doesn't matter. jot renders as a native overlay — it appears over everything.
 
 ## Features
 
-- **Quick Capture** (`Opt+Space`) — command palette for rapid task entry with NLP parsing
-- **Dashboard** (`Cmd+Shift+Space`) — list, kanban, and calendar views with vim bindings
-- **Natural Language Input** — `Meeting friday #work !high @zettel` just works
-- **Fullscreen Overlay** — capture window appears over fullscreen apps via NSPanel
-- **Dark / Light Theme** — instant sync across all windows
-- **Zettelkasten Bridge** — `@zettel` creates linked markdown notes in your Obsidian vault
-- **Vim Navigation** — `j/k/h/l`, `e` edit, `x` toggle, `s` cycle status, `d` delete
+- **Instant capture** — `Opt+Space` summons the input bar, type your task, press Enter
+- **Natural language** — `Meeting friday #work !high` parses tags, priority, and dates automatically
+- **Dashboard** — `Cmd+Shift+Space` opens list, kanban, and calendar views
+- **Vim everywhere** — `j/k` navigate, `x` toggle done, `e` edit, `s` cycle status, `d` delete
+- **Obsidian bridge** — add `@zettel` to any task and a linked markdown note appears in your vault
+- **Yougile sync** — connect your [Yougile](https://yougile.com) boards for team task management
+- **Dark & light themes** — matches your system, instantly
+- **Local-first** — your tasks live in SQLite on your machine. No account required
 
 ## Install
 
-Download the latest release from [Releases](https://github.com/acidsugarx/jot/releases), or build from source:
+### Homebrew (macOS)
 
 ```bash
+brew tap acidsugarx/tap
+brew install --cask jot
+```
+
+### Download
+
+Grab the latest installer from [Releases](https://github.com/acidsugarx/jot/releases):
+
+- **macOS** — `.dmg` (Apple Silicon)
+- **Linux** — `.AppImage`
+- **Windows** — `.msi`
+
+### Build from source
+
+```bash
+git clone https://github.com/acidsugarx/jot.git
+cd jot
 npm install
 npm run tauri build
 ```
 
-For local packaging helpers, there is also a `Makefile`:
+## Keyboard shortcuts
 
-```bash
-make package
-make install-local
-```
-
-`make package` builds an OS-specific bundle for the current machine:
-
-- macOS: `.dmg`
-- Linux: `.AppImage`
-
-`make install-local` then installs the current local build:
-
-- macOS: copies `jot.app` into `/Applications`
-- Linux: copies the release binary into `~/.local/bin/jot`
+| Shortcut | Action |
+|----------|--------|
+| `Opt+Space` | Open capture bar |
+| `Cmd+Shift+Space` | Open dashboard |
+| `Enter` | Create task / confirm |
+| `Esc` | Dismiss / clear |
+| `j` / `k` | Move up / down |
+| `e` | Edit selected task |
+| `x` | Toggle done |
+| `s` | Cycle status |
+| `d` | Delete task |
+| `m` | Move to next column |
+| `/` | Focus search |
+| `?` | Show all shortcuts |
 
 ## Development
 
@@ -61,42 +95,14 @@ npm install
 npm run tauri dev
 ```
 
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run tauri dev` | Run app in development mode |
-| `make package` | Build an OS-specific local package |
-| `make install-local` | Package and install the local app build |
-| `npm run lint` | Lint frontend |
-| `npm run typecheck` | Type-check frontend |
-| `npm test -- --run` | Run frontend tests |
-| `cargo test` | Run Rust tests (from `src-tauri/`) |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Lint Rust (from `src-tauri/`) |
-
-### Full validation
-
 ```bash
-make ci
+make ci        # full validation (fmt + clippy + typecheck + lint + test)
+make package   # build OS-specific bundle
 ```
 
-## Architecture
+## Contributing
 
-```
-src-tauri/src/
-  lib.rs      Tauri setup, system tray, global shortcuts, NSPanel, IPC handlers
-  db.rs       SQLite CRUD, migrations, zettel note creation
-  models.rs   Type definitions
-  parser.rs   NLP parser (tags, priority, dates, @zettel)
-
-src/
-  App.tsx              Quick capture window (cmdk palette + inline editor)
-  Dashboard.tsx        Multi-view workspace (list/kanban/calendar)
-  Settings.tsx         Configuration (vault path, theme)
-  store/               Zustand store + Tauri IPC
-  hooks/               Vim keybindings
-  components/          Kanban board, calendar, task editor, shadcn/ui
-```
+Bug reports and pull requests are welcome at [acidsugarx/jot](https://github.com/acidsugarx/jot).
 
 ## License
 

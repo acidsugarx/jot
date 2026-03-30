@@ -1,188 +1,99 @@
-# Claude Code Configuration - RuFlo V3
+# CLAUDE.md
 
-## Behavioral Rules (Always Enforced)
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-- Do what has been asked; nothing more, nothing less
-- NEVER create files unless they're absolutely necessary for achieving your goal
-- ALWAYS prefer editing an existing file to creating a new one
-- NEVER proactively create documentation files (*.md) or README files unless explicitly requested
-- NEVER save working files, text/mds, or tests to the root folder
-- Never continuously check status after spawning a swarm — wait for results
-- ALWAYS read a file before editing it
-- NEVER commit secrets, credentials, or .env files
+## Project Overview
 
-## File Organization
+jot is a Tauri v2 desktop task manager with a quick-capture overlay (like Spotlight/Alfred), a full dashboard, and Yougile (project management API) integration. macOS is the primary platform.
 
-- NEVER save to root folder — use the directories below
-- Use `/src` for source code files
-- Use `/tests` for test files
-- Use `/docs` for documentation and markdown files
-- Use `/config` for configuration files
-- Use `/scripts` for utility scripts
-- Use `/examples` for example code
-
-## Project Architecture
-
-- Follow Domain-Driven Design with bounded contexts
-- Keep files under 500 lines
-- Use typed interfaces for all public APIs
-- Prefer TDD London School (mock-first) for new code
-- Use event sourcing for state changes
-- Ensure input validation at system boundaries
-
-### Project Config
-
-- **Topology**: hierarchical-mesh
-- **Max Agents**: 15
-- **Memory**: hybrid
-- **HNSW**: Enabled
-- **Neural**: Enabled
-
-## Build & Test
+## Build & Dev Commands
 
 ```bash
-# Build
-npm run build
+npm run dev          # Start Vite dev server (frontend only, no Tauri)
+npm run tauri dev    # Start full Tauri app with hot reload
 
-# Test
-npm test
+npm run build        # tsc + vite build (frontend)
+npm run tauri build  # Production Tauri build
 
-# Lint
-npm run lint
+npm run typecheck    # TypeScript type checking (npx tsc --noEmit)
+npm run lint         # ESLint
+npm test             # Vitest
+make ci              # Full CI: fmt + clippy + typecheck + lint + test
 ```
 
-- ALWAYS run tests after making code changes
-- ALWAYS verify build succeeds before committing
+Always run `npm run typecheck` after TypeScript changes. The CI pipeline runs `make ci` which includes Rust fmt/clippy, TS typecheck, lint, and tests.
 
-## Security Rules
+## Architecture
 
-- NEVER hardcode API keys, secrets, or credentials in source files
-- NEVER commit .env files or any file containing secrets
-- Always validate user input at system boundaries
-- Always sanitize file paths to prevent directory traversal
-- Run `npx @claude-flow/cli@latest security scan` after security-related changes
+### Multi-Window Tauri Setup
 
-## Concurrency: 1 MESSAGE = ALL RELATED OPERATIONS
+The app uses multiple Tauri windows, each rendering a different React root:
 
-- All operations MUST be concurrent/parallel in a single message
-- Use Claude Code's Task tool for spawning agents, not just MCP
-- ALWAYS batch ALL todos in ONE TodoWrite call (5-10+ minimum)
-- ALWAYS spawn ALL agents in ONE message with full instructions via Task tool
-- ALWAYS batch ALL file reads/writes/edits in ONE message
-- ALWAYS batch ALL Bash commands in ONE message
+- **"main" window** → `App.tsx` — Quick capture bar (NSPanel overlay, transparent, always-on-top, no decorations). Activated by global hotkey (Opt+Space). Auto-hides on blur.
+- **"dashboard" window** → `Dashboard.tsx` — Full task management with list/kanban/calendar views.
+- **"settings" window** → `Settings.tsx` — App configuration, Yougile account setup.
 
-## Swarm Orchestration
+Routing happens in `src/main.tsx` via `getCurrentWindow().label`.
 
-- MUST initialize the swarm using CLI tools when starting complex tasks
-- MUST spawn concurrent agents using Claude Code's Task tool
-- Never use CLI tools alone for execution — Task tool agents do the actual work
-- MUST call CLI tools AND Task tool in ONE message for complex work
+### Rust Backend (`src-tauri/src/`)
 
-### 3-Tier Model Routing (ADR-026)
+- `lib.rs` — Tauri command registrations, window management (show/hide/toggle)
+- `db.rs` — SQLite database for local tasks (via rusqlite)
+- `parser.rs` — NLP parser for task input (`#tag`, `!priority`, `@zettel`, due dates)
+- `yougile/` — Yougile API client (REST via reqwest)
+  - `client.rs` — HTTP client with auth
+  - `commands.rs` — Tauri commands wrapping API calls
+  - `models.rs` — Request/response types
 
-| Tier | Handler | Latency | Cost | Use Cases |
-|------|---------|---------|------|-----------|
-| **1** | Agent Booster (WASM) | <1ms | $0 | Simple transforms (var→const, add types) — Skip LLM |
-| **2** | Haiku | ~500ms | $0.0002 | Simple tasks, low complexity (<30%) |
-| **3** | Sonnet/Opus | 2-5s | $0.003-0.015 | Complex reasoning, architecture, security (>30%) |
+### Frontend State
 
-- Always check for `[AGENT_BOOSTER_AVAILABLE]` or `[TASK_MODEL_RECOMMENDATION]` before spawning agents
-- Use Edit tool directly when `[AGENT_BOOSTER_AVAILABLE]`
+Two Zustand stores:
 
-## Swarm Configuration & Anti-Drift
+- **`use-task-store`** (`src/store/use-task-store.ts`) — Local tasks. Talks to Rust backend via `invoke()`. Manages columns, CRUD, linked notes, settings.
+- **`use-yougile-store`** (`src/store/use-yougile-store.ts`) — Yougile tasks. Direct REST API calls from frontend. Manages accounts → projects → boards → columns → tasks hierarchy, plus chat and file attachments.
 
-- ALWAYS use hierarchical topology for coding swarms
-- Keep maxAgents at 6-8 for tight coordination
-- Use specialized strategy for clear role boundaries
-- Use `raft` consensus for hive-mind (leader maintains authoritative state)
-- Run frequent checkpoints via `post-task` hooks
-- Keep shared memory namespace for all agents
+### Dual Task System
 
-```bash
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
+The app handles two task sources with a unified UI:
+
+- **Local tasks** (`Task` type in `src/types.ts`) — stored in SQLite, supports status/priority/tags/dueDate/linkedNotePath
+- **Yougile tasks** (`YougileTask` type in `src/types/yougile.ts`) — from Yougile API, supports columnId/completed/deadline/assigned/color
+
+Components handle both via union types (`Task | YougileTask`). Use TypeScript type predicates for narrowing:
+
+```typescript
+// Type predicate — required for proper narrowing in conditionals
+function isYougileTask(task: Task | YougileTask): task is YougileTask {
+  return 'columnId' in task && (task as YougileTask).columnId !== undefined;
+}
 ```
 
-## Swarm Execution Rules
+The shared `isYougileTask` in `src/lib/yougile.ts` uses `Record<string, unknown>` parameter (returns boolean, no narrowing). For components that need narrowing, define a local type predicate with `task is YougileTask`.
 
-- ALWAYS use `run_in_background: true` for all agent Task calls
-- ALWAYS put ALL agent Task calls in ONE message for parallel execution
-- After spawning, STOP — do NOT add more tool calls or check status
-- Never poll TaskOutput or check swarm status — trust agents to return
-- When agent results arrive, review ALL results before proceeding
+### Key Components
 
-## V3 CLI Commands
+- **`App.tsx`** — Capture bar with insert/normal modes, vim-style navigation, picker for org/project/board selection
+- **`Dashboard.tsx`** — Full UI with list/kanban/calendar tabs, sidebar filters, context menus, quick-add bar
+- **`KanbanBoard.tsx`** / **`KanbanTaskCard.tsx`** — Drag-and-drop kanban via @dnd-kit, handles both task types
+- **`YougileTaskEditor.tsx`** — Rich editor for Yougile tasks (description, color, assignees, chat, attachments)
+- **`use-vim-bindings.ts`** — Shared vim keybindings hook (j/k navigation, x toggle, d delete, e edit, m move, etc.)
 
-### Core Commands
+### Zettelkasten Integration
 
-| Command | Subcommands | Description |
-|---------|-------------|-------------|
-| `init` | 4 | Project initialization |
-| `agent` | 8 | Agent lifecycle management |
-| `swarm` | 6 | Multi-agent swarm coordination |
-| `memory` | 11 | AgentDB memory with HNSW search |
-| `task` | 6 | Task creation and lifecycle |
-| `session` | 7 | Session state management |
-| `hooks` | 17 | Self-learning hooks + 12 workers |
-| `hive-mind` | 6 | Byzantine fault-tolerant consensus |
+When `@zettel` appears in task input, the Rust parser flags it. On task creation, a markdown note is created in the configured Obsidian vault path, linked back to the task via `linkedNotePath`. Press `o` on a local task to open its linked note.
 
-### Quick CLI Examples
+## Key Patterns
 
-```bash
-npx @claude-flow/cli@latest init --wizard
-npx @claude-flow/cli@latest agent spawn -t coder --name my-coder
-npx @claude-flow/cli@latest swarm init --v3-mode
-npx @claude-flow/cli@latest memory search --query "authentication patterns"
-npx @claude-flow/cli@latest doctor --fix
-```
+- **Tauri IPC**: Frontend calls Rust via `invoke('command_name', { args })`. Commands are registered in `lib.rs` with `#[tauri::command]`.
+- **Window management**: `invoke('show_window')`, `invoke('hide_window')`, `invoke('open_dashboard_window')`, `invoke('open_settings_window')`.
+- **Auto-hide logic**: Capture bar (App.tsx) hides on blur with debouncing, suppresses hide during picker mode and dialogs.
+- **Source switching**: `activeSource` in yougile store toggles between `'local'` and `'yougile'`. Tab key in dashboard switches source.
+- **TypeScript strictness**: The project uses strict TS. Union type narrowing requires type predicates, not just boolean checks.
 
-## Available Agents (60+ Types)
+## Important Notes
 
-### Core Development
-`coder`, `reviewer`, `tester`, `planner`, `researcher`
-
-### Specialized
-`security-architect`, `security-auditor`, `memory-specialist`, `performance-engineer`
-
-### Swarm Coordination
-`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`
-
-### GitHub & Repository
-`pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`
-
-### SPARC Methodology
-`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`
-
-## Memory Commands Reference
-
-```bash
-# Store (REQUIRED: --key, --value; OPTIONAL: --namespace, --ttl, --tags)
-npx @claude-flow/cli@latest memory store --key "pattern-auth" --value "JWT with refresh" --namespace patterns
-
-# Search (REQUIRED: --query; OPTIONAL: --namespace, --limit, --threshold)
-npx @claude-flow/cli@latest memory search --query "authentication patterns"
-
-# List (OPTIONAL: --namespace, --limit)
-npx @claude-flow/cli@latest memory list --namespace patterns --limit 10
-
-# Retrieve (REQUIRED: --key; OPTIONAL: --namespace)
-npx @claude-flow/cli@latest memory retrieve --key "pattern-auth" --namespace patterns
-```
-
-## Quick Setup
-
-```bash
-claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
-npx @claude-flow/cli@latest daemon start
-npx @claude-flow/cli@latest doctor --fix
-```
-
-## Claude Code vs CLI Tools
-
-- Claude Code's Task tool handles ALL execution: agents, file ops, code generation, git
-- CLI tools handle coordination via Bash: swarm init, memory, hooks, routing
-- NEVER use CLI tools as a substitute for Task tool agents
-
-## Support
-
-- Documentation: https://github.com/ruvnet/claude-flow
-- Issues: https://github.com/ruvnet/claude-flow/issues
+- The capture bar window is an NSPanel with transparent background — CSS uses `bg-transparent` and `bg-zinc-950/95` with `backdrop-blur-xl`.
+- Window resizing is dynamic based on content height (App.tsx calculates and sets `LogicalSize`).
+- The Yougile store polls every 30s for task updates when in Yougile mode and the window is visible.
+- File uploads to Yougile use multipart form data via the frontend fetch API.
+- The `cmdk` library powers the command palette in the capture bar.
