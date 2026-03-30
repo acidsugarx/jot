@@ -419,7 +419,10 @@ pub fn run() {
             yougile::commands::yougile_move_task,
             yougile::commands::yougile_delete_task,
             yougile::commands::yougile_get_chat_messages,
-            yougile::commands::yougile_send_chat_message
+            yougile::commands::yougile_send_chat_message,
+            yougile::commands::yougile_upload_file,
+            yougile::commands::yougile_upload_file_path,
+            yougile::commands::yougile_download_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

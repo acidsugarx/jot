@@ -47,6 +47,35 @@ fn apply_raw_input(payload: CreateYougileTask) -> CreateYougileTask {
     }
 }
 
+fn mime_type_from_file_name(file_name: &str) -> String {
+    let ext = file_name
+        .rsplit('.')
+        .next()
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "avif" => "image/avif",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "zip" => "application/zip",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 // --- Auth Commands ---
 
 #[tauri::command]
@@ -99,16 +128,92 @@ pub async fn yougile_send_chat_message(
     account_id: String,
     task_id: String,
     text: String,
+    text_html: Option<String>,
     state: State<'_, DatabaseState>,
 ) -> Result<ChatMessageIdResponse, String> {
     let client = auth::client_for_account(&state, &account_id)?;
-    let html = format!("<p>{}</p>", text.replace('\n', "<br>"));
+    let html = text_html.unwrap_or_else(|| format!("<p>{}</p>", text.replace('\n', "<br>")));
     let payload = CreateChatMessage {
         text: text.clone(),
         text_html: html,
         label: None,
     };
     client.send_chat_message(&task_id, &payload).await
+}
+
+#[tauri::command]
+pub async fn yougile_upload_file(
+    account_id: String,
+    file_name: String,
+    file_bytes: Vec<u8>,
+    mime_type: String,
+    state: State<'_, DatabaseState>,
+) -> Result<FileUploadResponse, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.upload_file(file_name, file_bytes, mime_type).await
+}
+
+#[tauri::command]
+pub async fn yougile_upload_file_path(
+    account_id: String,
+    file_path: String,
+    state: State<'_, DatabaseState>,
+) -> Result<FileUploadResponse, String> {
+    let client = auth::client_for_account(&state, &account_id)?;
+    let path = std::path::Path::new(&file_path);
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Invalid file path: {file_path} - {e}"))?;
+    if !canonical.is_file() {
+        return Err(format!("Path is not a file: {}", canonical.display()));
+    }
+    let file_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Invalid file path: {file_path}"))?
+        .to_string();
+    let file_bytes = tokio::fs::read(&canonical)
+        .await
+        .map_err(|error| format!("Failed to read file at '{}': {error}", canonical.display()))?;
+    let mime_type = mime_type_from_file_name(&file_name);
+
+    client.upload_file(file_name, file_bytes, mime_type).await
+}
+
+// --- File Download ---
+
+#[tauri::command]
+pub async fn yougile_download_file(url: String, save_path: String) -> Result<(), String> {
+    // Validate save path: reject path traversal
+    let save = std::path::Path::new(&save_path);
+    if save_path.contains("..") {
+        return Err("Invalid save path: path traversal not allowed".to_string());
+    }
+    let canonical_save = save
+        .canonicalize()
+        .or_else(|_| {
+            // Parent may not exist yet; canonicalize parent instead
+            save.parent()
+                .filter(|p| p.exists())
+                .map(|p| p.canonicalize())
+                .unwrap_or_else(|| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "parent dir not found",
+                    ))
+                })
+        })
+        .map_err(|e| format!("Failed to resolve save path: {e}"))?;
+
+    let bytes = super::client::YougileClient::download_file(&url).await?;
+    tokio::fs::write(&canonical_save, &bytes)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to write file to '{}': {e}",
+                canonical_save.display()
+            )
+        })
 }
 
 // --- Navigation Commands ---

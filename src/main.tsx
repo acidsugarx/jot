@@ -10,7 +10,7 @@ import { useYougileStore } from './store/use-yougile-store';
 import type { AppSettings } from './types';
 import './styles.css';
 
-const label = getCurrentWindow().label;
+const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : 'main';
 
 // Apply saved theme before render to avoid flash
 if ('__TAURI_INTERNALS__' in window) {
@@ -24,8 +24,15 @@ if ('__TAURI_INTERNALS__' in window) {
   // Only init Yougile sync for windows that need it (not settings)
   if (label !== 'settings') {
     void useYougileStore.getState().hydrateSyncState();
-    useYougileStore.getState().listenForSyncUpdates();
-    useYougileStore.getState().listenForTaskUpdates();
+    const unlistenSync = useYougileStore.getState().listenForSyncUpdates();
+    const unlistenTasks = useYougileStore.getState().listenForTaskUpdates();
+
+    if (import.meta.hot) {
+      import.meta.hot.dispose(() => {
+        unlistenSync();
+        unlistenTasks();
+      });
+    }
   }
 }
 

@@ -22,7 +22,12 @@ export function HighlightedInput({
       return `<span class="text-mist/26">${placeholder}</span>`;
     }
 
-    let html = value;
+    // Escape HTML entities before applying highlight regexes
+    let html = value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
 
     // Highlight tags (#tag)
     html = html.replace(/(^|\s)(#[\w-]+)/g, '$1<span class="text-cyan/80 font-mono">$2</span>');

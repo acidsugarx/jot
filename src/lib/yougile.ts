@@ -30,3 +30,19 @@ export function formatYougileTrackedHours(hours: number | null | undefined): str
   if (minutes === 0) return `${wholeHours}h`;
   return `${wholeHours}h ${minutes}m`;
 }
+
+/**
+ * Type guard: true when the task comes from Yougile (has `columnId`).
+ * Works with both `Task | YougileTask` and `CardTask` union types.
+ */
+export function isYougileTask(task: { columnId?: unknown }): boolean {
+  return 'columnId' in task && task.columnId !== undefined;
+}
+
+export const PRIORITY_DOT_CLASS: Record<string, string> = {
+  urgent: 'bg-red-400',
+  high: 'bg-orange-400',
+  medium: 'bg-yellow-400',
+  low: 'bg-blue-400',
+  none: '',
+};

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { escapeHtml } from '@/lib/formatting';
 import type {
   YougileAccount,
   YougileProject,
@@ -13,6 +14,7 @@ import type {
   YougileContext,
   YougileCompany,
   YougileChatMessage,
+  YougileFileUploadResponse,
   CreateYougileTask,
   UpdateYougileTask,
   YougileSyncState,
@@ -23,6 +25,22 @@ function isTauri(): boolean {
 }
 
 const FETCH_TIMEOUT_MS = 15_000;
+const UPLOAD_TIMEOUT_MS = 90_000;
+const CHAT_FETCH_LIMIT = 1_000;
+const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|heic|heif|avif)$/i;
+
+function isImageFile(file: Pick<File, 'name' | 'type'>): boolean {
+  return file.type.startsWith('image/') || IMAGE_FILE_RE.test(file.name);
+}
+
+function isImageFileName(fileName: string): boolean {
+  return IMAGE_FILE_RE.test(fileName);
+}
+
+function fileNameFromPath(filePath: string): string {
+  const parts = filePath.split(/[\\/]/);
+  return parts[parts.length - 1] || filePath;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -108,6 +126,7 @@ interface YougileState {
   companyUsers: YougileUser[];
   fetchChatMessages: (taskId: string) => Promise<void>;
   sendChatMessage: (taskId: string, text: string) => Promise<boolean>;
+  sendChatWithAttachments: (taskId: string, text: string, files: Array<File | string>) => Promise<boolean>;
   fetchCompanyUsers: () => Promise<void>;
 
   // Cross-window sync
@@ -119,6 +138,31 @@ interface YougileState {
 
 interface YougileTasksUpdatedPayload {
   boardId: string | null;
+}
+
+interface YougileChatMessageIdResponse {
+  id: number;
+}
+
+function sortChatMessages(messages: YougileChatMessage[]): YougileChatMessage[] {
+  return [...messages].sort((a, b) => a.id - b.id);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function refreshChatAfterSend(
+  get: () => YougileState,
+  taskId: string,
+  expectedMessageId: number
+): Promise<void> {
+  await get().fetchChatMessages(taskId);
+  if (get().chatMessages.some((message) => message.id === expectedMessageId)) {
+    return;
+  }
+  await sleep(300);
+  await get().fetchChatMessages(taskId);
 }
 
 function toSyncState(activeSource: ActiveSource, yougileContext: YougileContext): YougileSyncState {
@@ -558,9 +602,14 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         invoke<YougileChatMessage[]>('yougile_get_chat_messages', {
           accountId: yougileContext.accountId,
           taskId,
+          limit: CHAT_FETCH_LIMIT,
+          offset: 0,
         })
       );
-      set({ chatMessages: messages.filter((m) => !m.deleted), chatLoading: false });
+      set({
+        chatMessages: sortChatMessages(messages.filter((m) => !m.deleted)),
+        chatLoading: false,
+      });
     } catch (e) {
       set({ error: String(e), chatLoading: false });
     }
@@ -571,18 +620,91 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     const { yougileContext } = get();
     if (!yougileContext.accountId) return false;
     try {
-      await withTimeout(
-        invoke('yougile_send_chat_message', {
+      const response = await withTimeout(
+        invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
           accountId: yougileContext.accountId,
           taskId,
           text,
+          textHtml: undefined,
         })
       );
-      // Refresh messages after send
-      await get().fetchChatMessages(taskId);
+      await refreshChatAfterSend(get, taskId, response.id);
       return true;
     } catch (e) {
       set({ error: String(e) });
+      return false;
+    }
+  },
+
+  sendChatWithAttachments: async (taskId, text, files) => {
+    if (!isTauri()) return false;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return false;
+    try {
+      const uploadedFiles: Array<{ url: string; name: string; image: boolean }> = [];
+      for (const entry of files) {
+        if (typeof entry === 'string') {
+          const fileName = fileNameFromPath(entry);
+          const upload = await withTimeout(
+            invoke<YougileFileUploadResponse>('yougile_upload_file_path', {
+              accountId: yougileContext.accountId,
+              filePath: entry,
+            }),
+            UPLOAD_TIMEOUT_MS,
+          );
+          uploadedFiles.push({
+            url: upload.url,
+            name: fileName,
+            image: isImageFileName(fileName),
+          });
+          continue;
+        }
+
+        const bytes = await entry.arrayBuffer();
+        const upload = await withTimeout(
+          invoke<YougileFileUploadResponse>('yougile_upload_file', {
+            accountId: yougileContext.accountId,
+            fileName: entry.name,
+            fileBytes: Array.from(new Uint8Array(bytes)),
+            mimeType: entry.type || 'application/octet-stream',
+          }),
+          UPLOAD_TIMEOUT_MS,
+        );
+        uploadedFiles.push({
+          url: upload.url,
+          name: entry.name,
+          image: isImageFile(entry),
+        });
+      }
+
+      const attachmentHtml = uploadedFiles
+        .map((file) => (
+          file.image
+            ? `<img src="${file.url}" />`
+            : `<p><a href="${file.url}" target="_blank" rel="noreferrer">${escapeHtml(file.name)}</a></p>`
+        ))
+        .join('');
+      const escapedText = escapeHtml(text).replace(/\n/g, '<br>');
+      const html = text
+        ? `<p>${escapedText}</p>${attachmentHtml}`
+        : attachmentHtml;
+      const plainText = [text.trim(), ...uploadedFiles.map((file) => file.url)]
+        .filter(Boolean)
+        .join(' ');
+
+      const response = await withTimeout(
+        invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
+          accountId: yougileContext.accountId,
+          taskId,
+          text: plainText,
+          textHtml: html,
+        }),
+        UPLOAD_TIMEOUT_MS,
+      );
+      await refreshChatAfterSend(get, taskId, response.id);
+      return true;
+    } catch (e) {
+      set({ error: `Failed to upload attachment: ${String(e)}` });
       return false;
     }
   },
@@ -623,9 +745,9 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauri()) return () => {};
     const unlisten = listen<YougileSyncState>(YOUGILE_SYNC_UPDATED_EVENT, (event) => {
       set((state) => applySyncState(state, event.payload));
-    });
+    }).catch(() => {});
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => { if (typeof fn === 'function') fn(); }).catch(() => {});
     };
   },
 
@@ -652,7 +774,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       void get().fetchTasks();
     });
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => { if (typeof fn === 'function') fn(); });
     };
   },
 }));

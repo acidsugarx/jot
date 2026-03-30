@@ -3,28 +3,17 @@ import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
 import { YougileTask } from '@/types/yougile';
 import { FileText, Users } from 'lucide-react';
-import { getYougileTaskColorValue } from '@/lib/yougile';
+import { getYougileTaskColorValue, PRIORITY_DOT_CLASS, isYougileTask } from '@/lib/yougile';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 
 // Unified card item — either a local Task or a YougileTask
 export type CardTask = Task | YougileTask;
 
-function isYougileTask(task: CardTask): task is YougileTask {
-  return 'columnId' in task;
-}
-
 interface TaskCardProps {
   task: CardTask;
   isOverlay?: boolean;
 }
-
-const priorityDot: Record<string, string> = {
-  urgent: 'bg-red-400',
-  high: 'bg-orange-400',
-  medium: 'bg-yellow-400',
-  low: 'bg-blue-400',
-};
 
 export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
   const {
@@ -134,8 +123,8 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
       }`}
     >
       <div className="flex items-center gap-2">
-        {task.priority !== 'none' && priorityDot[task.priority] && (
-          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${priorityDot[task.priority]}`} />
+        {task.priority !== 'none' && PRIORITY_DOT_CLASS[task.priority] && (
+          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT_CLASS[task.priority]}`} />
         )}
         <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
           {task.title}

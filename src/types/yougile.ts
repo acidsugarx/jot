@@ -183,6 +183,12 @@ export interface YougileChatMessage {
   deleted: boolean;
 }
 
+export interface YougileFileUploadResponse {
+  result: string;
+  url: string;
+  fullUrl: string;
+}
+
 export interface YougileContext {
   accountId: string | null;
   projectId: string | null;

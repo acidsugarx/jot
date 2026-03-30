@@ -31,6 +31,7 @@ export function useVimBindings(
   options?: {
     onRequestDelete?: (request: DeleteRequest) => void;
     onToggleHelp?: () => void;
+    onSwitchTab?: (tab: ViewMode) => void;
   }
 ) {
   const {
@@ -206,6 +207,13 @@ export function useVimBindings(
         e.preventDefault();
         setIsQuickAddOpen(true);
         return;
+      }
+
+      // Ctrl+1/2/3 — switch view tabs (works even when not editing)
+      if (e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '1') { e.preventDefault(); options?.onSwitchTab?.('list'); return; }
+        if (e.key === '2') { e.preventDefault(); options?.onSwitchTab?.('kanban'); return; }
+        if (e.key === '3') { e.preventDefault(); options?.onSwitchTab?.('calendar'); return; }
       }
 
       if (!activeTasks.length) return;

@@ -10,10 +10,11 @@ pub struct YougileClient {
 
 impl YougileClient {
     pub fn new(api_key: String) -> Self {
-        Self {
-            http: Client::new(),
-            api_key,
-        }
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        Self { http, api_key }
     }
 
     // --- Auth (no key needed) ---
@@ -101,20 +102,7 @@ impl YougileClient {
     pub async fn delete_task(&self, task_id: &str) -> Result<(), String> {
         let payload = UpdateYougileTask {
             deleted: Some(true),
-            title: None,
-            description: None,
-            column_id: None,
-            completed: None,
-            archived: None,
-            assigned: None,
-            subtasks: None,
-            deadline: None,
-            time_tracking: None,
-            stickers: None,
-            color: None,
-            checklists: None,
-            stopwatch: None,
-            timer: None,
+            ..Default::default()
         };
         self.put::<_, WithIdResponse>(&format!("/tasks/{task_id}"), &payload)
             .await?;
@@ -151,20 +139,7 @@ impl YougileClient {
     pub async fn move_task(&self, task_id: &str, column_id: &str) -> Result<YougileTask, String> {
         let payload = UpdateYougileTask {
             column_id: Some(column_id.to_string()),
-            title: None,
-            description: None,
-            completed: None,
-            archived: None,
-            deleted: None,
-            assigned: None,
-            subtasks: None,
-            deadline: None,
-            time_tracking: None,
-            stickers: None,
-            color: None,
-            checklists: None,
-            stopwatch: None,
-            timer: None,
+            ..Default::default()
         };
         self.update_task(task_id, &payload).await
     }
@@ -206,20 +181,58 @@ impl YougileClient {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<Vec<ChatMessage>, String> {
-        let limit = limit.unwrap_or(50);
-        let offset = offset.unwrap_or(0);
+        let limit = limit.unwrap_or(50).clamp(1, 1000);
+        let requested_offset = offset.unwrap_or(0);
+        let first_page = self
+            .get_chat_messages_page(chat_id, limit, requested_offset)
+            .await?;
+
+        if offset.is_some() {
+            return Ok(first_page.content);
+        }
+
+        let appears_descending = first_page
+            .content
+            .first()
+            .zip(first_page.content.last())
+            .map(|(first, last)| first.id > last.id)
+            .unwrap_or(false);
+
+        let total_count = first_page
+            .paging
+            .as_ref()
+            .and_then(|paging| paging.count)
+            .unwrap_or(first_page.content.len() as i64);
+
+        if appears_descending || total_count <= limit {
+            return Ok(first_page.content);
+        }
+
+        let last_offset = (total_count - limit).max(0);
+        if last_offset == requested_offset {
+            return Ok(first_page.content);
+        }
+
+        let last_page = self
+            .get_chat_messages_page(chat_id, limit, last_offset)
+            .await?;
+        Ok(last_page.content)
+    }
+
+    async fn get_chat_messages_page(
+        &self,
+        chat_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<YougileListResponse<ChatMessage>, String> {
         let resp = self
             .authed_request(reqwest::Method::GET, &format!("/chats/{chat_id}/messages"))
-            .query(&[
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .query(&[("limit", limit.to_string()), ("offset", offset.to_string())])
             .send()
             .await
             .map_err(|e| format!("Network error: {e}"))?;
         let resp = Self::check_status(resp).await?;
-        let page: YougileListResponse<ChatMessage> = Self::parse_json(resp).await?;
-        Ok(page.content)
+        Self::parse_json(resp).await
     }
 
     pub async fn send_chat_message(
@@ -229,6 +242,64 @@ impl YougileClient {
     ) -> Result<ChatMessageIdResponse, String> {
         self.post(&format!("/chats/{chat_id}/messages"), payload)
             .await
+    }
+
+    // --- File Upload ---
+
+    pub async fn upload_file(
+        &self,
+        file_name: String,
+        file_bytes: Vec<u8>,
+        mime_type: String,
+    ) -> Result<FileUploadResponse, String> {
+        let part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(file_name)
+            .mime_str(&mime_type)
+            .map_err(|e| format!("Invalid MIME type: {e}"))?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let resp = self
+            .http
+            .post(format!("{BASE_URL}/upload-file"))
+            .bearer_auth(&self.api_key)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {e}"))?;
+        let resp = Self::check_status(resp).await?;
+        Self::parse_json(resp).await
+    }
+
+    // --- File Download ---
+
+    pub async fn download_file(url: &str) -> Result<Vec<u8>, String> {
+        // Validate URL: must be HTTPS and point to yougile.com
+        let parsed = url::Url::parse(url).map_err(|e| format!("Invalid download URL: {e}"))?;
+        match parsed.scheme() {
+            "https" => {}
+            _ => return Err("Download URL must use HTTPS".to_string()),
+        }
+        let host = parsed.host_str().unwrap_or("");
+        if !host.ends_with("yougile.com") {
+            return Err("Download URL must point to yougile.com domain".to_string());
+        }
+
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+        let resp = http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("Download failed with status {}", resp.status()));
+        }
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| format!("Failed to read response body: {e}"))
     }
 
     // --- Chat Subscribers ---
@@ -258,33 +329,7 @@ impl YougileClient {
     // --- Generic Helpers ---
 
     async fn get_list<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, String> {
-        let mut all = Vec::new();
-        let mut offset = 0;
-        let limit: i64 = 100;
-        loop {
-            let resp = self
-                .authed_request(reqwest::Method::GET, path)
-                .query(&[("limit", limit.to_string()), ("offset", offset.to_string())])
-                .send()
-                .await
-                .map_err(|e| format!("Network error: {e}"))?;
-            let resp = Self::check_status(resp).await?;
-            let page: YougileListResponse<T> = Self::parse_json(resp).await?;
-            let count = page.content.len();
-            all.extend(page.content);
-            // Fallback: if API omits paging.next, assume more pages exist when we got a full page.
-            // May cause one extra empty request at boundary, but count==0 check below catches it.
-            let has_next = page
-                .paging
-                .as_ref()
-                .and_then(|paging| paging.next)
-                .unwrap_or(count >= limit as usize);
-            if !has_next || count == 0 {
-                break;
-            }
-            offset += limit;
-        }
-        Ok(all)
+        self.get_list_with_params(path, &[]).await
     }
 
     async fn get_list_with_param<T: serde::de::DeserializeOwned>(
@@ -293,17 +338,29 @@ impl YougileClient {
         param_name: &str,
         param_value: &str,
     ) -> Result<Vec<T>, String> {
+        self.get_list_with_params(path, &[(param_name, param_value)])
+            .await
+    }
+
+    async fn get_list_with_params<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        extra_params: &[(&str, &str)],
+    ) -> Result<Vec<T>, String> {
         let mut all = Vec::new();
         let mut offset = 0;
         let limit: i64 = 100;
         loop {
+            let mut query: Vec<(String, String)> = extra_params
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            query.push(("limit".to_string(), limit.to_string()));
+            query.push(("offset".to_string(), offset.to_string()));
+
             let resp = self
                 .authed_request(reqwest::Method::GET, path)
-                .query(&[
-                    (param_name, param_value.to_string()),
-                    ("limit", limit.to_string()),
-                    ("offset", offset.to_string()),
-                ])
+                .query(&query)
                 .send()
                 .await
                 .map_err(|e| format!("Network error: {e}"))?;
@@ -311,8 +368,6 @@ impl YougileClient {
             let page: YougileListResponse<T> = Self::parse_json(resp).await?;
             let count = page.content.len();
             all.extend(page.content);
-            // Fallback: if API omits paging.next, assume more pages exist when we got a full page.
-            // May cause one extra empty request at boundary, but count==0 check below catches it.
             let has_next = page
                 .paging
                 .as_ref()

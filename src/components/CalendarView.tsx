@@ -3,15 +3,9 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTaskStore } from '@/store/use-task-store';
 import { Task, TaskPriority } from '@/types';
 import { YougileTask } from '@/types/yougile';
+import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const priorityDot: Record<string, string> = {
-  urgent: 'bg-red-400',
-  high: 'bg-orange-400',
-  medium: 'bg-yellow-400',
-  low: 'bg-blue-400',
-};
 
 function toLocalDateKey(isoString: string): string {
   // Parse as UTC, display as local date key YYYY-MM-DD
@@ -200,7 +194,7 @@ export function CalendarView({
                 {/* Task pills */}
                 <div className="flex flex-col gap-0.5 overflow-hidden">
                   {dayTasks.slice(0, 3).map((task) => {
-                    const dot = task.priority ? priorityDot[task.priority as TaskPriority] : null;
+                    const dot = task.priority ? PRIORITY_DOT_CLASS[task.priority as TaskPriority] : null;
                     return (
                       <button
                         key={task.id}
@@ -246,7 +240,7 @@ export function CalendarView({
           </div>
           <div className="flex-1 overflow-y-auto">
             {unscheduled.map((task) => {
-              const dot = task.priority ? priorityDot[task.priority as TaskPriority] : null;
+              const dot = task.priority ? PRIORITY_DOT_CLASS[task.priority as TaskPriority] : null;
               return (
                 <button
                   key={task.id}

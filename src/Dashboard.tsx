@@ -27,21 +27,12 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
-import { Task, TaskPriority, KanbanColumn } from '@/types';
+import { Task, KanbanColumn } from '@/types';
 import { CardTask } from '@/components/KanbanTaskCard';
 import type { YougileTask } from '@/types/yougile';
+import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVimBindings, ViewMode, type DeleteRequest } from '@/hooks/use-vim-bindings';
-
-const priorityDot = (p: TaskPriority) => {
-  switch (p) {
-    case 'urgent': return 'bg-red-400';
-    case 'high': return 'bg-orange-400';
-    case 'medium': return 'bg-yellow-400';
-    case 'low': return 'bg-blue-400';
-    default: return null;
-  }
-};
 
 const statusMeta = (s: string, label?: string) => {
   const text = (label ?? s).slice(0, 4).toLowerCase();
@@ -223,6 +214,7 @@ export default function Dashboard() {
   useVimBindings(activeTab as ViewMode, {
     onRequestDelete: requestDelete,
     onToggleHelp: () => setShowHelp((v) => !v),
+    onSwitchTab: (tab) => setActiveTab(tab),
   });
 
   // Focus quick-add input when opened
@@ -436,7 +428,7 @@ export default function Dashboard() {
   const renderTaskRow = (t: Task) => {
     const isSelected = localSelectedTaskId === t.id;
     const isDone = t.status === 'done';
-    const dot = priorityDot(t.priority);
+    const dot = PRIORITY_DOT_CLASS[t.priority] ?? null;
     const colName = columns.find((c) => c.statusKey === t.status)?.name ?? t.status;
     const sl = statusMeta(t.status, colName);
 

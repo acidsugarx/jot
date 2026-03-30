@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 
 interface ErrorBannerProps {
@@ -8,11 +8,14 @@ interface ErrorBannerProps {
 }
 
 export function ErrorBanner({ error, onRetry, onDismiss }: ErrorBannerProps) {
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
   useEffect(() => {
     if (!error) return;
-    const timer = setTimeout(onDismiss, 10000);
+    const timer = setTimeout(() => onDismissRef.current(), 10000);
     return () => clearTimeout(timer);
-  }, [error, onDismiss]);
+  }, [error]);
 
   if (!error) return null;
 

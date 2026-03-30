@@ -477,23 +477,36 @@ pub fn open_linked_note(path: String) -> Result<(), String> {
         return Err("Linked note path cannot be empty.".to_string());
     }
 
-    if !PathBuf::from(&path).exists() {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
         return Err(format!("Linked note does not exist: {path}"));
     }
 
+    let canonical = path_buf
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {e}"))?;
+
+    if !canonical.is_file() {
+        return Err(format!("Path is not a file: {}", canonical.display()));
+    }
+
+    let canonical_str = canonical
+        .to_str()
+        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?;
+
     let status = if cfg!(target_os = "macos") {
         Command::new("open")
-            .arg(&path)
+            .arg(canonical_str)
             .status()
             .map_err(|error| format!("Failed to open linked note: {error}"))?
     } else if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", "start", "", &path])
+        Command::new("explorer")
+            .arg(canonical_str)
             .status()
             .map_err(|error| format!("Failed to open linked note: {error}"))?
     } else {
         Command::new("xdg-open")
-            .arg(&path)
+            .arg(canonical_str)
             .status()
             .map_err(|error| format!("Failed to open linked note: {error}"))?
     };
@@ -1148,74 +1161,42 @@ fn load_settings(connection: &Connection) -> Result<AppSettings, String> {
 }
 
 fn load_yougile_sync_state(connection: &Connection) -> Result<YougileSyncState, String> {
-    let active_source = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_active_source'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile source setting: {error}"))?
-        .flatten()
-        .unwrap_or_else(|| "local".to_string());
+    let keys = [
+        "yougile_active_source",
+        "yougile_account_id",
+        "yougile_project_id",
+        "yougile_project_name",
+        "yougile_board_id",
+        "yougile_board_name",
+    ];
 
-    let account_id = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_account_id'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile account setting: {error}"))?
-        .flatten();
+    let mut stmt = connection
+        .prepare("SELECT key, value FROM settings WHERE key IN (?1, ?2, ?3, ?4, ?5, ?6)")
+        .map_err(|error| format!("Failed to prepare sync state query: {error}"))?;
 
-    let project_id = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_project_id'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
+    let rows: std::collections::HashMap<String, String> = stmt
+        .query_map(
+            rusqlite::params![keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]],
+            |row| {
+                let key: String = row.get(0)?;
+                let value: String = row.get(1)?;
+                Ok((key, value))
+            },
         )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile project id setting: {error}"))?
-        .flatten();
-
-    let project_name = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_project_name'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile project name setting: {error}"))?
-        .flatten();
-
-    let board_id = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_board_id'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile board id setting: {error}"))?
-        .flatten();
-
-    let board_name = connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'yougile_board_name'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to load Yougile board name setting: {error}"))?
-        .flatten();
+        .map_err(|error| format!("Failed to query sync state: {error}"))?
+        .filter_map(|r| r.ok())
+        .collect();
 
     Ok(YougileSyncState {
-        active_source,
-        account_id,
-        project_id,
-        project_name,
-        board_id,
-        board_name,
+        active_source: rows
+            .get("yougile_active_source")
+            .cloned()
+            .unwrap_or_else(|| "local".to_string()),
+        account_id: rows.get("yougile_account_id").cloned(),
+        project_id: rows.get("yougile_project_id").cloned(),
+        project_name: rows.get("yougile_project_name").cloned(),
+        board_id: rows.get("yougile_board_id").cloned(),
+        board_name: rows.get("yougile_board_name").cloned(),
     })
 }
 
@@ -1693,8 +1674,9 @@ pub fn get_yougile_accounts_impl(
             })
         })
         .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read accounts: {e}"))?;
+
     Ok(accounts)
 }
 

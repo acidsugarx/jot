@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code)] // TODO: add #[allow(dead_code)] on individual unused items
 
 use std::collections::HashMap;
 
@@ -315,6 +315,14 @@ pub struct ChatMessageIdResponse {
     pub id: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileUploadResponse {
+    pub result: String,
+    pub url: String,
+    pub full_url: String,
+}
+
 // ── API response wrapper ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -361,7 +369,7 @@ pub struct CreateYougileTask {
     pub timer: Option<YougileTimer>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateYougileTask {
     #[serde(skip_serializing_if = "Option::is_none")]

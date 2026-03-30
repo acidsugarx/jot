@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn } from 'lucide-react';
+import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { formatYougileTrackedHours, getYougileTaskColorValue, YOUGILE_TASK_COLOR_OPTIONS } from '@/lib/yougile';
 import { escapeHtml } from '@/lib/formatting';
+import { sanitizeHtml } from '@/lib/sanitize';
 import { useYougileStore } from '@/store/use-yougile-store';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
 
@@ -35,6 +38,73 @@ function dateInputToUnixMs(value: string): number | undefined {
 
 function looksLikeHtml(text: string): boolean {
   return /<\/?[a-z][\s\S]*>/i.test(text);
+}
+
+const CHAT_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|heic|heif|avif)(?:$|[?#])/i;
+
+function resolveYougileFileUrl(rawPath: string): string {
+  const normalized = rawPath
+    .replace(/^\/?root\/#file:/i, '')
+    .replace(/^\/+/, '');
+  return `https://yougile.com/${normalized}`;
+}
+
+function normalizeChatHtml(html: string): string {
+  // First resolve all user-data URLs
+  let result = html.replace(
+    /\b(src|href)="((?:\/?root\/#file:)?\/?user-data\/[^"]+)"/gi,
+    (_match, attr: string, path: string) => `${attr}="${resolveYougileFileUrl(path)}"`
+  );
+  // Convert <a> tags that point to image files into <img> tags
+  result = result.replace(
+    /<a\b[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/gi,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    (_match, href: string, _label: string) => {
+      if (CHAT_IMAGE_EXT_RE.test(href)) {
+        return `<img src="${href}" alt="" style="max-width:100%;max-height:12rem;border-radius:4px;cursor:pointer" />`;
+      }
+      return _match;
+    }
+  );
+  return result;
+}
+
+interface ChatAttachment {
+  url: string;
+  fileName: string;
+}
+
+function fileNameFromAttachmentUrl(url: string): string {
+  const base = url.split('?')[0]?.split('#')[0] ?? url;
+  const parts = base.split('/');
+  const raw = parts[parts.length - 1] || base;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function extractYougileAttachment(text: string): ChatAttachment | null {
+  const match = text.match(/\/(?:root\/#file:)?\/?(user-data\/[a-f0-9-]+\/[^\s]+)/i);
+  if (!match?.[1]) return null;
+  const url = resolveYougileFileUrl(match[1]);
+  return {
+    url,
+    fileName: fileNameFromAttachmentUrl(url),
+  };
+}
+
+function isImageAttachmentUrl(url: string): boolean {
+  return CHAT_IMAGE_EXT_RE.test(url);
+}
+
+function getAttachmentName(attachment: File | string): string {
+  if (typeof attachment !== 'string') {
+    return attachment.name;
+  }
+  const parts = attachment.split(/[\\/]/);
+  return parts[parts.length - 1] || attachment;
 }
 
 function descriptionToEditorText(value: string | null | undefined): string {
@@ -127,6 +197,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     companyUsers,
     fetchChatMessages,
     sendChatMessage,
+    sendChatWithAttachments,
     fetchCompanyUsers,
   } = useYougileStore();
 
@@ -138,7 +209,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     unixMsToDateInput(task.deadline?.deadline ?? null)
   );
   const [checklists, setChecklists] = useState<YougileChecklist[]>(
-    task.checklists ? JSON.parse(JSON.stringify(task.checklists)) : []
+    task.checklists ? structuredClone(task.checklists) : []
   );
   const [color, setColor] = useState(task.color ?? 'task-primary');
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -152,8 +223,10 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<Array<File | string>>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
@@ -180,7 +253,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     setDescription(descriptionToEditorText(task.description));
     setColumnId(task.columnId ?? '');
     setDeadlineValue(unixMsToDateInput(task.deadline?.deadline ?? null));
-    setChecklists(task.checklists ? JSON.parse(JSON.stringify(task.checklists)) : []);
+    setChecklists(task.checklists ? structuredClone(task.checklists) : []);
     setColor(task.color ?? 'task-primary');
     setAssignedUserIds(task.assigned);
     setStickerValues(normalizeStickerMap(task.stickers));
@@ -338,15 +411,69 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
   const handleSendMessage = useCallback(async () => {
     const text = chatInput.trim();
-    if (!text) return;
+    if (!text && pendingFiles.length === 0) return;
     setChatSending(true);
-    const ok = await sendChatMessage(taskId, text);
+    let ok: boolean;
+    if (pendingFiles.length > 0) {
+      ok = await sendChatWithAttachments(taskId, text, pendingFiles);
+    } else {
+      ok = await sendChatMessage(taskId, text);
+    }
     setChatSending(false);
     if (ok) {
       setChatInput('');
+      setPendingFiles([]);
       requestAnimationFrame(() => chatInputRef.current?.focus());
     }
-  }, [chatInput, sendChatMessage, taskId]);
+  }, [chatInput, pendingFiles, sendChatMessage, sendChatWithAttachments, taskId]);
+
+  const handleDownloadFile = useCallback(async (url: string, fileName: string) => {
+    try {
+      const savePath = await saveFileDialog({
+        title: 'Save file',
+        defaultPath: fileName,
+      });
+      if (!savePath) return;
+      await invoke('yougile_download_file', { url, savePath });
+    } catch (e) {
+      console.error('Download failed:', e);
+    }
+  }, []);
+
+  const handlePasteImage = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      setPendingFiles((prev) => [...prev, ...imageFiles]);
+    }
+  }, []);
+
+  const handlePickFiles = useCallback(async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: true,
+        title: 'Attach files',
+      });
+
+      if (selected == null) return;
+
+      const next = Array.isArray(selected) ? selected : [selected];
+      const paths = next.filter((path): path is string => typeof path === 'string');
+      if (paths.length > 0) {
+        setPendingFiles((prev) => [...prev, ...paths]);
+      }
+    } catch {
+      fileInputRef.current?.click();
+    }
+  }, []);
 
   const currentColumn = columns.find((c) => c.id === columnId);
   const colorOption = YOUGILE_TASK_COLOR_OPTIONS.find((option) => option.value === color)
@@ -890,8 +1017,11 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                     ?? companyUsers.find((u) => u.id === msg.fromUserId)
                     ?? users.find((u) => u.email === msg.fromUserId)
                     ?? companyUsers.find((u) => u.email === msg.fromUserId);
-                  // Use || not ?? so empty strings fall through
-                  const name = user?.realName
+                  // Use || not ?? so empty strings fall through.
+                  // Skip realName if it looks like an email address.
+                  const rawName = user?.realName;
+                  const realName = rawName && !rawName.includes('@') ? rawName : null;
+                  const name = realName
                     || user?.email?.split('@')[0]
                     || (msg.fromUserId.includes('@') ? msg.fromUserId.split('@')[0] : null)
                     || msg.fromUserId.slice(0, 8);
@@ -901,19 +1031,17 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                     hour: '2-digit',
                     minute: '2-digit',
                   });
-                  // Resolve Yougile internal file paths to full URLs
                   let html = msg.textHtml ?? '';
                   if (html) {
-                    html = html.replace(
-                      /(?:src|href)="(\/user-data\/[^"]+)"/g,
-                      (_, path) => `src="https://yougile.com${path}"`
-                    );
+                    html = sanitizeHtml(normalizeChatHtml(html));
                   }
                   const hasHtml = html && looksLikeHtml(html);
-                  // Also check plain text for file references
-                  const fileMatch = !hasHtml && msg.text.match(
-                    /\/(?:root\/#file:)?\/?(user-data\/[a-f0-9-]+\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg))/i
-                  );
+                  const attachment = !hasHtml ? extractYougileAttachment(msg.text) : null;
+                  const fileMarkerIndex = attachment
+                    ? msg.text.search(/\/(?:root\/#file:)?\/?user-data\//i)
+                    : -1;
+                  const fileLeadText = fileMarkerIndex > 0 ? msg.text.slice(0, fileMarkerIndex).trim() : '';
+                  const isImageFile = attachment ? isImageAttachmentUrl(attachment.url) : false;
                   return (
                     <div key={msg.id} className="group">
                       <div className="flex items-baseline gap-2">
@@ -930,32 +1058,49 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                           dangerouslySetInnerHTML={{ __html: html }}
                           onClick={(e) => {
                             const img = (e.target as HTMLElement).closest('img');
-                            if (img?.src) setPreviewImage(img.src);
+                            if (img?.src) { setPreviewImage(img.src); return; }
+                            const anchor = (e.target as HTMLElement).closest('a');
+                            if (anchor?.href) {
+                              e.preventDefault();
+                              const href = anchor.href;
+                              const fileName = fileNameFromAttachmentUrl(href);
+                              void handleDownloadFile(href, fileName);
+                            }
                           }}
                         />
-                      ) : fileMatch ? (
+                      ) : attachment ? (
                         <div className="mt-0.5">
-                          {msg.text.indexOf('/root/#file:') > 0 && (
+                          {fileLeadText && (
                             <div className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">
-                              {msg.text.slice(0, msg.text.indexOf('/root/#file:')).trim()}
+                              {fileLeadText}
                             </div>
                           )}
-                          <div className="group/img relative mt-1 inline-block">
-                            <img
-                              src={`https://yougile.com/${fileMatch[1]!.split('?')[0]}`}
-                              alt=""
-                              className="max-w-full max-h-48 rounded cursor-pointer"
-                              onClick={() => setPreviewImage(`https://yougile.com/${fileMatch[1]!.split('?')[0]}`)}
-                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                            />
+                          {isImageFile ? (
+                            <div className="group/img relative mt-1 inline-block">
+                              <img
+                                src={attachment.url}
+                                alt=""
+                                className="max-w-full max-h-48 rounded cursor-pointer"
+                                onClick={() => setPreviewImage(attachment.url)}
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setPreviewImage(attachment.url)}
+                                className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover/img:opacity-100"
+                              >
+                                <ZoomIn className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => setPreviewImage(`https://yougile.com/${fileMatch[1]!.split('?')[0]}`)}
-                              className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover/img:opacity-100"
+                              onClick={() => void handleDownloadFile(attachment.url, attachment.fileName)}
+                              className="mt-1 inline-flex items-center font-mono text-xs text-cyan-400 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-300"
                             >
-                              <ZoomIn className="h-3 w-3" />
+                              {attachment.fileName}
                             </button>
-                          </div>
+                          )}
                         </div>
                       ) : (
                         <div className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">
@@ -970,11 +1115,43 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
             )}
           </div>
           <div className="border-t border-zinc-800/30 px-4 py-2">
+            {/* Pending file previews */}
+            {pendingFiles.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="group relative flex items-center gap-1 rounded bg-zinc-800/60 px-2 py-1 text-[10px] text-zinc-400">
+                    <ImageIcon className="h-3 w-3 shrink-0" />
+                    <span className="max-w-[100px] truncate">{getAttachmentName(f)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="ml-0.5 text-zinc-600 hover:text-zinc-300"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files && files.length > 0) {
+                  setPendingFiles((prev) => [...prev, ...Array.from(files)]);
+                }
+                e.target.value = '';
+              }}
+            />
             <div className="flex items-end gap-2">
               <textarea
                 ref={chatInputRef}
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                onPaste={handlePasteImage}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
@@ -992,7 +1169,15 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
               />
               <button
                 type="button"
-                disabled={chatSending || !chatInput.trim()}
+                onClick={() => void handlePickFiles()}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-400"
+                title="Attach file"
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={chatSending || (!chatInput.trim() && pendingFiles.length === 0)}
                 onClick={() => void handleSendMessage()}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-cyan-500/10 text-cyan-400 transition-colors hover:bg-cyan-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
               >
