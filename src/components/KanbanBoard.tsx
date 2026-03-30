@@ -157,7 +157,7 @@ export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoar
       >
         <div className="flex gap-3">
           <SortableContext items={columnIds}>
-            {localColumns.map((col) => {
+            {localColumns.map((col, colIdx) => {
               const colTasks: CardTask[] = isYougile
                 ? (yougileTasksByColumn!.get(col.id) ?? [])
                 : tasks.filter((t) => t.status === col.statusKey);
@@ -166,6 +166,7 @@ export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoar
                 <KanbanColumn
                   key={col.id}
                   column={col}
+                  columnIndex={colIdx}
                   tasks={colTasks}
                   readOnly={isYougile}
                 />
@@ -221,7 +222,7 @@ export function KanbanBoard({ yougileColumns, yougileTasksByColumn }: KanbanBoar
         </div>
 
         <DragOverlay>
-          {activeTask && <KanbanTaskCard task={activeTask} isOverlay />}
+          {activeTask && <KanbanTaskCard task={activeTask} isOverlay columnIndex={0} taskIndex={0} />}
           {activeColumn && (
             <div className="w-[260px] rounded-md border border-cyan-500/30 bg-[#141414] opacity-80">
               <div className="flex h-8 items-center px-3">

@@ -6,6 +6,7 @@ import { FileText, Users } from 'lucide-react';
 import { getYougileTaskColorValue, PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
+import { useFocusable } from '@/hooks/use-focusable';
 
 // Unified card item — either a local Task or a YougileTask
 export type CardTask = Task | YougileTask;
@@ -17,24 +18,47 @@ function isYougile(task: CardTask): task is YougileTask {
 interface TaskCardProps {
   task: CardTask;
   isOverlay?: boolean;
+  columnIndex: number;
+  taskIndex: number;
 }
 
-export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
+export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: TaskCardProps) {
   const {
     selectTask: selectLocalTask,
-    selectedTaskId: localSelectedTaskId,
     setIsEditorOpen,
   } = useTaskStore();
   const {
     selectTask: selectYougileTask,
-    selectedTaskId: yougileSelectedTaskId,
   } = useYougileStore();
   const isYougileCard = isYougile(task);
-  const isSelected = task.id === (isYougileCard ? yougileSelectedTaskId : localSelectedTaskId);
+
+  // Focus engine integration
+  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable({
+    pane: 'task-view',
+    region: `column-${columnIndex}`,
+    index: taskIndex,
+    id: task.id,
+    onSelect: () => {
+      if (isYougileCard) {
+        selectYougileTask(task.id);
+      } else {
+        selectLocalTask(task.id);
+      }
+    },
+    onActivate: () => setIsEditorOpen(true),
+  });
+
+  const isSelected = isFocusSelected;
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'Task', task },
   });
+
+  // Merge refs for both dnd-kit and focus engine
+  const mergedRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+  };
 
   const style = {
     transition,
@@ -44,7 +68,7 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
   if (isDragging && !isOverlay) {
     return (
       <div
-        ref={setNodeRef}
+        ref={mergedRef}
         style={style}
         className="h-[44px] w-full rounded border border-cyan-500/20 bg-zinc-900/20"
       />
@@ -62,10 +86,8 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
 
     return (
       <div
-        ref={setNodeRef}
+        ref={mergedRef}
         style={style}
-        onClick={() => selectYougileTask(task.id)}
-        onDoubleClick={() => setIsEditorOpen(true)}
         {...attributes}
         {...listeners}
         className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
@@ -112,10 +134,8 @@ export function KanbanTaskCard({ task, isOverlay }: TaskCardProps) {
 
   return (
     <div
-      ref={setNodeRef}
+      ref={mergedRef}
       style={style}
-      onClick={() => selectLocalTask(task.id)}
-      onDoubleClick={() => setIsEditorOpen(true)}
       {...attributes}
       {...listeners}
       className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${

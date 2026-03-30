@@ -9,11 +9,12 @@ import { useTaskStore } from '@/store/use-task-store';
 
 interface ColumnProps {
   column: KanbanColumnType;
+  columnIndex: number;
   tasks: CardTask[];
   readOnly?: boolean;
 }
 
-export function KanbanColumn({ column, tasks, readOnly }: ColumnProps) {
+export function KanbanColumn({ column, columnIndex, tasks, readOnly }: ColumnProps) {
   const { updateColumn, deleteColumn } = useTaskStore();
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(column.name);
@@ -128,8 +129,8 @@ export function KanbanColumn({ column, tasks, readOnly }: ColumnProps) {
       {/* Cards */}
       <div className="flex flex-col gap-px overflow-y-auto p-1">
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-          {tasks.map((task) => (
-            <KanbanTaskCard key={task.id} task={task} />
+          {tasks.map((task, taskIdx) => (
+            <KanbanTaskCard key={task.id} task={task} columnIndex={columnIndex} taskIndex={taskIdx} />
           ))}
         </SortableContext>
         {tasks.length === 0 && (

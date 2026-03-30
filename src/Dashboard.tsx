@@ -32,7 +32,17 @@ import { CardTask } from '@/components/KanbanTaskCard';
 import type { YougileTask } from '@/types/yougile';
 import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useVimBindings, ViewMode, type DeleteRequest } from '@/hooks/use-vim-bindings';
+import { focusEngine } from '@/lib/focus-engine';
+
+// Local type definitions (previously from use-vim-bindings)
+export type ViewMode = 'list' | 'kanban' | 'calendar';
+
+export interface DeleteRequest {
+  taskId: string;
+  taskTitle: string;
+  source: 'local' | 'yougile';
+  nextTaskId: string | null;
+}
 
 const statusMeta = (s: string, label?: string) => {
   const text = (label ?? s).slice(0, 4).toLowerCase();
@@ -211,11 +221,141 @@ export default function Dashboard() {
     setDeleteDialog(request);
   }, []);
 
-  useVimBindings(activeTab as ViewMode, {
-    onRequestDelete: requestDelete,
-    onToggleHelp: () => setShowHelp((v) => !v),
-    onSwitchTab: (tab) => setActiveTab(tab),
-  });
+  const buildDeleteRequest = useCallback((task: Task | YougileTask): DeleteDialogState => {
+    const source = 'columnId' in task ? 'yougile' : 'local';
+    const ordered = source === 'yougile'
+      ? yougileVisibleTasks
+      : tasks;
+    const idx = ordered.findIndex((item) => item.id === task.id);
+    const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
+
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      source,
+      nextTaskId: nextTask?.id ?? null,
+    };
+  }, [tasks, yougileVisibleTasks]);
+
+  // Register panes with focus engine
+  useEffect(() => {
+    const engine = focusEngine.getState();
+
+    // Determine regions based on current view and mode
+    const getTaskViewRegions = () => {
+      if (activeTab === 'kanban') {
+        // For kanban, regions are column-0, column-1, etc.
+        const colCount = isYougile ? yougileStore.columns.length : columns.length;
+        return Array.from({ length: colCount }, (_, i) => `column-${i}`);
+      }
+      // For list and calendar, single region
+      return ['list'];
+    };
+
+    const taskViewRegions = getTaskViewRegions();
+    const hasEditor = isEditorOpen && ((isYougile && yougileStore.selectedTaskId) || (!isYougile && localSelectedTaskId));
+
+    // Register sidebar (only for list view, local mode)
+    if (activeTab === 'list' && !isYougile) {
+      engine.registerPane('sidebar', { regions: ['sidebar'], order: 0 });
+    } else {
+      engine.unregisterPane('sidebar');
+    }
+
+    // Register task view
+    engine.registerPane('task-view', { regions: taskViewRegions, order: 1 });
+
+    // Register editor if open
+    if (hasEditor) {
+      engine.registerPane('editor', { regions: ['editor'], order: 2 });
+    } else {
+      engine.unregisterPane('editor');
+    }
+
+    return () => {
+      engine.unregisterPane('sidebar');
+      engine.unregisterPane('task-view');
+      engine.unregisterPane('editor');
+    };
+  }, [activeTab, isYougile, yougileStore.columns.length, columns.length, isEditorOpen, yougileStore.selectedTaskId, localSelectedTaskId]);
+
+  // Register action callbacks on window for FocusProvider
+  useEffect(() => {
+    const selectedTask = isYougile
+      ? yougileStore.tasks.find(t => t.id === yougileStore.selectedTaskId)
+      : tasks.find(t => t.id === localSelectedTaskId);
+
+    window.__jotActions = {
+      onToggleSource: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
+      onSwitchView: (view: 'list' | 'kanban' | 'calendar') => setActiveTab(view),
+      onNewTask: () => setIsQuickAddOpen(true),
+      onToggleDone: () => {
+        if (!selectedTask) return;
+        if (isYougile) {
+          const yt = selectedTask as YougileTask;
+          void yougileStore.updateTask(yt.id, { completed: !yt.completed });
+        } else {
+          const lt = selectedTask as Task;
+          void updateTaskStatus({ id: lt.id, status: lt.status === 'done' ? 'todo' : 'done' });
+        }
+      },
+      onDelete: () => {
+        if (!selectedTask) return;
+        requestDelete(buildDeleteRequest(selectedTask));
+      },
+      onEdit: () => {
+        if (!selectedTask) return;
+        setIsEditorOpen(true);
+      },
+      onOpenNote: () => {
+        if (!selectedTask || isYougile) return;
+        const task = selectedTask as Task;
+        if (task.linkedNotePath) void openLinkedNote(task.linkedNotePath);
+      },
+      onMoveTask: () => {
+        if (!selectedTask || isYougile) return;
+        const task = selectedTask as Task;
+        void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
+      },
+      onCycleStatus: () => {
+        if (!selectedTask || isYougile) return;
+        const task = selectedTask as Task;
+        void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
+      },
+      onToggleArchive: () => {
+        if (!selectedTask || isYougile) return;
+        const task = selectedTask as Task;
+        void updateTaskStatus({ id: task.id, status: task.status === 'archived' ? 'todo' : 'archived' });
+      },
+      onRefresh: () => {
+        if (isYougile) {
+          void yougileStore.fetchTasks();
+        } else {
+          void fetchTasks();
+        }
+      },
+      onToggleHelp: () => setShowHelp(v => !v),
+      onSearch: () => searchRef.current?.focus(),
+      getSelectedNodeId: () => isYougile ? yougileStore.selectedTaskId : localSelectedTaskId,
+    };
+  }, [
+    isYougile,
+    yougileStore.activeSource,
+    yougileStore.setActiveSource,
+    yougileStore.selectedTaskId,
+    yougileStore.tasks,
+    localSelectedTaskId,
+    tasks,
+    requestDelete,
+    buildDeleteRequest,
+    updateTaskStatus,
+    yougileStore.updateTask,
+    yougileStore.fetchTasks,
+    fetchTasks,
+    openLinkedNote,
+    setIsEditorOpen,
+    setIsQuickAddOpen,
+  ]);
 
   // Focus quick-add input when opened
   useEffect(() => {
@@ -360,24 +500,6 @@ export default function Dashboard() {
       items: filteredYougile.filter((task) => task.columnId === col.id),
     }));
   }, [isYougile, yougileStore.columns, filteredYougile]);
-
-  const buildDeleteRequest = useCallback((task: Task | YougileTask): DeleteDialogState => {
-    const source = 'columnId' in task ? 'yougile' : 'local';
-    const ordered = source === 'yougile'
-      ? yougileVisibleTasks
-      : activeTab === 'list'
-        ? tasks
-        : tasks;
-    const idx = ordered.findIndex((item) => item.id === task.id);
-    const nextTask = ordered[idx + 1] || ordered[idx - 1] || null;
-
-    return {
-      taskId: task.id,
-      taskTitle: task.title,
-      source,
-      nextTaskId: nextTask?.id ?? null,
-    };
-  }, [activeTab, tasks, yougileVisibleTasks]);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteDialog) return;
