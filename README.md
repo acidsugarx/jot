@@ -50,6 +50,8 @@ Tags, priority, due date, and a linked note — all from one line. No forms, no 
 ```bash
 brew tap acidsugarx/tap
 brew install --cask jot
+
+xattr -d com.apple.quarantine /Applications/jot.app
 ```
 
 ### Download
