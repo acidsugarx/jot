@@ -33,6 +33,7 @@ import type { YougileTask } from '@/types/yougile';
 import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { focusEngine } from '@/lib/focus-engine';
+import { useFocusEngineStore } from '@/hooks/use-focus-engine';
 
 // Local type definitions (previously from use-vim-bindings)
 export type ViewMode = 'list' | 'kanban' | 'calendar';
@@ -90,6 +91,12 @@ export default function Dashboard() {
   const searchRef = useRef<HTMLInputElement>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const [quickAddValue, setQuickAddValue] = useState('');
+
+  // Pane focus state for visual highlights
+  const activePane = useFocusEngineStore((s) => s.activePane);
+  const isSidebarFocused = activePane === 'sidebar';
+  const isTaskViewFocused = activePane === 'task-view';
+  const isEditorFocused = activePane === 'editor';
 
   const {
     tasks,
@@ -869,7 +876,7 @@ export default function Dashboard() {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar — list view only */}
         {activeTab === 'list' && !isYougile && (
-          <div className="flex w-40 shrink-0 flex-col border-r border-zinc-800/40 py-2">
+          <div className={`flex w-40 shrink-0 flex-col border-r border-zinc-800/40 py-2 transition-shadow duration-150 ${isSidebarFocused ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
             {/* Fixed filters */}
             {(
               [
@@ -930,7 +937,7 @@ export default function Dashboard() {
         )}
 
         {/* Main content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className={`flex-1 overflow-y-auto transition-shadow duration-150 ${isTaskViewFocused ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
           {activeTab === 'list' && (
             <div className="mx-auto w-full max-w-3xl py-2">
               {/* Loading skeletons — first load only */}
@@ -1032,15 +1039,19 @@ export default function Dashboard() {
 
         {/* Editor pane — local tasks */}
         {!isYougile && localSelectedTaskId && isEditorOpen && selectedTask && (
-          <TaskEditorPane />
+          <div className={`transition-shadow duration-150 ${isEditorFocused ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+            <TaskEditorPane />
+          </div>
         )}
 
         {/* Editor pane — Yougile tasks */}
         {isYougile && isEditorOpen && selectedYougileTask && (
-          <YougileTaskEditor
-            task={selectedYougileTask}
-            onClose={() => setIsEditorOpen(false)}
-          />
+          <div className={`transition-shadow duration-150 ${isEditorFocused ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+            <YougileTaskEditor
+              task={selectedYougileTask}
+              onClose={() => setIsEditorOpen(false)}
+            />
+          </div>
         )}
       </div>
 

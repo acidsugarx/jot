@@ -94,7 +94,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
           isOverlay
             ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'
             : isSelected
-              ? 'border-l-2 border-l-cyan-500 bg-cyan-500/[0.03]'
+              ? 'ring-1 ring-cyan-500/40 border-l-2 border-l-cyan-500 bg-cyan-500/[0.03]'
               : 'hover:bg-zinc-900/40'
         }`}
       >
@@ -142,7 +142,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
         isOverlay
           ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'
           : isSelected
-            ? 'border-l-2 border-l-cyan-500 bg-cyan-500/[0.03]'
+            ? 'ring-1 ring-cyan-500/40 border-l-2 border-l-cyan-500 bg-cyan-500/[0.03]'
             : 'hover:bg-zinc-900/40'
       }`}
     >
