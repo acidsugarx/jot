@@ -6,6 +6,7 @@ import { formatYougileTrackedHours, getYougileTaskColorValue, YOUGILE_TASK_COLOR
 import { escapeHtml } from '@/lib/formatting';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { useYougileStore } from '@/store/use-yougile-store';
+import { focusEngine } from '@/lib/focus-engine';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
 
 export interface YougileTaskEditorProps {
@@ -294,16 +295,28 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
 
-  // Escape key to close
+  // Wire Escape into focus engine — close editor from NORMAL mode
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
+    const existing = window.__jotActions;
+    window.__jotActions = {
+      ...existing,
+      onEscape: () => {
+        const engineMode = focusEngine.getState().mode;
+        if (engineMode === 'INSERT') {
+          focusEngine.getState().setMode('NORMAL');
+        } else {
+          onClose();
+        }
+      },
+    };
+    return () => {
+      // Restore previous actions without onEscape
+      if (existing) {
+        window.__jotActions = existing;
+      } else if (window.__jotActions) {
+        delete window.__jotActions;
       }
     };
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
   }, [onClose]);
 
   const handleTitleBlur = () => {

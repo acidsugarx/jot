@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { AccountsSettings } from '@/components/AccountsSettings';
+import { focusEngine, dispatchFocusKey } from '@/lib/focus-engine';
 import type { AppSettings } from '@/types';
 
 type Tab = 'general' | 'vault' | 'ui' | 'accounts';
@@ -59,50 +60,71 @@ export default function Settings() {
     }
   };
 
-  // Keyboard navigation: h/l switch tabs, Esc closes window
+  // Register settings pane with focus engine
+  useEffect(() => {
+    const engine = focusEngine.getState();
+    engine.registerPane('settings', { regions: tabIdsRef.current, order: 0 });
+    return () => {
+      engine.unregisterPane('settings');
+    };
+  }, []);
+
+  // Register action callbacks for focus engine dispatch
+  useEffect(() => {
+    window.__jotActions = {
+      onEscape: () => {
+        const engineMode = focusEngine.getState().mode;
+        if (engineMode === 'NORMAL') {
+          void getCurrentWindow().close();
+        }
+      },
+    };
+    return () => {
+      if (window.__jotActions) {
+        delete window.__jotActions;
+      }
+    };
+  }, []);
+
+  // Focus-engine keydown handler — replaces inline addEventListener
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-        // Only handle Escape when in a field — blur first
         if (e.key === 'Escape') {
           (document.activeElement as HTMLElement).blur();
           e.preventDefault();
         }
-        // Suppress browser Tab — allow natural field navigation only
         if (e.key === 'Tab') {
           e.preventDefault();
         }
         return;
       }
 
-      switch (e.key) {
-        case 'h':
-        case 'ArrowLeft':
-          e.preventDefault();
-          setActiveTab((current) => {
-            const ids = tabIdsRef.current;
-            const idx = ids.indexOf(current);
-            return ids[Math.max(0, idx - 1)] ?? current;
-          });
-          break;
-        case 'l':
-        case 'ArrowRight':
-          e.preventDefault();
-          setActiveTab((current) => {
-            const ids = tabIdsRef.current;
-            const idx = ids.indexOf(current);
-            return ids[Math.min(ids.length - 1, idx + 1)] ?? current;
-          });
-          break;
-        case 'Escape':
-          e.preventDefault();
-          void getCurrentWindow().close();
-          break;
-        case 'Tab':
-          // Suppress browser tab cycling
-          e.preventDefault();
-          break;
+      // h/l switch tabs directly (settings-specific, not region navigation)
+      if (e.key === 'h' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setActiveTab((current) => {
+          const ids = tabIdsRef.current;
+          const idx = ids.indexOf(current);
+          return ids[Math.max(0, idx - 1)] ?? current;
+        });
+        return;
+      }
+      if (e.key === 'l' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        setActiveTab((current) => {
+          const ids = tabIdsRef.current;
+          const idx = ids.indexOf(current);
+          return ids[Math.min(ids.length - 1, idx + 1)] ?? current;
+        });
+        return;
+      }
+
+      // Dispatch remaining keys (Escape, Tab, etc.) through focus engine
+      const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+      if (result.handled) {
+        if (result.stopPropagation) e.stopPropagation();
       }
     };
 
