@@ -293,9 +293,9 @@ export default function Dashboard() {
       : tasks.find(t => t.id === localSelectedTaskId);
 
     window.__jotActions = {
-      onToggleSource: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
+      onSourceToggle: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
       onSwitchView: (view: 'list' | 'kanban' | 'calendar') => setActiveTab(view),
-      onNewTask: () => setIsQuickAddOpen(true),
+      onNewItem: () => setIsQuickAddOpen(true),
       onToggleDone: () => {
         if (!selectedTask) return;
         if (isYougile) {
@@ -310,29 +310,14 @@ export default function Dashboard() {
         if (!selectedTask) return;
         requestDelete(buildDeleteRequest(selectedTask));
       },
-      onEdit: () => {
+      onOpenItem: () => {
         if (!selectedTask) return;
         setIsEditorOpen(true);
       },
-      onOpenNote: () => {
-        if (!selectedTask || isYougile) return;
-        const task = selectedTask as Task;
-        if (task.linkedNotePath) void openLinkedNote(task.linkedNotePath);
-      },
-      onMoveTask: () => {
+      onMoveNext: () => {
         if (!selectedTask || isYougile) return;
         const task = selectedTask as Task;
         void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
-      },
-      onCycleStatus: () => {
-        if (!selectedTask || isYougile) return;
-        const task = selectedTask as Task;
-        void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
-      },
-      onToggleArchive: () => {
-        if (!selectedTask || isYougile) return;
-        const task = selectedTask as Task;
-        void updateTaskStatus({ id: task.id, status: task.status === 'archived' ? 'todo' : 'archived' });
       },
       onRefresh: () => {
         if (isYougile) {
@@ -342,8 +327,14 @@ export default function Dashboard() {
         }
       },
       onToggleHelp: () => setShowHelp(v => !v),
-      onSearch: () => searchRef.current?.focus(),
-      getSelectedNodeId: () => isYougile ? yougileStore.selectedTaskId : localSelectedTaskId,
+      onEscape: () => {
+        // Deselect current task
+        if (isYougile) {
+          yougileStore.selectTask('');
+        } else {
+          selectLocalTask('');
+        }
+      },
     };
   }, [
     isYougile,

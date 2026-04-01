@@ -44,9 +44,12 @@ if (label === 'settings') {
   Page = <Dashboard />;
 }
 
+// Dashboard and capture bar need the focus engine to capture keys
+const needsKeyCapture = label === 'main' || label === 'dashboard';
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <FocusProvider>
+    <FocusProvider captureKeys={needsKeyCapture}>
       {Page}
     </FocusProvider>
   </React.StrictMode>
