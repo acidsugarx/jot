@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Command } from 'cmdk';
 import { YougileTaskEditor } from '@/components/YougileTaskEditor';
+import { dispatchFocusKey, focusEngine } from '@/lib/focus-engine';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { tokenize, toDateInputValue } from '@/lib/formatting';
@@ -404,6 +405,198 @@ function App() {
     : null;
   const editingTask = editingLocalTask ?? editingYougileTask;
 
+  // ── Focus engine integration ──────────────────────────────────────────────
+
+  // Bidirectional sync: captureMode <-> focus engine mode
+  useEffect(() => {
+    const engine = focusEngine.getState();
+    engine.setMode(mode === 'insert' ? 'INSERT' : 'NORMAL');
+  }, [mode]);
+
+  useEffect(() => {
+    const unsub = focusEngine.subscribe((state) => {
+      const newMode: CaptureMode = state.mode === 'INSERT' ? 'insert' : 'normal';
+      setMode((prev) => (prev !== newMode ? newMode : prev));
+    });
+    return unsub;
+  }, []);
+
+  // Register capture-bar pane with focus engine
+  useEffect(() => {
+    const engine = focusEngine.getState();
+    engine.registerPane('capture-bar', { regions: ['input', 'picker'], order: 0 });
+    return () => {
+      engine.unregisterPane('capture-bar');
+    };
+  }, []);
+
+  // Register capture-bar actions for FocusProvider dispatch
+  useEffect(() => {
+    window.__jotActions = {
+      onEscape: () => {
+        const engineMode = focusEngine.getState().mode;
+        if (engineMode === 'NORMAL') {
+          void invoke('hide_window');
+        }
+        // If INSERT, do nothing — FocusProvider dispatches drillUp() first,
+        // which sets mode to NORMAL. Next Escape press will hide.
+      },
+      onNewItem: () => {
+        setQuery('');
+        setMode('insert');
+        requestAnimationFrame(() => inputRef.current?.focus());
+      },
+      onToggleDone: () => {
+        const item = normalModeItems[selectedIndex];
+        if (item && !item.id.startsWith('__')) {
+          const task = activeTasks.find((t) => t.id === item.id);
+          if (task) void handleToggleStatus(task);
+        }
+      },
+      onDelete: () => {
+        const item = normalModeItems[selectedIndex];
+        if (item && !item.id.startsWith('__')) {
+          void handleDeleteTask(item.id);
+        }
+      },
+      onOpenItem: () => {
+        const item = normalModeItems[selectedIndex];
+        if (!item) return;
+        if (item.id === '__create') {
+          void handleCreateTask();
+        } else if (item.id.startsWith('__')) {
+          void handleAction(item.id);
+        } else {
+          setEditingTaskId(item.id);
+        }
+      },
+    };
+    return () => {
+      if (window.__jotActions) {
+        delete window.__jotActions;
+      }
+    };
+  }, [normalModeItems, selectedIndex, activeTasks, handleToggleStatus, handleDeleteTask, handleCreateTask, handleAction]);
+
+  // Single focus-engine keydown handler — replaces old inline handlers
+  useEffect(() => {
+    if (editingTask) return;
+
+    const handler = (e: KeyboardEvent) => {
+      // Skip if focus is in a textarea/select (editor fields)
+      const tag = document.activeElement?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // In INSERT mode, only handle Escape specially.
+      // All other keys pass through to the input's native handlers.
+      if (mode === 'insert') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          // Picker back-navigation in INSERT mode
+          if (pickerMode !== 'none') {
+            if (pickerMode === 'board') setPickerMode('project');
+            else if (pickerMode === 'project') setPickerMode('org');
+            else setPickerMode('none');
+            return;
+          }
+          if (hasQuery) {
+            // Clear query first, stay in insert mode
+            setQuery('');
+          } else {
+            // Empty input — switch to NORMAL mode
+            // The focus engine dispatch handles the mode change
+            const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+            if (result.stopPropagation) e.stopPropagation();
+            // Sync capture mode with engine
+            if (focusEngine.getState().mode === 'NORMAL') {
+              suppressNextBlurHideRef.current = true;
+              preserveModeOnNextFocusRef.current = true;
+              setMode('normal');
+              setSelectedIndex(0);
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }
+          }
+          return;
+        }
+        // Let other keys pass through to input's onKeyDown
+        return;
+      }
+
+      // NORMAL mode — dispatch all keys through focus engine
+      // Picker mode uses same keys for navigation
+      if (pickerMode !== 'none') {
+        // Handle picker navigation locally (same as before)
+        switch (e.key) {
+          case 'j':
+          case 'ArrowDown':
+            e.preventDefault();
+            setSelectedIndex((i) => Math.min(i + 1, pickerItems.length - 1));
+            return;
+          case 'k':
+          case 'ArrowUp':
+            e.preventDefault();
+            setSelectedIndex((i) => Math.max(i - 1, 0));
+            return;
+          case 'g':
+            e.preventDefault();
+            setSelectedIndex(0);
+            return;
+          case 'G':
+            e.preventDefault();
+            setSelectedIndex(pickerItems.length - 1);
+            return;
+          case 'Enter':
+          case 'e': {
+            e.preventDefault();
+            const pick = pickerItems[selectedIndex];
+            if (!pick) return;
+            if (pickerMode === 'org') void handleSelectAccount(pick.id);
+            else if (pickerMode === 'project') void handleSelectProject(pick.id);
+            else if (pickerMode === 'board') void handleSelectBoard(pick.id);
+            return;
+          }
+          case 'Escape':
+            e.preventDefault();
+            if (pickerMode === 'board') setPickerMode('project');
+            else if (pickerMode === 'project') setPickerMode('org');
+            else setPickerMode('none');
+            return;
+          case 'i':
+            e.preventDefault();
+            setMode('insert');
+            requestAnimationFrame(() => inputRef.current?.focus());
+            return;
+          default:
+            if (!e.metaKey && !e.ctrlKey) e.preventDefault();
+            return;
+        }
+      }
+
+      // Normal mode (no picker) — let focus engine dispatch
+      const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+      if (result.handled) {
+        if (result.stopPropagation) e.stopPropagation();
+      }
+      // 'i' and '/' switch to insert — handled by engine setting mode
+      // We subscribe to engine mode changes above to sync captureMode
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [
+    editingTask,
+    handleAction,
+    handleCreateTask,
+    handleSelectAccount,
+    handleSelectBoard,
+    handleSelectProject,
+    hasQuery,
+    mode,
+    pickerItems,
+    pickerMode,
+    selectedIndex,
+  ]);
+
   // Items visible in normal mode (tasks + actions)
   const actionItems = useMemo(() => {
     const items: Array<{
@@ -580,20 +773,6 @@ function App() {
       unlisten.then((fn) => fn());
     };
   }, [fetchTasks, syncYougileState, yougileEnabled]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (editingTask || mode !== 'insert') return;
-      if (e.key !== 'Escape') return;
-      if (query.trim().length > 0) return;
-      if (document.activeElement !== inputRef.current) return;
-
-      suppressNextBlurHideRef.current = true;
-    };
-
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
-  }, [editingTask, mode, query]);
 
   // Dynamic window sizing based on actual content
   useEffect(() => {
@@ -858,169 +1037,6 @@ function App() {
     yougileContext.projectName,
   ]);
 
-  // ── Normal mode keyboard handler ────────────────────────────────────────────
-  useEffect(() => {
-    if (mode !== 'normal' || editingTask) return;
-
-    const handler = (e: KeyboardEvent) => {
-      // In normal mode the input stays focused (to keep the NSPanel alive),
-      // so we don't bail on INPUT — the input's onKeyDown already prevents
-      // characters from being typed. Only bail on TEXTAREA/SELECT (editor fields).
-      const tag = document.activeElement?.tagName;
-      if (tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-      // Picker mode — vim keys navigate org/project/board lists
-      if (pickerMode !== 'none') {
-        switch (e.key) {
-          case 'j':
-          case 'ArrowDown':
-            e.preventDefault();
-            setSelectedIndex((i) => Math.min(i + 1, pickerItems.length - 1));
-            return;
-          case 'k':
-          case 'ArrowUp':
-            e.preventDefault();
-            setSelectedIndex((i) => Math.max(i - 1, 0));
-            return;
-          case 'g':
-            e.preventDefault();
-            setSelectedIndex(0);
-            return;
-          case 'G':
-            e.preventDefault();
-            setSelectedIndex(pickerItems.length - 1);
-            return;
-          case 'Enter':
-          case 'e': {
-            e.preventDefault();
-            const pick = pickerItems[selectedIndex];
-            if (!pick) return;
-            if (pickerMode === 'org') void handleSelectAccount(pick.id);
-            else if (pickerMode === 'project') void handleSelectProject(pick.id);
-            else if (pickerMode === 'board') void handleSelectBoard(pick.id);
-            return;
-          }
-          case 'Escape':
-            e.preventDefault();
-            if (pickerMode === 'board') setPickerMode('project');
-            else if (pickerMode === 'project') setPickerMode('org');
-            else setPickerMode('none');
-            return;
-          case 'i':
-            e.preventDefault();
-            setMode('insert');
-            requestAnimationFrame(() => inputRef.current?.focus());
-            return;
-          default:
-            if (!e.metaKey && !e.ctrlKey) e.preventDefault();
-            return;
-        }
-      }
-
-      const item = normalModeItems[selectedIndex];
-
-      switch (e.key) {
-        case 'Escape':
-          e.preventDefault();
-          void invoke('hide_window');
-          return;
-
-        case 'j':
-        case 'ArrowDown':
-          e.preventDefault();
-          setSelectedIndex((i) => Math.min(i + 1, normalModeItems.length - 1));
-          return;
-
-        case 'k':
-        case 'ArrowUp':
-          e.preventDefault();
-          setSelectedIndex((i) => Math.max(i - 1, 0));
-          return;
-
-        case 'g':
-          e.preventDefault();
-          setSelectedIndex(0);
-          return;
-
-        case 'G':
-          e.preventDefault();
-          setSelectedIndex(normalModeItems.length - 1);
-          return;
-
-        case 'i':
-          e.preventDefault();
-          setMode('insert');
-          requestAnimationFrame(() => inputRef.current?.focus());
-          return;
-
-        case '/':
-          e.preventDefault();
-          setMode('insert');
-          setQuery('');
-          requestAnimationFrame(() => inputRef.current?.focus());
-          return;
-
-        case 'Enter':
-        case 'e':
-          e.preventDefault();
-          if (!item) return;
-          if (item.id === '__create') {
-            void handleCreateTask();
-          } else if (item.id.startsWith('__')) {
-            void handleAction(item.id);
-          } else {
-            setEditingTaskId(item.id);
-          }
-          return;
-
-        case 'x':
-          if (item && !item.id.startsWith('__')) {
-            const task = activeTasks.find((t) => t.id === item.id);
-            if (task) void handleToggleStatus(task);
-          }
-          return;
-
-        case 'd':
-          if (item && !item.id.startsWith('__')) {
-            void handleDeleteTask(item.id);
-          }
-          return;
-
-        case 'o':
-          if (item && !item.id.startsWith('__')) {
-            const task = activeTasks.find((t) => t.id === item.id);
-            if (task && !isYougileTask(task) && task.linkedNotePath) {
-              void handleOpenNote(task.linkedNotePath);
-            }
-          }
-          return;
-
-        case 'Tab':
-          e.preventDefault();
-          return;
-      }
-    };
-
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [
-    activeTasks,
-    editingTask,
-    handleAction,
-    handleCreateTask,
-    handleDeleteTask,
-    handleOpenNote,
-    handleSelectAccount,
-    handleSelectBoard,
-    handleSelectProject,
-    handleToggleStatus,
-    mode,
-    normalModeItems,
-    pickerItems,
-    pickerMode,
-    selectedIndex,
-  ]);
-
   // Scroll selected item into view in normal mode
   useEffect(() => {
     if (mode !== 'normal') return;
@@ -1106,34 +1122,15 @@ function App() {
                   }
                   if (e.key === 'Escape') {
                     e.preventDefault();
-                    // In picker mode, go back one level
-                    if (pickerMode !== 'none') {
-                      if (pickerMode === 'board') setPickerMode('project');
-                      else if (pickerMode === 'project') setPickerMode('org');
-                      else setPickerMode('none');
-                      return;
-                    }
-                    if (mode === 'normal') {
-                      void invoke('hide_window');
-                      return;
-                    }
-                    if (hasQuery) {
-                      // Clear query first, stay in insert mode
-                      setQuery('');
-                    } else {
-                      // Empty input — enter normal mode
-                      suppressNextBlurHideRef.current = true;
-                      preserveModeOnNextFocusRef.current = true;
-                      setMode('normal');
-                      setSelectedIndex(0);
-                      requestAnimationFrame(() => inputRef.current?.focus());
-                    }
+                    // Escape is handled by the window-level focus engine handler.
+                    // We just preventDefault here to stop default browser behavior.
+                    // The window handler will fire next and handle mode switching.
                     return;
                   }
                   // In normal mode, intercept keys before they reach the input
                   if (mode === 'normal') {
                     if (e.key === 'i' || e.key === '/') {
-                      // These switch back to insert mode — handled by normal mode effect
+                      // These switch back to insert mode — handled by focus engine
                       // but we need to prevent the character from being typed
                       e.preventDefault();
                     } else if (!e.metaKey && !e.ctrlKey) {
