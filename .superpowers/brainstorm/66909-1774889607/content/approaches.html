@@ -1,0 +1,85 @@
+<h2>Keyboard Navigation Rework — 3 Approaches</h2>
+<p class="subtitle">How to turn jot into a keyboard-first app that still works with mouse</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Unified Focus Engine (Recommended)</h3>
+      <p>Build a single <code>useFocusEngine</code> hook that manages a <strong>focus tree</strong> — panes → regions → items. Every focusable thing in the app registers itself. One state machine controls modes (NORMAL / INSERT / COMMAND). One place handles all key dispatch.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Single source of truth for focus & mode state</li>
+            <li>h/j/k/l works everywhere consistently</li>
+            <li>Escape always does the right thing (drill up the focus tree)</li>
+            <li>New components get keyboard nav "for free" by registering</li>
+            <li>Mode indicator is trivial — just read the engine state</li>
+            <li>Mouse clicks just update the same focus state</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Biggest rewrite — replaces all existing keyboard handling</li>
+            <li>Need to carefully migrate each component</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Layered Keymap System</h3>
+      <p>Keep existing per-component handlers but layer them through a central <strong>keymap registry</strong>. Each component pushes/pops its keymap onto a stack. Top of stack gets first crack at keys. Like tmux's key-table system.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Less invasive — components keep their handlers</li>
+            <li>Keymap stack naturally handles modals/dialogs</li>
+            <li>Can migrate incrementally</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Doesn't fix the focus model — still no unified "where am I"</li>
+            <li>Components still manage their own focus state</li>
+            <li>Mode indicator needs separate plumbing</li>
+            <li>Harder to make h/l column nav work consistently</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Fix What's Broken</h3>
+      <p>Keep the current architecture but fix the specific issues: wire up h/l in kanban, make task editor fields Tab-navigable, add mode indicator, fix Escape behavior. Targeted patches.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Smallest change — less risk</li>
+            <li>Fast to implement</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Doesn't fix the root cause — scattered keyboard handling</li>
+            <li>Will keep feeling "browser-y" not "TUI-y"</li>
+            <li>Each new feature needs its own keyboard plumbing</li>
+            <li>Will accumulate more bugs over time</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
