@@ -933,8 +933,52 @@ function App() {
         return;
       }
 
-      // NORMAL mode — dispatch all keys through focus engine
-      // Picker mode uses same keys for navigation
+      // NORMAL mode (no picker) — handle navigation locally, delegate actions to focus engine
+      switch (e.key) {
+        case 'j':
+        case 'ArrowDown':
+          e.preventDefault();
+          setSelectedIndex((i) => Math.min(i + 1, normalModeItems.length - 1));
+          return;
+        case 'k':
+        case 'ArrowUp':
+          e.preventDefault();
+          setSelectedIndex((i) => Math.max(i - 1, 0));
+          return;
+        case 'g':
+          e.preventDefault();
+          setSelectedIndex(0);
+          return;
+        case 'G':
+          e.preventDefault();
+          setSelectedIndex(normalModeItems.length - 1);
+          return;
+        case 'i':
+          e.preventDefault();
+          setMode('insert');
+          requestAnimationFrame(() => inputRef.current?.focus());
+          return;
+        case 'Enter':
+        case 'e': {
+          e.preventDefault();
+          const item = normalModeItems[selectedIndex];
+          if (!item) return;
+          if (item.id === '__create') {
+            void handleCreateTask();
+          } else if (item.id.startsWith('__')) {
+            void handleAction(item.id);
+          } else {
+            setEditingTaskId(item.id);
+          }
+          return;
+        }
+        case 'Escape':
+          e.preventDefault();
+          void invoke('hide_window');
+          return;
+      }
+
+      // Delegate remaining action keys (x/d/n/o/m/r/?/space/1/2/3) to focus engine
       if (pickerMode !== 'none') {
         // Handle picker navigation locally (same as before)
         switch (e.key) {

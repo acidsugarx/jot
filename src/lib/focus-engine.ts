@@ -510,6 +510,7 @@ export function dispatchFocusKey(
     case 'Escape':
       event.preventDefault();
       state.drillUp();
+      actions.onEscape?.();
       return { handled: true };
     case 'i':
       event.preventDefault();
