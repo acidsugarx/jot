@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import App from './App';
 import Settings from './Settings';
 import Dashboard from './Dashboard';
+import { FocusProvider } from './components/FocusProvider';
 import { useYougileStore } from './store/use-yougile-store';
 import type { AppSettings } from './types';
 import './styles.css';
@@ -45,6 +46,8 @@ if (label === 'settings') {
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    {Page}
+    <FocusProvider>
+      {Page}
+    </FocusProvider>
   </React.StrictMode>
 );
