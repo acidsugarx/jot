@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { X, Eye, PenLine, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
@@ -7,7 +8,36 @@ import { escapeHtml } from '@/lib/formatting';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { focusEngine } from '@/lib/focus-engine';
+import { useFocusable } from '@/hooks/use-focusable';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
+
+// Wrapper that registers each editor field as a focusable node for j/k navigation
+function YougileEditorField({ index, onActivate, onEnter, children }: {
+  index: number;
+  onActivate?: () => void;
+  onEnter?: () => void;
+  children: (isSelected: boolean) => ReactNode;
+}) {
+  const { ref, isSelected } = useFocusable<HTMLDivElement>({
+    pane: 'editor',
+    region: 'editor',
+    index,
+    id: `yougile-field-${index}`,
+    onActivate: () => {
+      onActivate?.();
+      focusEngine.getState().setMode('INSERT');
+    },
+    onEnter,
+  });
+
+  return (
+    <div
+      ref={(node) => { (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+    >
+      {children(isSelected)}
+    </div>
+  );
+}
 
 export interface YougileTaskEditorProps {
   task: YougileTask;
@@ -110,19 +140,21 @@ function getAttachmentName(attachment: File | string): string {
 
 function descriptionToEditorText(value: string | null | undefined): string {
   const source = value ?? '';
-  if (!source || !looksLikeHtml(source)) {
-    return source;
-  }
+  if (!source) return source;
 
-  if (typeof DOMParser !== 'undefined') {
-    const doc = new DOMParser().parseFromString(source, 'text/html');
-    return (doc.body.innerText || doc.body.textContent || '').trim();
-  }
-
+  // Always use regex-based conversion instead of DOMParser.
+  // DOMParser's innerText collapses literal \n to spaces when text contains
+  // angle brackets (e.g. "<script>" in template text triggers HTML parsing).
   return source
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<\/div>\s*<div[^>]*>/gi, '\n')
+    .replace(/<\/li>\s*<li[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
     .trim();
 }
 
@@ -231,6 +263,8 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  const columnSelectRef = useRef<HTMLSelectElement>(null);
+  const deadlineInputRef = useRef<HTMLInputElement>(null);
   const taskId = task.id;
 
   // Fetch chat when opening the chat panel
@@ -294,6 +328,19 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
+
+  // Auto-focus title and switch to editor pane when editor opens
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const engine = focusEngine.getState();
+      if (engine.panes.has('editor')) {
+        engine.focusPane('editor');
+        engine.setMode('INSERT');
+      }
+      titleRef.current?.focus();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
+  }, []);
 
   // Wire Escape into focus engine — close editor from NORMAL mode
   useEffect(() => {
@@ -566,191 +613,231 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-editor>
 
         {/* Title */}
-        <div className="border-b border-zinc-800/30 px-4 py-3">
-          <textarea
-            ref={titleRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={handleTitleBlur}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-              if (e.key === 'Tab') {
-                e.preventDefault();
-                descRef.current?.focus();
-              }
-            }}
-            rows={1}
-            className="w-full resize-none overflow-hidden bg-transparent text-sm font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 selection:bg-cyan-500/30"
-            placeholder="Task title..."
-          />
-        </div>
+        <YougileEditorField index={0} onActivate={() => titleRef.current?.focus()}>
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <textarea
+                ref={titleRef}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={handleTitleBlur}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                  if (e.key === 'Tab') {
+                    e.preventDefault();
+                    descRef.current?.focus();
+                  }
+                }}
+                rows={1}
+                className="w-full resize-none overflow-hidden bg-transparent text-sm font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 selection:bg-cyan-500/30"
+                placeholder="Task title..."
+              />
+            </div>
+          )}
+        </YougileEditorField>
 
         {/* Description */}
-        <div className="border-b border-zinc-800/30 px-4 py-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Description
-            </span>
-            {description && (
-              <button
-                type="button"
-                onClick={() => setDescPreview(!descPreview)}
-                className="flex items-center gap-1 font-mono text-[10px] text-zinc-700 hover:text-zinc-400 transition-colors"
-              >
-                {descPreview ? <PenLine className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
-                {descPreview ? 'Edit' : 'Preview'}
-              </button>
-            )}
-          </div>
-          {descPreview ? (
-            <div
-              className="prose-jot min-h-[2.5rem]"
-              dangerouslySetInnerHTML={{ __html: descriptionPreviewHtml ?? '<p></p>' }}
-            />
-          ) : (
-            <textarea
-              ref={descRef}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onBlur={handleDescriptionBlur}
-              onKeyDown={(e) => {
-                if (e.key === 'Tab') {
-                  e.preventDefault();
-                  // Tab out of description to next focusable element
-                  (e.currentTarget.closest('[data-editor]') as HTMLElement | null)
-                    ?.querySelector<HTMLElement>('[data-field="column"]')
-                    ?.focus();
-                }
-              }}
-              rows={2}
-              className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
-              placeholder="Add a description…"
-            />
+        <YougileEditorField index={1} onActivate={() => { if (!descPreview) descRef.current?.focus(); }}>
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Description
+                </span>
+                {description && (
+                  <button
+                    type="button"
+                    onClick={() => setDescPreview(!descPreview)}
+                    className="flex items-center gap-1 font-mono text-[10px] text-zinc-700 hover:text-zinc-400 transition-colors"
+                  >
+                    {descPreview ? <PenLine className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
+                    {descPreview ? 'Edit' : 'Preview'}
+                  </button>
+                )}
+              </div>
+              {descPreview ? (
+                <div
+                  className="prose-jot min-h-[2.5rem]"
+                  dangerouslySetInnerHTML={{ __html: descriptionPreviewHtml ?? '<p></p>' }}
+                />
+              ) : (
+                <textarea
+                  ref={descRef}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  onBlur={handleDescriptionBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Tab') {
+                      e.preventDefault();
+                      (e.currentTarget.closest('[data-editor]') as HTMLElement | null)
+                        ?.querySelector<HTMLElement>('[data-field="column"]')
+                        ?.focus();
+                    }
+                  }}
+                  rows={2}
+                  className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
+                  placeholder="Add a description…"
+                />
+              )}
+            </div>
           )}
-        </div>
+        </YougileEditorField>
 
         {/* Fields */}
         <div className="border-b border-zinc-800/30">
-          {/* Column / Status */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Column
-            </span>
-            <div className="flex items-center gap-1">
-              <select
-                data-field="column"
-                value={columnId}
-                onChange={(e) => handleColumnChange(e.target.value)}
-                className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
-              >
-                {columns.map((col) => (
-                  <option key={col.id} value={col.id}>{col.title}</option>
-                ))}
-                {!currentColumn && columnId && (
-                  <option value={columnId}>{columnId}</option>
-                )}
-              </select>
-              <ChevronDown className="h-3 w-3 text-zinc-600 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Completed toggle */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Completed
-            </span>
-            <button
-              type="button"
-              onClick={() => void updateTask(task.id, { completed: !task.completed })}
-              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
-            >
-              {task.completed ? (
-                <CheckSquare className="h-3.5 w-3.5 text-cyan-400" />
-              ) : (
-                <Square className="h-3.5 w-3.5 text-zinc-600" />
-              )}
-              <span className="font-mono text-[10px] text-zinc-500">
-                {task.completed ? 'Yes' : 'No'}
-              </span>
-            </button>
-          </div>
-
-          {/* Deadline */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Deadline
-            </span>
-            <div className="flex items-center gap-1.5">
-              {deadlineValue ? (
+          {/* [2] Column */}
+          <YougileEditorField index={2} onActivate={() => columnSelectRef.current?.focus()}>
+            {(isSelected) => (
+              <div className={`flex h-9 items-center justify-between px-4 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Column
+                </span>
                 <div className="flex items-center gap-1">
-                  <input
-                    type="date"
-                    value={deadlineValue}
-                    onChange={(e) => handleDeadlineChange(e.target.value)}
-                    className="bg-transparent font-mono text-sm text-zinc-400 focus:outline-none cursor-pointer [color-scheme:dark]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleClearDeadline}
-                    className="rounded p-0.5 text-zinc-700 hover:text-zinc-400 transition-colors"
+                  <select
+                    ref={columnSelectRef}
+                    data-field="column"
+                    value={columnId}
+                    onChange={(e) => handleColumnChange(e.target.value)}
+                    className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
                   >
-                    <X className="h-3 w-3" />
-                  </button>
+                    {columns.map((col) => (
+                      <option key={col.id} value={col.id}>{col.title}</option>
+                    ))}
+                    {!currentColumn && columnId && (
+                      <option value={columnId}>{columnId}</option>
+                    )}
+                  </select>
+                  <ChevronDown className="h-3 w-3 text-zinc-600 pointer-events-none" />
                 </div>
-              ) : (
+              </div>
+            )}
+          </YougileEditorField>
+
+          {/* [3] Completed */}
+          <YougileEditorField
+            index={3}
+            onActivate={() => void updateTask(task.id, { completed: !task.completed })}
+            onEnter={() => void updateTask(task.id, { completed: !task.completed })}
+          >
+            {(isSelected) => (
+              <div className={`flex h-9 items-center justify-between px-4 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Completed
+                </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    const today = new Date().toISOString().split('T')[0] ?? '';
-                    handleDeadlineChange(today);
-                  }}
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+                  onClick={() => void updateTask(task.id, { completed: !task.completed })}
+                  className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
                 >
-                  <Calendar className="h-3 w-3" />
-                  <span className="font-mono text-xs">Set date</span>
+                  {task.completed ? (
+                    <CheckSquare className="h-3.5 w-3.5 text-cyan-400" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5 text-zinc-600" />
+                  )}
+                  <span className="font-mono text-[10px] text-zinc-500">
+                    {task.completed ? 'Yes' : 'No'}
+                  </span>
                 </button>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </YougileEditorField>
 
-          {/* Color */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Color
-            </span>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowColorPicker(!showColorPicker)}
-                className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-              >
-                <div
-                  className="h-3 w-3 rounded-full"
-                  style={{ backgroundColor: getYougileTaskColorValue(colorOption.value) ?? '#7B869E' }}
-                />
-                <span className="font-mono text-[10px]">{colorOption.label}</span>
-              </button>
-              {showColorPicker && (
-                <div className="absolute right-0 top-full z-10 mt-1 flex flex-wrap gap-1 rounded-md border border-zinc-700 bg-[#1a1a1a] p-2 shadow-xl w-[140px]">
-                  {YOUGILE_TASK_COLOR_OPTIONS.map((opt) => (
+          {/* [4] Deadline */}
+          <YougileEditorField
+            index={4}
+            onActivate={() => {
+              if (deadlineValue) {
+                deadlineInputRef.current?.focus();
+              } else {
+                const today = new Date().toISOString().split('T')[0] ?? '';
+                handleDeadlineChange(today);
+                requestAnimationFrame(() => deadlineInputRef.current?.focus());
+              }
+            }}
+          >
+            {(isSelected) => (
+              <div className={`flex h-9 items-center justify-between px-4 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Deadline
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {deadlineValue ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        ref={deadlineInputRef}
+                        type="date"
+                        value={deadlineValue}
+                        onChange={(e) => handleDeadlineChange(e.target.value)}
+                        className="bg-transparent font-mono text-sm text-zinc-400 focus:outline-none cursor-pointer [color-scheme:dark]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleClearDeadline}
+                        className="rounded p-0.5 text-zinc-700 hover:text-zinc-400 transition-colors"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
                     <button
-                      key={opt.value}
                       type="button"
-                      title={opt.label}
-                      onClick={() => handleColorChange(opt.value)}
-                      className={`h-5 w-5 rounded-full transition-transform hover:scale-110 ${
-                        color === opt.value ? 'ring-2 ring-white/40 ring-offset-1 ring-offset-[#1a1a1a]' : ''
-                      }`}
-                      style={{ backgroundColor: opt.hex }}
-                    />
-                  ))}
+                      onClick={() => {
+                        const today = new Date().toISOString().split('T')[0] ?? '';
+                        handleDeadlineChange(today);
+                      }}
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+                    >
+                      <Calendar className="h-3 w-3" />
+                      <span className="font-mono text-xs">Set date</span>
+                    </button>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
+          </YougileEditorField>
+
+          {/* [5] Color */}
+          <YougileEditorField index={5} onActivate={() => setShowColorPicker(true)}>
+            {(isSelected) => (
+              <div className={`flex h-9 items-center justify-between px-4 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Color
+                </span>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowColorPicker(!showColorPicker)}
+                    className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+                  >
+                    <div
+                      className="h-3 w-3 rounded-full"
+                      style={{ backgroundColor: getYougileTaskColorValue(colorOption.value) ?? '#7B869E' }}
+                    />
+                    <span className="font-mono text-[10px]">{colorOption.label}</span>
+                  </button>
+                  {showColorPicker && (
+                    <div className="absolute right-0 top-full z-10 mt-1 flex flex-wrap gap-1 rounded-md border border-zinc-700 bg-[#1a1a1a] p-2 shadow-xl w-[140px]">
+                      {YOUGILE_TASK_COLOR_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          title={opt.label}
+                          onClick={() => handleColorChange(opt.value)}
+                          className={`h-5 w-5 rounded-full transition-transform hover:scale-110 ${
+                            color === opt.value ? 'ring-2 ring-white/40 ring-offset-1 ring-offset-[#1a1a1a]' : ''
+                          }`}
+                          style={{ backgroundColor: opt.hex }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </YougileEditorField>
         </div>
 
         {/* Assigned Users */}
