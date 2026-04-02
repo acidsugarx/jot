@@ -273,3 +273,37 @@ describe('dispatchFocusKey onEnter', () => {
     expect(onEnter).not.toHaveBeenCalled();
   });
 });
+
+describe('dispatchFocusKey editable element guard', () => {
+  let engine: ReturnType<typeof createFocusEngine>;
+
+  beforeEach(() => {
+    engine = createFocusEngine();
+    engine.getState().registerPane('task-view', { regions: ['main'], order: 1 });
+    engine.getState().focusPane('task-view');
+  });
+
+  it('NORMAL mode keypress on editable element returns not handled', () => {
+    const input = document.createElement('input');
+    const event = new KeyboardEvent('keydown', { key: 'j' });
+    Object.defineProperty(event, 'target', { value: input });
+    const result = dispatchFocusKey(engine, event);
+    expect(result.handled).toBe(false);
+  });
+
+  it('Escape on editable element in NORMAL mode still passes through', () => {
+    const input = document.createElement('input');
+    const event = new KeyboardEvent('keydown', { key: 'Escape' });
+    Object.defineProperty(event, 'target', { value: input });
+    const result = dispatchFocusKey(engine, event);
+    expect(result.handled).toBe(true);
+  });
+
+  it('i with no registered nodes still transitions engine to INSERT mode', () => {
+    // No nodes registered — activateSelection is a no-op
+    expect(engine.getState().mode).toBe('NORMAL');
+    const event = new KeyboardEvent('keydown', { key: 'i' });
+    dispatchFocusKey(engine, event);
+    expect(engine.getState().mode).toBe('INSERT');
+  });
+});
