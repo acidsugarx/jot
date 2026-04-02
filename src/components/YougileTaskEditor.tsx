@@ -842,74 +842,78 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
         {/* Assigned Users */}
         {(users.length > 0 || assignedUserIds.length > 0) && (
-          <div className="border-b border-zinc-800/30 px-4 py-3">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <Users className="h-3 w-3 text-zinc-600" />
-                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-                  Assigned ({assignedUserIds.length})
-                </span>
-              </div>
-              {users.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAssigneePicker((open) => !open)}
-                  className="rounded px-1.5 py-0.5 font-mono text-[10px] text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
-                >
-                  {showAssigneePicker ? 'Done' : 'Edit'}
-                </button>
-              )}
-            </div>
-            {assignedUserIds.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                {assignedUserIds.map((userId) => {
-                  const user = users.find((u) => u.id === userId);
-                  return (
-                    <div
-                      key={userId}
-                      className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2 py-1"
-                    >
-                      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 font-mono text-[9px] text-zinc-400">
-                        {user?.realName?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
-                      </div>
-                      <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-400">
-                        {user?.realName ?? user?.email ?? userId}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded border border-dashed border-zinc-800 px-2 py-2 font-mono text-[10px] text-zinc-700">
-                No assignees
-              </div>
-            )}
-            {showAssigneePicker && users.length > 0 && (
-              <div className="mt-2 flex flex-col gap-1 rounded-md border border-zinc-800 bg-zinc-900/40 p-1">
-                {users.map((user) => {
-                  const isAssigned = assignedUserIds.includes(user.id);
-                  const label = user.realName ?? user.email ?? user.id;
-                  return (
+          <YougileEditorField index={6} onActivate={() => setShowAssigneePicker(true)}>
+            {(isSelected) => (
+              <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Users className="h-3 w-3 text-zinc-600" />
+                    <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                      Assigned ({assignedUserIds.length})
+                    </span>
+                  </div>
+                  {users.length > 0 && (
                     <button
-                      key={user.id}
                       type="button"
-                      onClick={() => handleToggleAssignee(user.id)}
-                      className={`flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
-                        isAssigned ? 'bg-cyan-500/10 text-zinc-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
-                      }`}
+                      onClick={() => setShowAssigneePicker((open) => !open)}
+                      className="rounded px-1.5 py-0.5 font-mono text-[10px] text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
                     >
-                      {isAssigned ? (
-                        <CheckSquare className="h-3 w-3 shrink-0 text-cyan-400" />
-                      ) : (
-                        <Square className="h-3 w-3 shrink-0 text-zinc-700" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-xs">{label}</span>
+                      {showAssigneePicker ? 'Done' : 'Edit'}
                     </button>
-                  );
-                })}
+                  )}
+                </div>
+                {assignedUserIds.length > 0 ? (
+                  <div className="flex flex-col gap-1">
+                    {assignedUserIds.map((userId) => {
+                      const user = users.find((u) => u.id === userId);
+                      return (
+                        <div
+                          key={userId}
+                          className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2 py-1"
+                        >
+                          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 font-mono text-[9px] text-zinc-400">
+                            {user?.realName?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? '?'}
+                          </div>
+                          <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-400">
+                            {user?.realName ?? user?.email ?? userId}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded border border-dashed border-zinc-800 px-2 py-2 font-mono text-[10px] text-zinc-700">
+                    No assignees
+                  </div>
+                )}
+                {showAssigneePicker && users.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1 rounded-md border border-zinc-800 bg-zinc-900/40 p-1">
+                    {users.map((user) => {
+                      const isAssigned = assignedUserIds.includes(user.id);
+                      const label = user.realName ?? user.email ?? user.id;
+                      return (
+                        <button
+                          key={user.id}
+                          type="button"
+                          onClick={() => handleToggleAssignee(user.id)}
+                          className={`flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                            isAssigned ? 'bg-cyan-500/10 text-zinc-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                          }`}
+                        >
+                          {isAssigned ? (
+                            <CheckSquare className="h-3 w-3 shrink-0 text-cyan-400" />
+                          ) : (
+                            <Square className="h-3 w-3 shrink-0 text-zinc-700" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-xs">{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </YougileEditorField>
         )}
 
         {/* Checklists */}
