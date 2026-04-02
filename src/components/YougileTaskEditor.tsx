@@ -843,7 +843,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
         {/* Assigned Users */}
         {(users.length > 0 || assignedUserIds.length > 0) && (
-          <YougileEditorField index={6} onActivate={() => setShowAssigneePicker(true)}>
+          <YougileEditorField index={6} onActivate={() => setShowAssigneePicker((open) => !open)}>
             {(isSelected) => (
               <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
                 <div className="mb-2 flex items-center justify-between">
@@ -1044,7 +1044,13 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                           </span>
                           {sticker.freeText ? (
                             <input
-                              ref={(el) => { stickerRefs.current.set(sticker.id, el); }}
+                              ref={(el) => {
+                                if (el) {
+                                  stickerRefs.current.set(sticker.id, el);
+                                } else {
+                                  stickerRefs.current.delete(sticker.id);
+                                }
+                              }}
                               type="text"
                               value={currentValue}
                               onChange={(event) => {
@@ -1065,7 +1071,13 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                             />
                           ) : (
                             <select
-                              ref={(el) => { stickerRefs.current.set(sticker.id, el); }}
+                              ref={(el) => {
+                                if (el) {
+                                  stickerRefs.current.set(sticker.id, el);
+                                } else {
+                                  stickerRefs.current.delete(sticker.id);
+                                }
+                              }}
                               value={currentValue}
                               onChange={(event) => persistStickerValue(sticker.id, event.target.value)}
                               className="w-40 bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
