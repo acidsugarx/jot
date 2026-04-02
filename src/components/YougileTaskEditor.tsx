@@ -1020,37 +1020,13 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                               setEditingItemText(item.title);
                               focusEngine.getState().setMode('INSERT');
                             }}
-                            onEnter={() => {
-                              const updated = checklists.map((c, ci) => {
-                                if (ci !== clIdx) return c;
-                                return {
-                                  ...c,
-                                  items: c.items.map((it, ii) =>
-                                    ii !== itemIdx ? it : { ...it, completed: !it.completed }
-                                  ),
-                                };
-                              });
-                              setChecklists(updated);
-                              void updateTask(task.id, { checklists: updated });
-                            }}
+                            onEnter={() => handleToggleChecklistItem(clIdx, itemIdx, !item.completed)}
                           >
                             {(isSelected) => (
                               <div className={`flex items-start gap-2 rounded px-1 py-0.5 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    const updated = checklists.map((c, ci) => {
-                                      if (ci !== clIdx) return c;
-                                      return {
-                                        ...c,
-                                        items: c.items.map((it, ii) =>
-                                          ii !== itemIdx ? it : { ...it, completed: !it.completed }
-                                        ),
-                                      };
-                                    });
-                                    setChecklists(updated);
-                                    void updateTask(task.id, { checklists: updated });
-                                  }}
+                                  onClick={() => handleToggleChecklistItem(clIdx, itemIdx, !item.completed)}
                                   className="mt-px shrink-0"
                                 >
                                   {item.completed ? (
