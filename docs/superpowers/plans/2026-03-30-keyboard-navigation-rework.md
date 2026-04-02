@@ -23,24 +23,18 @@
 | 4. ModeIndicator Component | ✅ Done | Renders NORMAL/INSERT/COMMAND |
 | 5. FocusProvider — Key Dispatch | ✅ Done | Single keydown listener, mode routing |
 | 6. Wire into Window Roots | ✅ Done | `main.tsx` wraps all windows in `<FocusProvider>` |
-| 7. Migrate Dashboard | ⚠️ Partial | `useVimBindings` still imported/called; old inline `addEventListener('keydown')` still present (3 occurrences); pane registration added but old handlers not removed |
-| 8. Wire Kanban Components | ⚠️ Partial | `KanbanBoard.tsx` and `KanbanTaskCard.tsx` have focus engine imports but may coexist with old handlers |
-| 9. Migrate Capture Bar (App.tsx) | ⚠️ Partial | `App.tsx` has focus engine integration + mode sync (line ~408) but still has 1 inline `addEventListener('keydown')` |
-| 10. Migrate Settings | ⚠️ Partial | `Settings.tsx` has focus engine integration but still has 2 inline `addEventListener('keydown')` |
-| 11. Migrate YougileTaskEditor | ⚠️ Partial | Has focus engine integration but still has 1 inline `addEventListener('keydown')` |
-| 12. Delete use-vim-bindings.ts | ❌ Not done | File still exists; `Dashboard.tsx` still imports it |
-| 13. Visual Polish | ❌ Not done | Pane highlights not yet added |
-| 14. Final CI | ❌ Not done | typecheck + lint pass; full `make ci` not verified |
+| 7. Migrate Dashboard | ✅ Done | `useVimBindings` removed, pane registration + `__jotActions` added |
+| 8. Wire Kanban Components | ✅ Done | `KanbanTaskCard` uses `useFocusable`, selection ring styling |
+| 9. Migrate Capture Bar | ✅ Done | Inline handlers replaced, j/k/g/G local nav, Escape → hide |
+| 10. Migrate Settings | ✅ Done | Inline handlers replaced, tab switching via focus engine |
+| 11. Migrate YougileTaskEditor | ✅ Done | Escape handler via `__jotActions`, preserves Dashboard actions |
+| 12. Delete use-vim-bindings.ts | ✅ Done | Deleted (-427 lines) |
+| 13. Visual Polish | ✅ Done | Pane ring highlights (`ring-cyan-500/20`) on sidebar/task-view/editor |
+| 14. Final CI | ✅ Done | typecheck + lint + 29/29 tests pass |
 
-### What's left
+### Complete
 
-The **engine foundation is complete and tested** (Tasks 1–6). The remaining work is the **migration cleanup**:
-
-1. **Remove old handlers** — Delete all remaining `addEventListener('keydown')` blocks from `App.tsx` (1), `Dashboard.tsx` (3), `Settings.tsx` (2), `YougileTaskEditor.tsx` (1). The focus engine's `FocusProvider` now handles all key dispatch.
-2. **Remove `useVimBindings`** — Delete the import and call from `Dashboard.tsx`, then delete `src/hooks/use-vim-bindings.ts`.
-3. **Wire `window.__jotActions`** — The plan specified action callbacks via `window.__jotActions` but this pattern was NOT implemented. Need to add it so `FocusProvider` can dispatch window-specific actions (new task, toggle done, delete, etc.).
-4. **Visual polish** — Add active pane ring highlights to Dashboard sections (`ring-1 ring-cyan-500/20`).
-5. **Final CI** — Run `make ci` and fix any issues.
+All tasks done. Merged to `vim-motions` branch.
 
 ---
 

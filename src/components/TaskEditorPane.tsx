@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
 import { FileText, Link as LinkIcon, X, Plus, Calendar, Eye, PenLine } from 'lucide-react';
 import { toDateInputValue } from '@/lib/formatting';
@@ -7,6 +8,34 @@ import { TaskPriority } from '@/types';
 import type { Checklist, Task as TaskType } from '@/types';
 import { ChecklistEditor } from '@/components/ChecklistEditor';
 import { SubtaskList } from '@/components/SubtaskList';
+import { focusEngine } from '@/lib/focus-engine';
+import { useFocusable } from '@/hooks/use-focusable';
+
+// Wrapper that registers each editor field as a focusable node for j/k navigation
+function EditorField({ index, onActivate, children }: {
+  index: number;
+  onActivate?: () => void;
+  children: (isSelected: boolean) => ReactNode;
+}) {
+  const { ref, isSelected } = useFocusable<HTMLDivElement>({
+    pane: 'editor',
+    region: 'editor',
+    index,
+    id: `field-${index}`,
+    onActivate: () => {
+      onActivate?.();
+      focusEngine.getState().setMode('INSERT');
+    },
+  });
+
+  return (
+    <div
+      ref={(node) => { (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+    >
+      {children(isSelected)}
+    </div>
+  );
+}
 
 export function TaskEditorPane() {
   const { tasks, columns, selectedTaskId, setIsEditorOpen, updateTask, openLinkedNote, getChecklists, getSubtasks, selectTask } = useTaskStore();
@@ -25,6 +54,10 @@ export function TaskEditorPane() {
 
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  const statusRef = useRef<HTMLSelectElement>(null);
+  const priorityRef = useRef<HTMLSelectElement>(null);
+  const dateRef = useRef<HTMLInputElement>(null);
+  const tagInputRef = useRef<HTMLInputElement>(null);
 
   // Sync local state when task changes
   const taskId = task?.id;
@@ -50,6 +83,19 @@ export function TaskEditorPane() {
 
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
+
+  // Auto-focus title and switch to editor pane when editor opens
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const engine = focusEngine.getState();
+      if (engine.panes.has('editor')) {
+        engine.focusPane('editor');
+        engine.setMode('INSERT');
+      }
+      titleRef.current?.focus();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
+  }, []);
 
   const loadExtras = useCallback(async () => {
     if (!task) return;
@@ -134,173 +180,204 @@ export function TaskEditorPane() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {/* Title — editable textarea */}
-        <div className="border-b border-zinc-800/30 px-4 py-3">
-          <textarea
-            ref={titleRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={handleTitleBlur}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-            }}
-            rows={1}
-            className="w-full resize-none overflow-hidden bg-transparent text-sm font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 selection:bg-cyan-500/30"
-            placeholder="Task title..."
-          />
-        </div>
-
-        {/* Description — editable textarea with markdown preview */}
-        <div className="border-b border-zinc-800/30 px-4 py-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-              Description
-            </span>
-            {description && (
-              <button
-                type="button"
-                onClick={() => setDescPreview(!descPreview)}
-                className="flex items-center gap-1 font-mono text-[10px] text-zinc-700 hover:text-zinc-400 transition-colors"
-              >
-                {descPreview ? <PenLine className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
-                {descPreview ? 'Edit' : 'Preview'}
-              </button>
-            )}
-          </div>
-          {descPreview ? (
-            <div
-              className="prose-jot min-h-[2.5rem]"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(description) }}
-            />
-          ) : (
-            <textarea
-              ref={descRef}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onBlur={handleDescriptionBlur}
-              rows={2}
-              className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
-              placeholder="Add a description…  (supports **bold**, *italic*, `code`, [links](url), - lists)"
-            />
+        {/* [0] Title */}
+        <EditorField
+          index={0}
+          onActivate={() => titleRef.current?.focus()}
+        >
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <textarea
+                ref={titleRef}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={handleTitleBlur}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                }}
+                rows={1}
+                className="w-full resize-none overflow-hidden bg-transparent text-sm font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 selection:bg-cyan-500/30"
+                placeholder="Task title..."
+              />
+            </div>
           )}
-        </div>
+        </EditorField>
 
-        {/* Fields — flat rows */}
-        <div className="border-b border-zinc-800/30">
-          {/* Status */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
-            <select
-              value={status}
-              onChange={(e) => handleStatusChange(e.target.value)}
-              className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
-            >
-              {columns.map((col) => (
-                <option key={col.id} value={col.statusKey}>{col.name}</option>
-              ))}
-              <option value="archived">Archived</option>
-            </select>
-          </div>
-
-          {/* Priority */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Priority</span>
-            <select
-              value={priority}
-              onChange={(e) => handlePriorityChange(e.target.value as TaskPriority)}
-              className={`bg-transparent text-right text-sm focus:outline-none cursor-pointer ${priorityColor[priority] || 'text-zinc-600'}`}
-            >
-              {priorityOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Due Date */}
-          <div className="flex h-9 items-center justify-between px-4">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Due</span>
-            <div className="flex items-center gap-1.5">
-              {dueDate ? (
-                <div className="flex items-center gap-1">
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => handleDueDateChange(e.target.value)}
-                    className="bg-transparent font-mono text-sm text-zinc-400 focus:outline-none cursor-pointer [color-scheme:dark]"
-                  />
+        {/* [1] Description */}
+        <EditorField
+          index={1}
+          onActivate={() => { if (!descPreview) descRef.current?.focus(); }}
+        >
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Description
+                </span>
+                {description && (
                   <button
                     type="button"
-                    onClick={() => handleDueDateChange('')}
-                    className="rounded p-0.5 text-zinc-700 hover:text-zinc-400 transition-colors"
+                    onClick={() => setDescPreview(!descPreview)}
+                    className="flex items-center gap-1 font-mono text-[10px] text-zinc-700 hover:text-zinc-400 transition-colors"
                   >
-                    <X className="h-3 w-3" />
+                    {descPreview ? <PenLine className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
+                    {descPreview ? 'Edit' : 'Preview'}
                   </button>
-                </div>
+                )}
+              </div>
+              {descPreview ? (
+                <div
+                  className="prose-jot min-h-[2.5rem]"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(description) }}
+                />
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const today = new Date().toISOString().split('T')[0] ?? '';
-                    handleDueDateChange(today);
-                  }}
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
-                >
-                  <Calendar className="h-3 w-3" />
-                  <span className="font-mono text-xs">Set date</span>
-                </button>
+                <textarea
+                  ref={descRef}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  onBlur={handleDescriptionBlur}
+                  rows={2}
+                  className="w-full resize-none overflow-hidden bg-transparent text-xs leading-relaxed text-zinc-400 outline-none placeholder:text-zinc-700 selection:bg-cyan-500/30"
+                  placeholder="Add a description…  (supports **bold**, *italic*, `code`, [links](url), - lists)"
+                />
               )}
             </div>
-          </div>
-        </div>
+          )}
+        </EditorField>
 
-        {/* Tags — editable */}
-        <div className="border-b border-zinc-800/30 px-4 py-3">
-          <div className="mb-2">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Tags</span>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {tags.map((tag) => (
-              <span
-                key={tag}
-                className="group/tag flex items-center gap-0.5 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
-              >
-                #{tag}
-                <button
-                  type="button"
-                  onClick={() => handleRemoveTag(tag)}
-                  className="ml-0.5 opacity-0 group-hover/tag:opacity-100 text-zinc-600 hover:text-zinc-300 transition-opacity"
+        {/* [2] Status */}
+        <EditorField
+          index={2}
+          onActivate={() => statusRef.current?.focus()}
+        >
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <div className="flex h-9 items-center justify-between px-4">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Status</span>
+                <select
+                  ref={statusRef}
+                  value={status}
+                  onChange={(e) => handleStatusChange(e.target.value)}
+                  className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
                 >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-            <div className="flex items-center">
-              <input
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); }
-                  if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
-                    handleRemoveTag(tags[tags.length - 1]!);
-                  }
-                }}
-                onBlur={() => { if (tagInput.trim()) handleAddTag(); }}
-                placeholder="add tag"
-                className="h-5 w-16 bg-transparent font-mono text-[10px] text-zinc-500 placeholder:text-zinc-700 outline-none"
-              />
-              {tagInput.trim() && (
-                <button
-                  type="button"
-                  onClick={handleAddTag}
-                  className="rounded p-0.5 text-zinc-700 hover:text-cyan-400 transition-colors"
+                  {columns.map((col) => (
+                    <option key={col.id} value={col.statusKey}>{col.name}</option>
+                  ))}
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+
+              {/* [3] Priority — inside same border block */}
+              <div className="flex h-9 items-center justify-between px-4">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Priority</span>
+                <select
+                  ref={priorityRef}
+                  value={priority}
+                  onChange={(e) => handlePriorityChange(e.target.value as TaskPriority)}
+                  className={`bg-transparent text-right text-sm focus:outline-none cursor-pointer ${priorityColor[priority] || 'text-zinc-600'}`}
                 >
-                  <Plus className="h-3 w-3" />
-                </button>
-              )}
+                  {priorityOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* [4] Due Date — inside same border block */}
+              <div className="flex h-9 items-center justify-between px-4">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Due</span>
+                <div className="flex items-center gap-1.5">
+                  {dueDate ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        ref={dateRef}
+                        type="date"
+                        value={dueDate}
+                        onChange={(e) => handleDueDateChange(e.target.value)}
+                        className="bg-transparent font-mono text-sm text-zinc-400 focus:outline-none cursor-pointer [color-scheme:dark]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleDueDateChange('')}
+                        className="rounded p-0.5 text-zinc-700 hover:text-zinc-400 transition-colors"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const today = new Date().toISOString().split('T')[0] ?? '';
+                        handleDueDateChange(today);
+                      }}
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+                    >
+                      <Calendar className="h-3 w-3" />
+                      <span className="font-mono text-xs">Set date</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+        </EditorField>
+
+        {/* [5] Tags */}
+        <EditorField
+          index={3}
+          onActivate={() => tagInputRef.current?.focus()}
+        >
+          {(isSelected) => (
+            <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+              <div className="mb-2">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">Tags</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="group/tag flex items-center gap-0.5 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500"
+                  >
+                    #{tag}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      className="ml-0.5 opacity-0 group-hover/tag:opacity-100 text-zinc-600 hover:text-zinc-300 transition-opacity"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+                <div className="flex items-center">
+                  <input
+                    ref={tagInputRef}
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); }
+                      if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
+                        handleRemoveTag(tags[tags.length - 1]!);
+                      }
+                    }}
+                    onBlur={() => { if (tagInput.trim()) handleAddTag(); }}
+                    placeholder="add tag"
+                    className="h-5 w-16 bg-transparent font-mono text-[10px] text-zinc-500 placeholder:text-zinc-700 outline-none"
+                  />
+                  {tagInput.trim() && (
+                    <button
+                      type="button"
+                      onClick={handleAddTag}
+                      className="rounded p-0.5 text-zinc-700 hover:text-cyan-400 transition-colors"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </EditorField>
 
         {/* Checklists */}
         <div className="border-b border-zinc-800/30 px-4 py-3">

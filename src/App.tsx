@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { LogicalSize } from '@tauri-apps/api/dpi';
+import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowUpDown,
@@ -37,7 +37,7 @@ const INPUT_AREA_HEIGHT = 72;
 const FOOTER_HEIGHT = 36;
 const WINDOW_CHROME = 16;
 const ACTION_ITEM_HEIGHT = 44;
-const MAX_VISIBLE_TASKS = 8;
+const MAX_VISIBLE_TASKS = 6;
 const EDITOR_HEIGHT = 340;
 
 function isYougileTask(task: Task | YougileTask): task is YougileTask {
@@ -385,7 +385,13 @@ function App() {
     () => yougileTasks.filter((task) => !task.deleted && !task.archived),
     [yougileTasks]
   );
-  const activeTasks = isYougile ? visibleYougileTasks : tasks;
+  const activeTasks = useMemo(() => {
+    const list = isYougile ? visibleYougileTasks : tasks;
+    return list.filter((task) => {
+      if (isYougileTask(task)) return !task.completed;
+      return task.status !== 'done';
+    });
+  }, [isYougile, visibleYougileTasks, tasks]);
   const visibleError = pickerMode !== 'none' || isYougile
     ? (yougileError ?? localError)
     : localError;
@@ -607,7 +613,7 @@ function App() {
     };
   }, [fetchTasks, syncYougileState, yougileEnabled]);
 
-  // Dynamic window sizing based on actual content
+  // Dynamic window sizing based on actual content, clamped to screen
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
 
@@ -628,9 +634,17 @@ function App() {
     const statusHeight = (statusMessage || visibleError) ? 24 : 0;
     const inputHeight = editingTask ? 0 : INPUT_AREA_HEIGHT;
     const totalHeight = inputHeight + statusHeight + contentHeight + FOOTER_HEIGHT + WINDOW_CHROME;
-    const clampedHeight = Math.max(totalHeight, 200);
+    // Clamp to 80% of screen height to avoid overflowing off-screen
+    const maxScreenHeight = Math.floor(window.screen.availHeight * 0.8);
+    const clampedHeight = Math.max(Math.min(totalHeight, maxScreenHeight), 200);
 
-    void getCurrentWindow().setSize(new LogicalSize(680, clampedHeight));
+    const win = getCurrentWindow();
+    void win.setSize(new LogicalSize(680, clampedHeight));
+    // Position near top-center (like Spotlight) so content doesn't overflow bottom
+    void win.setPosition(new LogicalPosition(
+      Math.floor((window.screen.availWidth - 680) / 2),
+      Math.floor(window.screen.availHeight * 0.1),
+    ));
   }, [
     actionItems.length,
     activeTasks.length,
@@ -1243,7 +1257,7 @@ function App() {
 
         {/* Scrollable List */}
         <div
-          className="min-h-0 flex-1 overflow-y-auto"
+          className="hide-scrollbar min-h-0 flex-1 overflow-y-auto"
           style={{
             maxHeight:
               MAX_VISIBLE_TASKS * ITEM_HEIGHT +

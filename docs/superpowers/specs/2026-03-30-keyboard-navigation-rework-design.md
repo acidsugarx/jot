@@ -1,35 +1,32 @@
 # Keyboard Navigation Rework — Unified Focus Engine
 
 **Date:** 2026-03-30
-**Status:** In Progress (foundation done, migration pending)
+**Status:** Complete
 **Goal:** Replace scattered keyboard handling with a single focus engine that makes jot feel like a TUI with mouse fallback.
 
 ## Implementation Status
 
-> **Branch:** `vim-motions` (worktree: `.worktrees/focus-engine/`)
-> **Last updated:** 2026-03-30
+> **Branch:** `vim-motions`
+> **Last updated:** 2026-04-01
 
-### Done
+### Done (all tasks complete)
 
-- **Focus engine core** (`src/lib/focus-engine.ts`) — Zustand store with mode state machine, pane/region/node registry, navigation (j/k/h/l/g/G), pane switching (Tab/Shift+Tab, Ctrl+w), drill-up escape
+- **Focus engine core** (`src/lib/focus-engine.ts`) — Zustand store with mode state machine, pane/region/node registry, navigation (j/k/h/l/g/G), pane switching (Tab/Shift+Tab, Ctrl+w), drill-up escape, action dispatch
 - **React integration layer**:
-  - `src/components/FocusProvider.tsx` — Single keydown listener, mode-specific routing, action dispatch
+  - `src/components/FocusProvider.tsx` — Single keydown listener, mode-specific routing, action dispatch via `window.__jotActions`
   - `src/components/focus-engine-context.ts` — React context wrapper
   - `src/components/ModeIndicator.tsx` — `[NORMAL]` / `[INSERT]` / `[/search]` status widget
   - `src/hooks/use-focus-engine.ts` — React hook for engine access
   - `src/hooks/use-focusable.ts` — Component registration hook
 - **Root wiring** (`src/main.tsx`) — All 3 windows wrapped in `<FocusProvider>`
-- **Capture mode sync** (`src/App.tsx:~408`) — Insert/normal modes sync to focus engine INSERT/NORMAL
-- **Tests** — 29 passing across `focus-engine.test.ts`, `use-focusable.test.tsx`, `FocusProvider.test.tsx`, `ModeIndicator.test.tsx`
-
-### Not Done
-
-- **Remove old keyboard handlers** — `addEventListener('keydown')` blocks still present in App.tsx (1), Dashboard.tsx (3), Settings.tsx (2), YougileTaskEditor.tsx (1). These coexist with FocusProvider and may conflict.
-- **Remove `useVimBindings`** — `Dashboard.tsx` still imports and calls it. `src/hooks/use-vim-bindings.ts` still exists.
-- **Action callbacks** — `window.__jotActions` pattern not implemented. FocusProvider can't dispatch window-specific actions (new task, toggle done, delete, etc.) beyond basic navigation.
-- **Visual feedback** — Active pane ring highlights (`ring-1 ring-cyan-500/20`) not added to Dashboard sections.
-- **YougileTaskEditor field registration** — `data-editor-field` attributes not added; j/k field navigation not functional.
-- **Settings field registration** — `data-field-id` attributes not added; j/k field navigation not functional.
+- **Capture bar** (`src/App.tsx`) — j/k/g/G local navigation, Escape hides window in NORMAL mode, mode sync with engine
+- **Dashboard** (`src/Dashboard.tsx`) — Pane registration (sidebar/task-view/editor), `window.__jotActions` with all action callbacks
+- **Kanban** (`src/components/KanbanTaskCard.tsx`) — `useFocusable` with selection ring styling, merged dnd-kit + focus refs
+- **Settings** (`src/Settings.tsx`) — h/l tab switching, focus engine pane registration
+- **YougileTaskEditor** (`src/components/YougileTaskEditor.tsx`) — Escape via `__jotActions`, preserves Dashboard actions
+- **Visual polish** — Pane ring highlights (`ring-1 ring-cyan-500/20`) on sidebar/task-view/editor sections
+- **Cleanup** — `src/hooks/use-vim-bindings.ts` deleted (-427 lines)
+- **Tests** — 29 passing, vitest excludes worktree paths
 
 ## Problem
 

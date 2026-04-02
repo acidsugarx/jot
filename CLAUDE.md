@@ -17,11 +17,16 @@ npm run tauri build  # Production Tauri build
 
 npm run typecheck    # TypeScript type checking (npx tsc --noEmit)
 npm run lint         # ESLint
-npm test             # Vitest
-make ci              # Full CI: fmt + clippy + typecheck + lint + test
+npm test             # Vitest (run once)
+npm test -- --watch  # Vitest in watch mode
+make ci              # Full CI: fmt-check + clippy + lint + typecheck + test-frontend + build
 ```
 
-Always run `npm run typecheck` after TypeScript changes. The CI pipeline runs `make ci` which includes Rust fmt/clippy, TS typecheck, lint, and tests.
+Run a single test file: `npx vitest run src/lib/__tests__/focus-engine.test.ts`
+Run Rust tests only: `make test-rust` | Frontend only: `make test-frontend`
+Format Rust code: `make fmt` | Check formatting: `make fmt-check` | Clippy: `make clippy`
+
+Always run `npm run typecheck` after TypeScript changes. The CI pipeline runs `make ci`.
 
 ## Architecture
 
@@ -33,14 +38,17 @@ The app uses multiple Tauri windows, each rendering a different React root:
 - **"dashboard" window** → `Dashboard.tsx` — Full task management with list/kanban/calendar views.
 - **"settings" window** → `Settings.tsx` — App configuration, Yougile account setup.
 
-Routing happens in `src/main.tsx` via `getCurrentWindow().label`.
+Routing happens in `src/main.tsx` via `getCurrentWindow().label`. Both "main" and "dashboard" windows are wrapped in `<FocusProvider>` for keyboard handling. The "settings" window is not.
 
 ### Rust Backend (`src-tauri/src/`)
 
 - `lib.rs` — Tauri command registrations, window management (show/hide/toggle)
 - `db.rs` — SQLite database for local tasks (via rusqlite)
+- `models.rs` — Shared Rust data types (Task, Column, AppSettings)
 - `parser.rs` — NLP parser for task input (`#tag`, `!priority`, `@zettel`, due dates)
 - `yougile/` — Yougile API client (REST via reqwest)
+  - `mod.rs` — Module declarations
+  - `auth.rs` — Auth credential handling
   - `client.rs` — HTTP client with auth
   - `commands.rs` — Tauri commands wrapping API calls
   - `models.rs` — Request/response types
@@ -78,12 +86,22 @@ The shared `isYougileTask` in `src/lib/yougile.ts` uses `Record<string, unknown>
 - **`YougileTaskEditor.tsx`** — Rich editor for Yougile tasks (description, color, assignees, chat, attachments)
 - **`use-vim-bindings.ts`** — Shared vim keybindings hook (j/k navigation, x toggle, d delete, e edit, m move, etc.)
 
+### Focus Engine
+
+A zustand-vanilla store (`src/lib/focus-engine.ts`) manages keyboard-driven navigation across panes and focusable items. It tracks three modes: NORMAL (vim keys), INSERT (text input), and COMMAND (search/picker). Key files:
+
+- `src/lib/focus-engine.ts` — Core zustand store with pane registry, focus tree, and mode transitions
+- `src/components/FocusProvider.tsx` — React context provider, attaches global keydown listener when `captureKeys` is true
+- `src/hooks/use-focus-engine.ts` — React hooks (`useFocusEngine`, `useFocusEngineStore`) to read engine state
+- `src/hooks/use-focusable.ts` — Hook for registering focusable items and panes into the engine tree
+
 ### Zettelkasten Integration
 
 When `@zettel` appears in task input, the Rust parser flags it. On task creation, a markdown note is created in the configured Obsidian vault path, linked back to the task via `linkedNotePath`. Press `o` on a local task to open its linked note.
 
 ## Key Patterns
 
+- **Path aliases**: `@/` maps to `src/` (configured in `vite.config.ts` and `tsconfig.app.json`).
 - **Tauri IPC**: Frontend calls Rust via `invoke('command_name', { args })`. Commands are registered in `lib.rs` with `#[tauri::command]`.
 - **Window management**: `invoke('show_window')`, `invoke('hide_window')`, `invoke('open_dashboard_window')`, `invoke('open_settings_window')`.
 - **Auto-hide logic**: Capture bar (App.tsx) hides on blur with debouncing, suppresses hide during picker mode and dialogs.
@@ -97,3 +115,5 @@ When `@zettel` appears in task input, the Rust parser flags it. On task creation
 - The Yougile store polls every 30s for task updates when in Yougile mode and the window is visible.
 - File uploads to Yougile use multipart form data via the frontend fetch API.
 - The `cmdk` library powers the command palette in the capture bar.
+- Vitest config lives in `vite.config.ts` (not a separate file). Test environment is jsdom with `@testing-library/jest-dom/vitest` globals.
+- Worktrees are used for development (`.worktrees/` dir); test config excludes them.

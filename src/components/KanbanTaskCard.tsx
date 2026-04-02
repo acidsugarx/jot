@@ -8,6 +8,7 @@ import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { useFocusable } from '@/hooks/use-focusable';
 
+
 // Unified card item — either a local Task or a YougileTask
 export type CardTask = Task | YougileTask;
 
@@ -25,7 +26,7 @@ interface TaskCardProps {
 export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: TaskCardProps) {
   const {
     selectTask: selectLocalTask,
-    setIsEditorOpen,
+  setIsEditorOpen,
   } = useTaskStore();
   const {
     selectTask: selectYougileTask,
@@ -90,6 +91,8 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
         style={style}
         {...attributes}
         {...listeners}
+        onClick={() => selectTask(task.id)}
+        onDoubleClick={() => setIsEditorOpen(true)}
         className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
           isOverlay
             ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'

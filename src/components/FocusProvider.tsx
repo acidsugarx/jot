@@ -29,9 +29,19 @@ export function FocusProvider({
     if (!captureKeys) return;
 
     const handler = (event: KeyboardEvent) => {
+      const prevMode = engine.getState().mode;
       const result = dispatchFocusKey(engine, event, actions ?? window.__jotActions);
       if (result.stopPropagation) {
         event.stopPropagation();
+      }
+      // When Escape transitions from INSERT/COMMAND → NORMAL, blur the
+      // active element so subsequent hjkl keys aren't swallowed by the
+      // isEditableElement guard in dispatchFocusKey.
+      if (event.key === 'Escape' && prevMode !== 'NORMAL' && engine.getState().mode === 'NORMAL') {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) {
+          active.blur();
+        }
       }
     };
 

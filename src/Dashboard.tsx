@@ -519,14 +519,15 @@ export default function Dashboard() {
     };
 
     // Register sidebar (only for list view, local mode)
+    // Sidebar is order 1 so task-view (order 0) is the default active pane.
     if (activeTab === 'list' && !isYougile) {
-      engine.registerPane('sidebar', { regions: ['sidebar'], order: 0 });
+      engine.registerPane('sidebar', { regions: ['sidebar'], order: 1 });
     } else {
       engine.unregisterPane('sidebar');
     }
 
-    // Register task view
-    engine.registerPane('task-view', { regions: getTaskViewRegions(), order: 1 });
+    // Register task view — order 0 so it becomes the default active pane
+    engine.registerPane('task-view', { regions: getTaskViewRegions(), order: 0 });
 
     return () => {
       engine.unregisterPane('sidebar');
@@ -534,13 +535,13 @@ export default function Dashboard() {
     };
   }, [activeTab, isYougile, yougileStore.columns.length, columns.length]);
 
-  // Register/unregister editor pane separately so that task selection
-  // (j/k navigation) doesn't tear down structural panes.
+  // Register/unregister editor pane when the editor opens/closes.
+  // NOTE: Only depend on isEditorOpen so that task selection changes don't
+  // trigger unregisterPane (which clears all editor focus nodes).
   useEffect(() => {
     const engine = focusEngine.getState();
-    const hasEditor = isEditorOpen && ((isYougile && yougileStore.selectedTaskId) || (!isYougile && localSelectedTaskId));
 
-    if (hasEditor) {
+    if (isEditorOpen) {
       engine.registerPane('editor', { regions: ['editor'], order: 2 });
     } else {
       engine.unregisterPane('editor');
@@ -549,7 +550,7 @@ export default function Dashboard() {
     return () => {
       engine.unregisterPane('editor');
     };
-  }, [isYougile, isEditorOpen, yougileStore.selectedTaskId, localSelectedTaskId]);
+  }, [isEditorOpen]);
 
   // Register action callbacks on window for FocusProvider
   useEffect(() => {
@@ -601,13 +602,12 @@ export default function Dashboard() {
           selectLocalTask('');
         }
         setIsEditorOpen(false);
-        // Re-focus task-view pane after drillUp cleared it
-        requestAnimationFrame(() => {
-          const state = focusEngine.getState();
-          if (state.activePane === null && state.panes.has('task-view')) {
-            state.focusPane('task-view');
-          }
-        });
+        // Re-focus task-view synchronously after drillUp nulled activePane.
+        // Using rAF here left a gap where hjkl hit activePane===null and did nothing.
+        const state = focusEngine.getState();
+        if (state.activePane === null && state.panes.has('task-view')) {
+          state.focusPane('task-view');
+        }
       },
     };
   }, [
