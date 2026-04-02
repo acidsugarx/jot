@@ -265,6 +265,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const descRef = useRef<HTMLTextAreaElement>(null);
   const columnSelectRef = useRef<HTMLSelectElement>(null);
   const deadlineInputRef = useRef<HTMLInputElement>(null);
+  const stickerRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement | null>>(new Map());
   const taskId = task.id;
 
   // Fetch chat when opening the chat panel
@@ -1028,49 +1029,59 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
             {stickerDefinitions.length > 0 && (
               <div className="flex flex-col gap-2">
-                {stickerDefinitions.map((sticker) => {
+                {stickerDefinitions.map((sticker, stickerIndex) => {
                   const currentValue = stickerValues[sticker.id] ?? '';
                   return (
-                    <div key={sticker.id} className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">
-                        {sticker.name}
-                      </span>
-                      {sticker.freeText ? (
-                        <input
-                          type="text"
-                          value={currentValue}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            setStickerValues((current) => {
-                              const next = { ...current };
-                              if (nextValue.trim()) {
-                                next[sticker.id] = nextValue;
-                              } else {
-                                delete next[sticker.id];
-                              }
-                              return next;
-                            });
-                          }}
-                          onBlur={(event) => persistStickerValue(sticker.id, event.target.value)}
-                          className="w-40 rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-300 outline-none placeholder:text-zinc-700"
-                          placeholder="Value"
-                        />
-                      ) : (
-                        <select
-                          value={currentValue}
-                          onChange={(event) => persistStickerValue(sticker.id, event.target.value)}
-                          className="w-40 bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
-                        >
-                          <option value="">Not set</option>
-                          <option value="empty">Empty</option>
-                          {sticker.states.map((state) => (
-                            <option key={state.id} value={state.id}>
-                              {state.name}
-                            </option>
-                          ))}
-                        </select>
+                    <YougileEditorField
+                      key={sticker.id}
+                      index={7 + stickerIndex}
+                      onActivate={() => stickerRefs.current.get(sticker.id)?.focus()}
+                    >
+                      {(isSelected) => (
+                        <div className={`flex items-center justify-between gap-3 rounded px-1 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                          <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500">
+                            {sticker.name}
+                          </span>
+                          {sticker.freeText ? (
+                            <input
+                              ref={(el) => { stickerRefs.current.set(sticker.id, el); }}
+                              type="text"
+                              value={currentValue}
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setStickerValues((current) => {
+                                  const next = { ...current };
+                                  if (nextValue.trim()) {
+                                    next[sticker.id] = nextValue;
+                                  } else {
+                                    delete next[sticker.id];
+                                  }
+                                  return next;
+                                });
+                              }}
+                              onBlur={(event) => persistStickerValue(sticker.id, event.target.value)}
+                              className="w-40 rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-xs text-zinc-300 outline-none placeholder:text-zinc-700"
+                              placeholder="Value"
+                            />
+                          ) : (
+                            <select
+                              ref={(el) => { stickerRefs.current.set(sticker.id, el); }}
+                              value={currentValue}
+                              onChange={(event) => persistStickerValue(sticker.id, event.target.value)}
+                              className="w-40 bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
+                            >
+                              <option value="">Not set</option>
+                              <option value="empty">Empty</option>
+                              {sticker.states.map((state) => (
+                                <option key={state.id} value={state.id}>
+                                  {state.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                       )}
-                    </div>
+                    </YougileEditorField>
                   );
                 })}
               </div>
