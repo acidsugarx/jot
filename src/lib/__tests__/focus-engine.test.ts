@@ -205,3 +205,71 @@ describe('dispatchFocusKey', () => {
     expect(engine.getState().mode).toBe('NORMAL');
   });
 });
+
+describe('dispatchFocusKey onEnter', () => {
+  let engine: ReturnType<typeof createFocusEngine>;
+
+  beforeEach(() => {
+    engine = createFocusEngine();
+    engine.getState().registerPane('editor', { regions: ['editor'], order: 1 });
+    engine.getState().focusPane('editor');
+  });
+
+  it('Enter calls onEnter when set, not onActivate', () => {
+    const onActivate = vi.fn();
+    const onEnter = vi.fn();
+    engine.getState().registerNode({
+      pane: 'editor', region: 'editor', index: 0, id: 'field-0',
+      onActivate, onEnter,
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'Enter' });
+    dispatchFocusKey(engine, event);
+
+    expect(onEnter).toHaveBeenCalledOnce();
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('Enter falls back to onActivate when onEnter is not set', () => {
+    const onActivate = vi.fn();
+    engine.getState().registerNode({
+      pane: 'editor', region: 'editor', index: 0, id: 'field-0',
+      onActivate,
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'Enter' });
+    dispatchFocusKey(engine, event);
+
+    expect(onActivate).toHaveBeenCalledOnce();
+  });
+
+  it('i still calls onActivate, not onEnter', () => {
+    const onActivate = vi.fn();
+    const onEnter = vi.fn();
+    engine.getState().registerNode({
+      pane: 'editor', region: 'editor', index: 0, id: 'field-0',
+      onActivate, onEnter,
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'i' });
+    dispatchFocusKey(engine, event);
+
+    expect(onActivate).toHaveBeenCalledOnce();
+    expect(onEnter).not.toHaveBeenCalled();
+  });
+
+  it('e still calls onActivate, not onEnter', () => {
+    const onActivate = vi.fn();
+    const onEnter = vi.fn();
+    engine.getState().registerNode({
+      pane: 'editor', region: 'editor', index: 0, id: 'field-0',
+      onActivate, onEnter,
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'e' });
+    dispatchFocusKey(engine, event);
+
+    expect(onActivate).toHaveBeenCalledOnce();
+    expect(onEnter).not.toHaveBeenCalled();
+  });
+});

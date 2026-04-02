@@ -15,6 +15,7 @@ export interface FocusNode {
   id: string;
   onSelect?: () => void;
   onActivate?: () => void;
+  onEnter?: () => void;
 }
 
 export interface NormalKeyActions {
@@ -395,6 +396,13 @@ export function dispatchFocusKey(
 ): KeyDispatchResult {
   const state = engine.getState();
 
+  // In NORMAL mode, skip key dispatch when focus is in an editable element
+  // (so the user can type in search bars, inputs, etc.)
+  // Escape is the exception — it always goes through so the user can exit the input.
+  if (state.mode === 'NORMAL' && !state.pendingPaneSwitch && event.key !== 'Escape' && isEditableElement(event.target)) {
+    return { handled: false };
+  }
+
   if (state.pendingPaneSwitch) {
     switch (event.key) {
       case 'h':
@@ -501,7 +509,18 @@ export function dispatchFocusKey(
         state.nextPane();
       }
       return { handled: true };
-    case 'Enter':
+    case 'Enter': {
+      event.preventDefault();
+      const list = getActiveList(state);
+      const activeNode = list[state.activeIndex];
+      if (activeNode?.onEnter) {
+        activeNode.onEnter();
+      } else {
+        state.activateSelection();
+        actions.onOpenItem?.();
+      }
+      return { handled: true };
+    }
     case 'e':
       event.preventDefault();
       state.activateSelection();
@@ -514,7 +533,14 @@ export function dispatchFocusKey(
       return { handled: true };
     case 'i':
       event.preventDefault();
-      state.setMode('INSERT');
+      // activateSelection fires the node's onActivate callback, which
+      // focuses the underlying input and sets INSERT mode for editor fields.
+      state.activateSelection();
+      // Fallback: if no active node existed (activateSelection was a no-op),
+      // still enter INSERT mode so standalone mode toggle works.
+      if (engine.getState().mode === 'NORMAL') {
+        engine.getState().setMode('INSERT');
+      }
       return { handled: true };
     case '/':
       event.preventDefault();
