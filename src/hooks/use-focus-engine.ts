@@ -7,7 +7,7 @@ import {
 } from '@/lib/focus-engine';
 import { FocusEngineContext } from '@/components/focus-engine-context';
 
-function useFocusStoreApi(): StoreApi<FocusState> {
+export function useFocusStoreApi(): StoreApi<FocusState> {
   return useContext(FocusEngineContext) ?? focusEngine;
 }
 

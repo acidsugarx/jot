@@ -34,6 +34,7 @@ import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { focusEngine } from '@/lib/focus-engine';
 import { useFocusEngineStore } from '@/hooks/use-focus-engine';
+import { useFocusable } from '@/hooks/use-focusable';
 
 // Local type definitions (previously from use-vim-bindings)
 export type ViewMode = 'list' | 'kanban' | 'calendar';
@@ -57,6 +58,266 @@ const statusMeta = (s: string, label?: string) => {
 
 
 
+
+// --- Focusable list row components ---
+
+interface LocalTaskListRowProps {
+  task: Task;
+  flatIndex: number;
+  isSelected: boolean;
+  columns: KanbanColumn[];
+  onSelect: (id: string) => void;
+  onDoubleClick: () => void;
+  onContextMenu: (e: React.MouseEvent, id: string) => void;
+  onToggleStatus: (id: string, status: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (task: Task) => void;
+  onOpenNote?: (path: string) => void;
+  getNextStatus: (status: string) => string;
+}
+
+function LocalTaskListRow({
+  task: t,
+  flatIndex,
+  isSelected,
+  columns,
+  onSelect,
+  onDoubleClick,
+  onContextMenu,
+  onToggleStatus,
+  onEdit,
+  onDelete,
+  onOpenNote,
+  getNextStatus,
+}: LocalTaskListRowProps) {
+  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable<HTMLDivElement>({
+    pane: 'task-view',
+    region: 'list',
+    index: flatIndex,
+    id: t.id,
+    onSelect: () => onSelect(t.id),
+    onActivate: () => onEdit(t.id),
+  });
+
+  const highlighted = isSelected || isFocusSelected;
+  const isDone = t.status === 'done';
+  const dot = PRIORITY_DOT_CLASS[t.priority] ?? null;
+  const colName = columns.find((c) => c.statusKey === t.status)?.name ?? t.status;
+  const sl = statusMeta(t.status, colName);
+
+  return (
+    <div
+      ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      data-task-selected={highlighted ? 'true' : undefined}
+      onClick={() => onSelect(t.id)}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={(e) => onContextMenu(e, t.id)}
+      className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
+        highlighted
+          ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
+          : 'border-l-transparent hover:bg-zinc-900/40'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleStatus(t.id, isDone ? 'todo' : 'done');
+        }}
+        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
+          isDone
+            ? 'border-cyan-500/40 bg-cyan-500/20'
+            : 'border-zinc-700 hover:border-zinc-500'
+        }`}
+      >
+        {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+      </button>
+
+      {dot ? (
+        <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+      ) : (
+        <div className="w-1.5 shrink-0" />
+      )}
+
+      <span className={`min-w-0 flex-1 truncate text-sm ${
+        isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
+      }`}>
+        {t.title}
+      </span>
+
+      <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${highlighted ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+        <button
+          type="button"
+          title={`Move to ${columns.find((c) => c.statusKey === getNextStatus(t.status))?.name ?? getNextStatus(t.status)}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStatus(t.id, getNextStatus(t.status));
+          }}
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+        >
+          <ArrowRightLeft className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          title="Edit (e)"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(t.id);
+          }}
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+        >
+          <PenLine className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          title="Delete (d)"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(t);
+          }}
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
+
+      <div className={`flex shrink-0 items-center gap-2 ${highlighted ? 'hidden' : 'group-hover:hidden'}`}>
+        {t.linkedNotePath && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onOpenNote?.(t.linkedNotePath!); }}
+            className="text-cyan-600/40 hover:text-cyan-400 transition-colors"
+          >
+            <FileText className="h-3 w-3" />
+          </button>
+        )}
+        {t.tags.map((tag) => (
+          <span key={tag} className="font-mono text-[10px] text-zinc-600">#{tag}</span>
+        ))}
+        {t.dueDate && (
+          <span className="font-mono text-[10px] text-zinc-600">
+            {new Date(t.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+          </span>
+        )}
+        <span className={`w-8 text-right font-mono text-[10px] ${sl.color}`}>
+          {sl.text}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+interface YougileTaskListRowProps {
+  task: YougileTask;
+  flatIndex: number;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+  onDoubleClick: () => void;
+  onEdit: (id: string) => void;
+  onDelete: (task: YougileTask) => void;
+  onToggleCompleted: (id: string, completed: boolean) => void;
+}
+
+function YougileTaskListRow({
+  task,
+  flatIndex,
+  isSelected,
+  onSelect,
+  onDoubleClick,
+  onEdit,
+  onDelete,
+  onToggleCompleted,
+}: YougileTaskListRowProps) {
+  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable<HTMLDivElement>({
+    pane: 'task-view',
+    region: 'list',
+    index: flatIndex,
+    id: task.id,
+    onSelect: () => onSelect(task.id),
+    onActivate: () => onEdit(task.id),
+  });
+
+  const highlighted = isSelected || isFocusSelected;
+  const isDone = task.completed;
+  const deadline = task.deadline?.deadline
+    ? new Date(task.deadline.deadline).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      })
+    : null;
+
+  return (
+    <div
+      ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      data-task-selected={highlighted ? 'true' : undefined}
+      onClick={() => onSelect(task.id)}
+      onDoubleClick={onDoubleClick}
+      className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
+        highlighted
+          ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
+          : 'border-l-transparent hover:bg-zinc-900/40'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleCompleted(task.id, !task.completed);
+        }}
+        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
+          isDone
+            ? 'border-cyan-500/40 bg-cyan-500/20'
+            : 'border-zinc-700 hover:border-zinc-500'
+        }`}
+      >
+        {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+      </button>
+
+      <span className={`min-w-0 flex-1 truncate text-sm ${
+        isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
+      }`}>
+        {task.title}
+      </span>
+
+      <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${highlighted ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+        <button
+          type="button"
+          title="Edit (e)"
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(task.id);
+          }}
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
+        >
+          <PenLine className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          title="Delete (d)"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete(task);
+          }}
+          className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </div>
+
+      <div className={`flex shrink-0 items-center gap-2 ${highlighted ? 'hidden' : 'group-hover:hidden'}`}>
+        {deadline && (
+          <span className="font-mono text-[10px] text-zinc-600">{deadline}</span>
+        )}
+        {task.assigned.length > 0 && (
+          <span className="flex items-center gap-1 font-mono text-[10px] text-zinc-600">
+            <Users className="h-2.5 w-2.5" />
+            {task.assigned.length}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 type Tab = 'list' | 'kanban' | 'calendar';
 const tabDefs: { id: Tab; label: string; icon: typeof LayoutList }[] = [
@@ -244,23 +505,18 @@ export default function Dashboard() {
     };
   }, [tasks, yougileVisibleTasks]);
 
-  // Register panes with focus engine
+  // Register structural panes (sidebar, task-view) with focus engine.
+  // These depend only on view layout, NOT on which task is selected.
   useEffect(() => {
     const engine = focusEngine.getState();
 
-    // Determine regions based on current view and mode
     const getTaskViewRegions = () => {
       if (activeTab === 'kanban') {
-        // For kanban, regions are column-0, column-1, etc.
         const colCount = isYougile ? yougileStore.columns.length : columns.length;
         return Array.from({ length: colCount }, (_, i) => `column-${i}`);
       }
-      // For list and calendar, single region
       return ['list'];
     };
-
-    const taskViewRegions = getTaskViewRegions();
-    const hasEditor = isEditorOpen && ((isYougile && yougileStore.selectedTaskId) || (!isYougile && localSelectedTaskId));
 
     // Register sidebar (only for list view, local mode)
     if (activeTab === 'list' && !isYougile) {
@@ -270,9 +526,20 @@ export default function Dashboard() {
     }
 
     // Register task view
-    engine.registerPane('task-view', { regions: taskViewRegions, order: 1 });
+    engine.registerPane('task-view', { regions: getTaskViewRegions(), order: 1 });
 
-    // Register editor if open
+    return () => {
+      engine.unregisterPane('sidebar');
+      engine.unregisterPane('task-view');
+    };
+  }, [activeTab, isYougile, yougileStore.columns.length, columns.length]);
+
+  // Register/unregister editor pane separately so that task selection
+  // (j/k navigation) doesn't tear down structural panes.
+  useEffect(() => {
+    const engine = focusEngine.getState();
+    const hasEditor = isEditorOpen && ((isYougile && yougileStore.selectedTaskId) || (!isYougile && localSelectedTaskId));
+
     if (hasEditor) {
       engine.registerPane('editor', { regions: ['editor'], order: 2 });
     } else {
@@ -280,11 +547,9 @@ export default function Dashboard() {
     }
 
     return () => {
-      engine.unregisterPane('sidebar');
-      engine.unregisterPane('task-view');
       engine.unregisterPane('editor');
     };
-  }, [activeTab, isYougile, yougileStore.columns.length, columns.length, isEditorOpen, yougileStore.selectedTaskId, localSelectedTaskId]);
+  }, [isYougile, isEditorOpen, yougileStore.selectedTaskId, localSelectedTaskId]);
 
   // Register action callbacks on window for FocusProvider
   useEffect(() => {
@@ -328,12 +593,21 @@ export default function Dashboard() {
       },
       onToggleHelp: () => setShowHelp(v => !v),
       onEscape: () => {
-        // Deselect current task
+        // Deselect current task but keep pane focused
+        // (drillUp nulls activePane; re-focus task-view so navigation keeps working)
         if (isYougile) {
           yougileStore.selectTask('');
         } else {
           selectLocalTask('');
         }
+        setIsEditorOpen(false);
+        // Re-focus task-view pane after drillUp cleared it
+        requestAnimationFrame(() => {
+          const state = focusEngine.getState();
+          if (state.activePane === null && state.panes.has('task-view')) {
+            state.focusPane('task-view');
+          }
+        });
       },
     };
   }, [
@@ -499,6 +773,27 @@ export default function Dashboard() {
     }));
   }, [isYougile, yougileStore.columns, filteredYougile]);
 
+  // Flat index map for list view focus nodes
+  const taskFlatIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    if (activeTab !== 'list') return map;
+    let idx = 0;
+    if (isYougile) {
+      for (const { items } of groupedYougileByColumn) {
+        for (const task of items) {
+          map.set(task.id, idx++);
+        }
+      }
+    } else {
+      for (const { items } of groupedByColumn) {
+        for (const task of items) {
+          map.set(task.id, idx++);
+        }
+      }
+    }
+    return map;
+  }, [activeTab, isYougile, groupedByColumn, groupedYougileByColumn]);
+
   const confirmDelete = useCallback(async () => {
     if (!deleteDialog) return;
 
@@ -545,123 +840,30 @@ export default function Dashboard() {
 
   const contextTask = contextMenu ? tasks.find((t) => t.id === contextMenu.taskId) : null;
 
-  const renderTaskRow = (t: Task) => {
-    const isSelected = localSelectedTaskId === t.id;
-    const isDone = t.status === 'done';
-    const dot = PRIORITY_DOT_CLASS[t.priority] ?? null;
-    const colName = columns.find((c) => c.statusKey === t.status)?.name ?? t.status;
-    const sl = statusMeta(t.status, colName);
+  const handleEditTask = useCallback((id: string) => {
+    if (isYougile) {
+      yougileStore.selectTask(id);
+    } else {
+      selectLocalTask(id);
+    }
+    setIsEditorOpen(true);
+  }, [isYougile, yougileStore, selectLocalTask, setIsEditorOpen]);
 
-    return (
-      <div
-        key={t.id}
-        data-task-selected={isSelected ? 'true' : undefined}
-        onClick={() => selectLocalTask(t.id)}
-        onDoubleClick={() => setIsEditorOpen(true)}
-        onContextMenu={(e) => handleContextMenu(e, t.id)}
-        className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
-          isSelected
-            ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
-            : 'border-l-transparent hover:bg-zinc-900/40'
-        }`}
-      >
-        {/* Checkbox */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            void updateTaskStatus({ id: t.id, status: isDone ? 'todo' : 'done' });
-          }}
-          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
-            isDone
-              ? 'border-cyan-500/40 bg-cyan-500/20'
-              : 'border-zinc-700 hover:border-zinc-500'
-          }`}
-        >
-          {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
-        </button>
+  const handleToggleYougileCompleted = useCallback((id: string, completed: boolean) => {
+    void yougileStore.updateTask(id, { completed });
+  }, [yougileStore]);
 
-        {/* Priority dot */}
-        {dot ? (
-          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-        ) : (
-          <div className="w-1.5 shrink-0" />
-        )}
+  const handleUpdateLocalStatus = useCallback((id: string, status: string) => {
+    void updateTaskStatus({ id, status });
+  }, [updateTaskStatus]);
 
-        {/* Title */}
-        <span className={`min-w-0 flex-1 truncate text-sm ${
-          isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
-        }`}>
-          {t.title}
-        </span>
+  const handleDeleteLocal = useCallback((t: Task) => {
+    requestDelete(buildDeleteRequest(t));
+  }, [requestDelete, buildDeleteRequest]);
 
-        {/* Hover actions (visible when selected or hovered) */}
-        <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          {/* Cycle status */}
-          <button
-            type="button"
-            title={`Move to ${columns.find((c) => c.statusKey === getNextStatus(t.status))?.name ?? getNextStatus(t.status)}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              void updateTaskStatus({ id: t.id, status: getNextStatus(t.status) });
-            }}
-            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
-          >
-            <ArrowRightLeft className="h-3 w-3" />
-          </button>
-          {/* Edit */}
-          <button
-            type="button"
-            title="Edit (e)"
-            onClick={(e) => {
-              e.stopPropagation();
-              selectLocalTask(t.id);
-              setIsEditorOpen(true);
-            }}
-            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
-          >
-            <PenLine className="h-3 w-3" />
-          </button>
-          {/* Delete */}
-          <button
-            type="button"
-            title="Delete (d)"
-            onClick={(e) => {
-              e.stopPropagation();
-              requestDelete(buildDeleteRequest(t));
-            }}
-            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-
-        {/* Right metadata (hidden when hover actions show) */}
-        <div className={`flex shrink-0 items-center gap-2 ${isSelected ? 'hidden' : 'group-hover:hidden'}`}>
-          {t.linkedNotePath && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); void openLinkedNote(t.linkedNotePath!); }}
-              className="text-cyan-600/40 hover:text-cyan-400 transition-colors"
-            >
-              <FileText className="h-3 w-3" />
-            </button>
-          )}
-          {t.tags.map((tag) => (
-            <span key={tag} className="font-mono text-[10px] text-zinc-600">#{tag}</span>
-          ))}
-          {t.dueDate && (
-            <span className="font-mono text-[10px] text-zinc-600">
-              {new Date(t.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-            </span>
-          )}
-          <span className={`w-8 text-right font-mono text-[10px] ${sl.color}`}>
-            {sl.text}
-          </span>
-        </div>
-      </div>
-    );
-  };
+  const handleDeleteYougile = useCallback((t: YougileTask) => {
+    requestDelete(buildDeleteRequest(t));
+  }, [requestDelete, buildDeleteRequest]);
 
   const renderSection = (label: string, items: Task[]) => {
     if (items.length === 0) return null;
@@ -673,91 +875,23 @@ export default function Dashboard() {
           </span>
           <span className="ml-1.5 font-mono text-[10px] text-zinc-700">{items.length}</span>
         </div>
-        {items.map(renderTaskRow)}
-      </div>
-    );
-  };
-
-  const renderYougileTaskRow = (task: YougileTask) => {
-    const isSelected = yougileStore.selectedTaskId === task.id;
-    const isDone = task.completed;
-    const deadline = task.deadline?.deadline
-      ? new Date(task.deadline.deadline).toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-        })
-      : null;
-
-    return (
-      <div
-        key={task.id}
-        data-task-selected={isSelected ? 'true' : undefined}
-        onClick={() => yougileStore.selectTask(task.id)}
-        onDoubleClick={() => setIsEditorOpen(true)}
-        className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
-          isSelected
-            ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
-            : 'border-l-transparent hover:bg-zinc-900/40'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            void yougileStore.updateTask(task.id, { completed: !task.completed });
-          }}
-          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors ${
-            isDone
-              ? 'border-cyan-500/40 bg-cyan-500/20'
-              : 'border-zinc-700 hover:border-zinc-500'
-          }`}
-        >
-          {isDone && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
-        </button>
-
-        <span className={`min-w-0 flex-1 truncate text-sm ${
-          isDone ? 'text-zinc-600 line-through' : 'text-zinc-200'
-        }`}>
-          {task.title}
-        </span>
-
-        <div className={`flex shrink-0 items-center gap-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          <button
-            type="button"
-            title="Edit (e)"
-            onClick={(event) => {
-              event.stopPropagation();
-              yougileStore.selectTask(task.id);
-              setIsEditorOpen(true);
-            }}
-            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
-          >
-            <PenLine className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            title="Delete (d)"
-            onClick={(event) => {
-              event.stopPropagation();
-              requestDelete(buildDeleteRequest(task));
-            }}
-            className="rounded p-1 text-zinc-700 hover:bg-zinc-800 hover:text-red-400 transition-colors"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-
-        <div className={`flex shrink-0 items-center gap-2 ${isSelected ? 'hidden' : 'group-hover:hidden'}`}>
-          {deadline && (
-            <span className="font-mono text-[10px] text-zinc-600">{deadline}</span>
-          )}
-          {task.assigned.length > 0 && (
-            <span className="flex items-center gap-1 font-mono text-[10px] text-zinc-600">
-              <Users className="h-2.5 w-2.5" />
-              {task.assigned.length}
-            </span>
-          )}
-        </div>
+        {items.map((t) => (
+          <LocalTaskListRow
+            key={t.id}
+            task={t}
+            flatIndex={taskFlatIndex.get(t.id) ?? 0}
+            isSelected={localSelectedTaskId === t.id}
+            columns={columns}
+            onSelect={selectLocalTask}
+            onDoubleClick={() => setIsEditorOpen(true)}
+            onContextMenu={handleContextMenu}
+            onToggleStatus={handleUpdateLocalStatus}
+            onEdit={handleEditTask}
+            onDelete={handleDeleteLocal}
+            onOpenNote={openLinkedNote}
+            getNextStatus={getNextStatus}
+          />
+        ))}
       </div>
     );
   };
@@ -772,7 +906,19 @@ export default function Dashboard() {
           </span>
           <span className="ml-1.5 font-mono text-[10px] text-zinc-700">{items.length}</span>
         </div>
-        {items.map(renderYougileTaskRow)}
+        {items.map((task) => (
+          <YougileTaskListRow
+            key={task.id}
+            task={task}
+            flatIndex={taskFlatIndex.get(task.id) ?? 0}
+            isSelected={yougileStore.selectedTaskId === task.id}
+            onSelect={yougileStore.selectTask}
+            onDoubleClick={() => setIsEditorOpen(true)}
+            onEdit={handleEditTask}
+            onDelete={handleDeleteYougile}
+            onToggleCompleted={handleToggleYougileCompleted}
+          />
+        ))}
       </div>
     );
   };

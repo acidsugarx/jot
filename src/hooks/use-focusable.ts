@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
-import { useFocusEngine, useFocusEngineStore } from '@/hooks/use-focus-engine';
+import { useFocusStoreApi, useFocusEngineStore } from '@/hooks/use-focus-engine';
 
 export interface UseFocusableOptions {
   pane: string;
@@ -23,8 +23,22 @@ export interface UseFocusableResult<T extends HTMLElement> {
 export function useFocusable<T extends HTMLElement = HTMLElement>(
   options: UseFocusableOptions
 ): UseFocusableResult<T> {
-  const { engine } = useFocusEngine();
+  const engine = useFocusStoreApi();
   const ref = useRef<T | null>(null);
+
+  // Keep latest callbacks in refs so the registration effect stays stable.
+  // Without this, inline arrow functions (e.g. onSelect={() => select(id)})
+  // change identity every render, causing the effect to re-register all nodes
+  // on every render — which resets activeIndex via unregister/register churn.
+  const onSelectRef = useRef(options.onSelect);
+  onSelectRef.current = options.onSelect;
+  const onActivateRef = useRef(options.onActivate);
+  onActivateRef.current = options.onActivate;
+
+  // Also keep structural options in refs so the `focus` helper always reads
+  // the latest values without needing them in a useCallback dep array.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const isSelected = useFocusEngineStore((state) => (
     state.activePane === options.pane
@@ -42,8 +56,11 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
       region: options.region,
       index: options.index,
       id: options.id,
-      onSelect: options.onSelect,
-      onActivate: options.onActivate,
+      // Use ref-reading wrappers so the node registration is structurally
+      // stable — the effect only re-fires when pane/region/index/id/disabled
+      // actually change, not when callbacks are recreated.
+      onSelect: () => onSelectRef.current?.(),
+      onActivate: () => onActivateRef.current?.(),
     });
 
     return () => {
@@ -54,17 +71,16 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
     options.disabled,
     options.id,
     options.index,
-    options.onActivate,
-    options.onSelect,
     options.pane,
     options.region,
   ]);
 
   const focus = () => {
-    if (options.disabled) return;
+    const opts = optionsRef.current;
+    if (opts.disabled) return;
 
-    engine.getState().focusNode(options.pane, options.region, options.index);
-    options.onSelect?.();
+    engine.getState().focusNode(opts.pane, opts.region, opts.index);
+    onSelectRef.current?.();
     ref.current?.focus();
   };
 
