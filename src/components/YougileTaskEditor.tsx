@@ -12,8 +12,9 @@ import { useFocusable } from '@/hooks/use-focusable';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
 
 // Wrapper that registers each editor field as a focusable node for j/k navigation
-function YougileEditorField({ index, onActivate, onEnter, children }: {
+function YougileEditorField({ index, id: idProp, onActivate, onEnter, children }: {
   index: number;
+  id?: string;
   onActivate?: () => void;
   onEnter?: () => void;
   children: (isSelected: boolean) => ReactNode;
@@ -22,7 +23,7 @@ function YougileEditorField({ index, onActivate, onEnter, children }: {
     pane: 'editor',
     region: 'editor',
     index,
-    id: `yougile-field-${index}`,
+    id: idProp ?? `yougile-field-${index}`,
     onActivate: () => {
       onActivate?.();
       focusEngine.getState().setMode('INSERT');
@@ -244,6 +245,8 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const [checklists, setChecklists] = useState<YougileChecklist[]>(
     task.checklists ? structuredClone(task.checklists) : []
   );
+  const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
+  const [editingItemText, setEditingItemText] = useState('');
   const [color, setColor] = useState(task.color ?? 'task-primary');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [assignedUserIds, setAssignedUserIds] = useState<string[]>(task.assigned);
@@ -343,7 +346,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
   }, []);
 
-  // Wire Escape into focus engine — close editor from NORMAL mode
+  // Wire Escape + onNewItem into focus engine
   useEffect(() => {
     const existing = window.__jotActions;
     window.__jotActions = {
@@ -356,16 +359,44 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
           onClose();
         }
       },
+      onNewItem: () => {
+        const { activePane, activeRegion, activeIndex, nodes } = focusEngine.getState();
+        if (!activePane || !activeRegion) return;
+        const key = `${activePane}:${activeRegion}`;
+        const nodeList = nodes.get(key) ?? [];
+        const activeNode = nodeList[activeIndex];
+        if (!activeNode?.id.startsWith('yougile-checklist-')) return;
+
+        // Parse clIdx from id: "yougile-checklist-{clIdx}-{itemIdx}"
+        const parts = activeNode.id.split('-');
+        const clIdx = parseInt(parts[2] ?? '', 10);
+        if (isNaN(clIdx) || clIdx < 0 || clIdx >= checklists.length) return;
+
+        const targetChecklist = checklists[clIdx];
+        if (!targetChecklist) return;
+
+        const newItemIdx = targetChecklist.items.length;
+        const updated = checklists.map((cl, ci) => {
+          if (ci !== clIdx) return cl;
+          return { ...cl, items: [...cl.items, { title: '', completed: false }] };
+        });
+        setChecklists(updated);
+        void updateTask(task.id, { checklists: updated });
+
+        const newKey = `${clIdx}:${newItemIdx}`;
+        setEditingItemKey(newKey);
+        setEditingItemText('');
+        focusEngine.getState().setMode('INSERT');
+      },
     };
     return () => {
-      // Restore previous actions without onEscape
       if (existing) {
         window.__jotActions = existing;
       } else if (window.__jotActions) {
         delete window.__jotActions;
       }
     };
-  }, [onClose]);
+  }, [onClose, checklists, task.id, updateTask]);
 
   const handleTitleBlur = () => {
     const trimmed = title.trim();
@@ -415,6 +446,30 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
       },
     });
   };
+
+  const commitEditingItem = useCallback((clIdx: number, itemIdx: number, text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setEditingItemKey(null);
+      setEditingItemText('');
+      focusEngine.getState().setMode('NORMAL');
+      return;
+    }
+    const updated = checklists.map((cl, ci) => {
+      if (ci !== clIdx) return cl;
+      return {
+        ...cl,
+        items: cl.items.map((item, ii) =>
+          ii === itemIdx ? { ...item, title: trimmed } : item
+        ),
+      };
+    });
+    setChecklists(updated);
+    void updateTask(task.id, { checklists: updated });
+    setEditingItemKey(null);
+    setEditingItemText('');
+    focusEngine.getState().setMode('NORMAL');
+  }, [checklists, task.id, updateTask]);
 
   const handleToggleChecklistItem = (
     clIdx: number,
@@ -930,7 +985,6 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                 </span>
               )}
             </div>
-            {/* Progress bar */}
             {totalChecklistItems > 0 && (
               <div className="mb-3 h-0.5 w-full overflow-hidden rounded-full bg-zinc-800">
                 <div
@@ -940,36 +994,108 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
               </div>
             )}
             <div className="flex flex-col gap-3">
-              {checklists.map((cl, clIdx) => (
-                <div key={clIdx}>
-                  {cl.title && (
-                    <div className="mb-1.5 font-mono text-[10px] font-medium text-zinc-500">
-                      {cl.title}
+              {(() => {
+                let flatIndex = 0;
+                return checklists.map((cl, clIdx) => (
+                  <div key={clIdx}>
+                    {cl.title && (
+                      <div className="mb-1.5 font-mono text-[10px] font-medium text-zinc-500">
+                        {cl.title}
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-0.5">
+                      {cl.items.map((item, itemIdx) => {
+                        const nodeIndex = 7 + stickerDefinitions.length + flatIndex;
+                        const nodeId = `yougile-checklist-${clIdx}-${itemIdx}`;
+                        const itemKey = `${clIdx}:${itemIdx}`;
+                        const isEditing = editingItemKey === itemKey;
+                        flatIndex++;
+                        return (
+                          <YougileEditorField
+                            key={nodeId}
+                            index={nodeIndex}
+                            id={nodeId}
+                            onActivate={() => {
+                              setEditingItemKey(itemKey);
+                              setEditingItemText(item.title);
+                              focusEngine.getState().setMode('INSERT');
+                            }}
+                            onEnter={() => {
+                              const updated = checklists.map((c, ci) => {
+                                if (ci !== clIdx) return c;
+                                return {
+                                  ...c,
+                                  items: c.items.map((it, ii) =>
+                                    ii !== itemIdx ? it : { ...it, completed: !it.completed }
+                                  ),
+                                };
+                              });
+                              setChecklists(updated);
+                              void updateTask(task.id, { checklists: updated });
+                            }}
+                          >
+                            {(isSelected) => (
+                              <div className={`flex items-start gap-2 rounded px-1 py-0.5 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = checklists.map((c, ci) => {
+                                      if (ci !== clIdx) return c;
+                                      return {
+                                        ...c,
+                                        items: c.items.map((it, ii) =>
+                                          ii !== itemIdx ? it : { ...it, completed: !it.completed }
+                                        ),
+                                      };
+                                    });
+                                    setChecklists(updated);
+                                    void updateTask(task.id, { checklists: updated });
+                                  }}
+                                  className="mt-px shrink-0"
+                                >
+                                  {item.completed ? (
+                                    <CheckSquare className="h-3 w-3 text-cyan-400" />
+                                  ) : (
+                                    <Square className="h-3 w-3 text-zinc-600" />
+                                  )}
+                                </button>
+                                {isEditing ? (
+                                  <input
+                                    autoFocus
+                                    type="text"
+                                    value={editingItemText}
+                                    onChange={(e) => setEditingItemText(e.target.value)}
+                                    onBlur={() => commitEditingItem(clIdx, itemIdx, editingItemText)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        commitEditingItem(clIdx, itemIdx, editingItemText);
+                                      }
+                                      if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setEditingItemKey(null);
+                                        setEditingItemText('');
+                                        focusEngine.getState().setMode('NORMAL');
+                                      }
+                                    }}
+                                    className="flex-1 bg-transparent text-xs leading-relaxed text-zinc-300 outline-none"
+                                  />
+                                ) : (
+                                  <span className={`text-xs leading-relaxed ${
+                                    item.completed ? 'text-zinc-600 line-through' : 'text-zinc-400'
+                                  }`}>
+                                    {item.title || <span className="text-zinc-700 italic">empty</span>}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </YougileEditorField>
+                        );
+                      })}
                     </div>
-                  )}
-                  <div className="flex flex-col gap-0.5">
-                    {cl.items.map((item, itemIdx) => (
-                      <button
-                        key={itemIdx}
-                        type="button"
-                        onClick={() => handleToggleChecklistItem(clIdx, itemIdx, !item.completed)}
-                        className="flex items-start gap-2 rounded px-1 py-0.5 text-left hover:bg-zinc-800/40 transition-colors"
-                      >
-                        {item.completed ? (
-                          <CheckSquare className="mt-px h-3 w-3 shrink-0 text-cyan-400" />
-                        ) : (
-                          <Square className="mt-px h-3 w-3 shrink-0 text-zinc-600" />
-                        )}
-                        <span className={`text-xs leading-relaxed ${
-                          item.completed ? 'text-zinc-600 line-through' : 'text-zinc-400'
-                        }`}>
-                          {item.title}
-                        </span>
-                      </button>
-                    ))}
                   </div>
-                </div>
-              ))}
+                ));
+              })()}
             </div>
           </div>
         )}
