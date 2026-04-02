@@ -10,6 +10,7 @@ export interface UseFocusableOptions {
   id: string;
   onSelect?: () => void;
   onActivate?: () => void;
+  onEnter?: () => void;
   disabled?: boolean;
 }
 
@@ -34,6 +35,8 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
   onSelectRef.current = options.onSelect;
   const onActivateRef = useRef(options.onActivate);
   onActivateRef.current = options.onActivate;
+  const onEnterRef = useRef(options.onEnter);
+  onEnterRef.current = options.onEnter;
 
   // Also keep structural options in refs so the `focus` helper always reads
   // the latest values without needing them in a useCallback dep array.
@@ -61,6 +64,7 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
       // actually change, not when callbacks are recreated.
       onSelect: () => onSelectRef.current?.(),
       onActivate: () => onActivateRef.current?.(),
+      onEnter: () => onEnterRef.current?.(),
     });
 
     return () => {
