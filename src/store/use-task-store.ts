@@ -19,9 +19,15 @@ const TASKS_UPDATED_EVENT = 'tasks-updated';
 const THEME_CHANGED_EVENT = 'theme-changed';
 const SETTINGS_UPDATED_EVENT = 'settings-updated';
 
+interface TasksUpdatedPayload {
+  sourceWindowLabel?: string;
+}
+
 function notifyTasksChanged() {
   if ('__TAURI_INTERNALS__' in window) {
-    void emit(TASKS_UPDATED_EVENT);
+    void emit(TASKS_UPDATED_EVENT, {
+      sourceWindowLabel: getCurrentWindow().label,
+    } satisfies TasksUpdatedPayload);
   }
 }
 
@@ -410,7 +416,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   listenForUpdates: () => {
     if (!('__TAURI_INTERNALS__' in window)) return () => {};
-    const unlistenTasks = listen(TASKS_UPDATED_EVENT, () => { void get().fetchTasks(); });
+    const unlistenTasks = listen<TasksUpdatedPayload>(TASKS_UPDATED_EVENT, (event) => {
+      if (event.payload?.sourceWindowLabel === getCurrentWindow().label) {
+        return;
+      }
+      void get().fetchTasks();
+    });
     const unlistenTheme = listen<string>(THEME_CHANGED_EVENT, (event) => { applyTheme(event.payload); });
     const unlistenSettings = listen(SETTINGS_UPDATED_EVENT, () => { void get().fetchSettings(); });
     return () => {

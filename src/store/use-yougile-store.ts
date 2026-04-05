@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { escapeHtml } from '@/lib/formatting';
 import type {
   YougileAccount,
@@ -138,6 +139,7 @@ interface YougileState {
 
 interface YougileTasksUpdatedPayload {
   boardId: string | null;
+  sourceWindowLabel?: string;
 }
 
 interface YougileChatMessageIdResponse {
@@ -227,7 +229,10 @@ function scheduleSyncPersist(get: () => YougileState) {
 
 async function emitYougileTasksUpdated(boardId: string | null) {
   if (!isTauri()) return;
-  await emit(YOUGILE_TASKS_UPDATED_EVENT, { boardId } satisfies YougileTasksUpdatedPayload);
+  await emit(YOUGILE_TASKS_UPDATED_EVENT, {
+    boardId,
+    sourceWindowLabel: getCurrentWindow().label,
+  } satisfies YougileTasksUpdatedPayload);
 }
 
 export const useYougileStore = create<YougileState>((set, get) => ({
@@ -756,6 +761,10 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     const unlisten = listen<YougileTasksUpdatedPayload>(YOUGILE_TASKS_UPDATED_EVENT, (event) => {
       const { activeSource, yougileContext, columns } = get();
       const payloadBoardId = event.payload.boardId;
+
+      if (event.payload.sourceWindowLabel === getCurrentWindow().label) {
+        return;
+      }
 
       if (activeSource !== 'yougile' || !yougileContext.accountId || !yougileContext.boardId) {
         return;
