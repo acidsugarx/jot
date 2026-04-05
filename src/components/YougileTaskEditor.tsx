@@ -269,6 +269,8 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const columnSelectRef = useRef<HTMLSelectElement>(null);
   const deadlineInputRef = useRef<HTMLInputElement>(null);
   const stickerRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement | null>>(new Map());
+  const colorButtonRef = useRef<HTMLButtonElement>(null);
+  const assigneeButtonRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
   const taskId = task.id;
 
   // Fetch chat when opening the chat panel
@@ -333,17 +335,15 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
 
-  // Auto-focus title and switch to editor pane when editor opens
+  // Focus editor pane in NORMAL mode on open — press Enter/e/i on a field to enter INSERT
   useEffect(() => {
     requestAnimationFrame(() => {
       const engine = focusEngine.getState();
       if (engine.panes.has('editor')) {
         engine.focusPane('editor');
-        engine.setMode('INSERT');
+        engine.setMode('NORMAL');
       }
-      titleRef.current?.focus();
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
   }, []);
 
   // Wire Escape + onNewItem into focus engine
@@ -489,11 +489,57 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     void updateTask(task.id, { checklists: updated });
   };
 
-  const handleColorChange = (newColor: string) => {
+  const handleColorChange = useCallback((newColor: string) => {
     setColor(newColor);
     setShowColorPicker(false);
     void updateTask(task.id, { color: newColor });
-  };
+  }, [task.id, updateTask]);
+
+  const cycleColor = useCallback((delta: -1 | 1) => {
+    const currentIndex = YOUGILE_TASK_COLOR_OPTIONS.findIndex((option) => option.value === color);
+    const fallbackIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (fallbackIndex + delta + YOUGILE_TASK_COLOR_OPTIONS.length) % YOUGILE_TASK_COLOR_OPTIONS.length;
+    const next = YOUGILE_TASK_COLOR_OPTIONS[nextIndex];
+    if (next) {
+      handleColorChange(next.value);
+    }
+  }, [color, handleColorChange]);
+
+  const handleVimSelectKeyDown = useCallback((
+    event: React.KeyboardEvent<HTMLSelectElement>,
+    options: string[],
+    currentValue: string,
+    onChange: (value: string) => void,
+  ) => {
+    if (options.length === 0) return;
+
+    const key = event.key;
+    const direction = key === 'j' || key === 'l'
+      ? 1
+      : key === 'k' || key === 'h'
+        ? -1
+        : 0;
+
+    if (direction === 0) return;
+
+    event.preventDefault();
+    const currentIndex = Math.max(0, options.indexOf(currentValue));
+    const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + direction));
+    const nextValue = options[nextIndex];
+    if (nextValue && nextValue !== currentValue) {
+      onChange(nextValue);
+    }
+  }, []);
+
+  const focusAssigneeByOffset = useCallback((userId: string, delta: -1 | 1) => {
+    const ids = users.map((user) => user.id);
+    const currentIndex = ids.indexOf(userId);
+    if (currentIndex < 0) return;
+    const nextIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta));
+    const nextId = ids[nextIndex];
+    if (!nextId) return;
+    assigneeButtonRefs.current.get(nextId)?.focus();
+  }, [users]);
 
   const handleToggleAssignee = (userId: string) => {
     const nextAssigned = assignedUserIds.includes(userId)
@@ -752,13 +798,20 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                   Column
                 </span>
                 <div className="flex items-center gap-1">
-                  <select
-                    ref={columnSelectRef}
-                    data-field="column"
-                    value={columnId}
-                    onChange={(e) => handleColumnChange(e.target.value)}
-                    className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
-                  >
+                   <select
+                     ref={columnSelectRef}
+                     data-field="column"
+                     value={columnId}
+                     onChange={(e) => handleColumnChange(e.target.value)}
+                     onKeyDown={(event) => {
+                       const optionValues = columns.map((col) => col.id);
+                       if (!optionValues.includes(columnId) && columnId) {
+                         optionValues.push(columnId);
+                       }
+                       handleVimSelectKeyDown(event, optionValues, columnId, handleColumnChange);
+                     }}
+                     className="bg-transparent text-right text-sm text-zinc-300 focus:outline-none cursor-pointer"
+                   >
                     {columns.map((col) => (
                       <option key={col.id} value={col.id}>{col.title}</option>
                     ))}
@@ -856,7 +909,13 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
           </YougileEditorField>
 
           {/* [5] Color */}
-          <YougileEditorField index={5} onActivate={() => setShowColorPicker(true)}>
+          <YougileEditorField
+            index={5}
+            onActivate={() => {
+              setShowColorPicker(true);
+              requestAnimationFrame(() => colorButtonRef.current?.focus());
+            }}
+          >
             {(isSelected) => (
               <div className={`flex h-9 items-center justify-between px-4 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
                 <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
@@ -864,8 +923,20 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                 </span>
                 <div className="relative">
                   <button
+                    ref={colorButtonRef}
                     type="button"
                     onClick={() => setShowColorPicker(!showColorPicker)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'j' || event.key === 'l') {
+                        event.preventDefault();
+                        cycleColor(1);
+                        return;
+                      }
+                      if (event.key === 'k' || event.key === 'h') {
+                        event.preventDefault();
+                        cycleColor(-1);
+                      }
+                    }}
                     className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
                   >
                     <div
@@ -898,7 +969,18 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
         {/* Assigned Users */}
         {(users.length > 0 || assignedUserIds.length > 0) && (
-          <YougileEditorField index={6} onActivate={() => setShowAssigneePicker((open) => !open)}>
+          <YougileEditorField
+            index={6}
+            onActivate={() => {
+              setShowAssigneePicker(true);
+              requestAnimationFrame(() => {
+                const firstId = users[0]?.id;
+                if (firstId) {
+                  assigneeButtonRefs.current.get(firstId)?.focus();
+                }
+              });
+            }}
+          >
             {(isSelected) => (
               <div className={`border-b border-zinc-800/30 px-4 py-3 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
                 <div className="mb-2 flex items-center justify-between">
@@ -950,8 +1032,31 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                       return (
                         <button
                           key={user.id}
+                          ref={(el) => {
+                            if (el) {
+                              assigneeButtonRefs.current.set(user.id, el);
+                            } else {
+                              assigneeButtonRefs.current.delete(user.id);
+                            }
+                          }}
                           type="button"
                           onClick={() => handleToggleAssignee(user.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'j' || event.key === 'l') {
+                              event.preventDefault();
+                              focusAssigneeByOffset(user.id, 1);
+                              return;
+                            }
+                            if (event.key === 'k' || event.key === 'h') {
+                              event.preventDefault();
+                              focusAssigneeByOffset(user.id, -1);
+                              return;
+                            }
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              handleToggleAssignee(user.id);
+                            }
+                          }}
                           className={`flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
                             isAssigned ? 'bg-cyan-500/10 text-zinc-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
                           }`}
@@ -1182,6 +1287,12 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                               }}
                               value={currentValue}
                               onChange={(event) => persistStickerValue(sticker.id, event.target.value)}
+                              onKeyDown={(event) => {
+                                const optionValues = ['', 'empty', ...sticker.states.map((state) => state.id)];
+                                handleVimSelectKeyDown(event, optionValues, currentValue, (nextValue) => {
+                                  persistStickerValue(sticker.id, nextValue);
+                                });
+                              }}
                               className="w-40 bg-transparent text-right text-xs text-zinc-300 focus:outline-none cursor-pointer"
                             >
                               <option value="">Not set</option>

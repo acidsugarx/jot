@@ -51,6 +51,13 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
 
   const isPaneActive = useFocusEngineStore((state) => state.activePane === options.pane);
 
+  // Scroll into view when selected via keyboard navigation
+  useEffect(() => {
+    if (isSelected) {
+      ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [isSelected]);
+
   useEffect(() => {
     if (options.disabled) return;
 

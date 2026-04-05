@@ -84,15 +84,14 @@ export function TaskEditorPane() {
   useEffect(() => { autoResize(titleRef.current); }, [title, autoResize]);
   useEffect(() => { autoResize(descRef.current); }, [description, autoResize]);
 
-  // Auto-focus title and switch to editor pane when editor opens
+  // Focus editor pane in NORMAL mode on open — press Enter/e/i on a field to enter INSERT
   useEffect(() => {
     requestAnimationFrame(() => {
       const engine = focusEngine.getState();
       if (engine.panes.has('editor')) {
         engine.focusPane('editor');
-        engine.setMode('INSERT');
+        engine.setMode('NORMAL');
       }
-      titleRef.current?.focus();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
   }, []);
