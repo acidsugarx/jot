@@ -620,7 +620,14 @@ function App() {
     let contentHeight: number;
 
     if (editingTask) {
-      contentHeight = editingYougileTask ? 620 : EDITOR_HEIGHT;
+      // For Yougile tasks, use as much screen space as possible so the editor
+      // has room to scroll.  Local tasks use the compact EDITOR_HEIGHT.
+      if (editingYougileTask) {
+        const maxScreenHeight = Math.floor(window.screen.availHeight * 0.8);
+        contentHeight = maxScreenHeight - FOOTER_HEIGHT - WINDOW_CHROME;
+      } else {
+        contentHeight = EDITOR_HEIGHT;
+      }
     } else if (hasQuery) {
       // "Create task" item
       contentHeight = GROUP_HEADER_HEIGHT + ACTION_ITEM_HEIGHT;
@@ -862,7 +869,14 @@ function App() {
     window.__jotActions = {
       onEscape: () => {
         const engineMode = focusEngine.getState().mode;
-        if (engineMode === 'NORMAL') {
+        if (engineMode === 'INSERT') {
+          // Let the editor or focus engine handle INSERT → NORMAL transition
+          return;
+        }
+        if (editingTask) {
+          // Close the editor, return to task list — don't hide the window
+          setEditingTaskId(null);
+        } else {
           void invoke('hide_window');
         }
       },
@@ -901,7 +915,7 @@ function App() {
         delete window.__jotActions;
       }
     };
-  }, [normalModeItems, selectedIndex, activeTasks, handleToggleStatus, handleDeleteTask, handleCreateTask, handleAction]);
+  }, [normalModeItems, selectedIndex, activeTasks, editingTask, handleToggleStatus, handleDeleteTask, handleCreateTask, handleAction]);
 
   // Single focus-engine keydown handler — replaces old inline handlers
   useEffect(() => {
@@ -1107,7 +1121,7 @@ function App() {
   if (editingTask) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-transparent">
-        <div className="flex w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/95 shadow-[0_0_60px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+        <div className="flex h-full max-h-full w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/95 shadow-[0_0_60px_rgba(0,0,0,0.6)] backdrop-blur-xl">
           {editingLocalTask ? (
             <InlineTaskEditor task={editingLocalTask} onClose={handleCloseEditor} />
           ) : editingYougileTask ? (

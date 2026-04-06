@@ -215,3 +215,274 @@
 [data-theme="light"] .prose-jot a { color: #0891b2; }
 [data-theme="light"] .prose-jot a:hover { color: #0e7490; }
 [data-theme="light"] .prose-jot blockquote { border-left-color: #d4d4d8; color: #71717a; }
+
+/* ── Yougile rich description renderer ─────────────────────────────────────── */
+
+.prose-jot-yougile {
+  font-size: 0.75rem;
+  line-height: 1.625;
+  color: #a1a1aa;
+  word-break: break-word;
+}
+
+/* Paragraphs */
+.prose-jot-yougile p { margin: 0.25rem 0; }
+.prose-jot-yougile p:first-child { margin-top: 0; }
+.prose-jot-yougile p:last-child { margin-bottom: 0; }
+
+/* Headings */
+.prose-jot-yougile h1 { font-size: 0.9375rem; font-weight: 700; color: #e4e4e7; margin: 0.5rem 0 0.25rem; }
+.prose-jot-yougile h2 { font-size: 0.8125rem; font-weight: 600; color: #e4e4e7; margin: 0.5rem 0 0.25rem; }
+.prose-jot-yougile h3 { font-size: 0.75rem; font-weight: 600; color: #d4d4d8; margin: 0.375rem 0 0.125rem; }
+.prose-jot-yougile h4 { font-size: 0.75rem; font-weight: 600; color: #a1a1aa; }
+
+/* Bold / Italic */
+.prose-jot-yougile strong, .prose-jot-yougile b { font-weight: 600; color: #e4e4e7; }
+.prose-jot-yougile em, .prose-jot-yougile i { font-style: italic; }
+.prose-jot-yougile s, .prose-jot-yougile strike, .prose-jot-yougile del { text-decoration: line-through; color: #71717a; }
+
+/* Links */
+.prose-jot-yougile a {
+  color: #22d3ee;
+  text-decoration: underline;
+  text-decoration-color: rgba(34, 211, 238, 0.3);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+.prose-jot-yougile a:hover {
+  color: #67e8f9;
+  text-decoration-color: rgba(103, 232, 249, 0.5);
+}
+
+/* Checkboxes */
+.prose-jot-yougile input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid #52525b;
+  border-radius: 3px;
+  background: transparent;
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+  top: -1px;
+  cursor: default;
+  flex-shrink: 0;
+}
+.prose-jot-yougile input[type="checkbox"]:checked {
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+.prose-jot-yougile input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid #0c0c0c;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+/* Checkbox in a <label> or wrapped inline */
+.prose-jot-yougile li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1rem;
+}
+.prose-jot-yougile p:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: baseline;
+}
+
+/* Unordered lists */
+.prose-jot-yougile ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0.25rem 0;
+}
+.prose-jot-yougile ul li { padding-left: 0.25rem; margin: 0.0625rem 0; }
+
+/* Ordered lists */
+.prose-jot-yougile ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0.25rem 0;
+}
+.prose-jot-yougile ol li { padding-left: 0.25rem; margin: 0.0625rem 0; }
+
+/* Nested lists */
+.prose-jot-yougile ul ul, .prose-jot-yougile ol ol, .prose-jot-yougile ul ol, .prose-jot-yougile ol ul {
+  margin: 0.0625rem 0;
+}
+
+/* Code */
+.prose-jot-yougile code {
+  background: rgba(63, 63, 70, 0.4);
+  padding: 0.0625rem 0.3rem;
+  border-radius: 0.25rem;
+  font-family: 'SF Mono', Menlo, Monaco, 'JetBrains Mono', monospace;
+  font-size: 0.6875rem;
+  color: #d4d4d8;
+}
+.prose-jot-yougile pre {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(63, 63, 70, 0.3);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.375rem 0;
+  overflow-x: auto;
+}
+.prose-jot-yougile pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.6875rem;
+  display: block;
+  color: #a1a1aa;
+}
+
+/* Blockquotes */
+.prose-jot-yougile blockquote {
+  border-left: 2px solid #3f3f46;
+  padding-left: 0.625rem;
+  color: #71717a;
+  margin: 0.375rem 0;
+}
+
+/* Tables */
+.prose-jot-yougile table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.375rem 0;
+  font-size: 0.6875rem;
+}
+.prose-jot-yougile th {
+  background: rgba(63, 63, 70, 0.2);
+  font-weight: 600;
+  color: #d4d4d8;
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #3f3f46;
+}
+.prose-jot-yougile td {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #3f3f46;
+  color: #a1a1aa;
+  vertical-align: top;
+}
+.prose-jot-yougile tr:hover td {
+  background: rgba(63, 63, 70, 0.1);
+}
+
+/* Horizontal rule */
+.prose-jot-yougile hr {
+  border: none;
+  border-top: 1px solid #3f3f46;
+  margin: 0.5rem 0;
+}
+
+/* Images */
+.prose-jot-yougile img {
+  max-width: 100%;
+  max-height: 16rem;
+  border-radius: 0.375rem;
+  margin: 0.375rem 0;
+  cursor: pointer;
+  object-fit: contain;
+}
+
+/* Spoiler / details-summary (Yougile uses these) */
+.prose-jot-yougile details {
+  border: 1px solid #3f3f46;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  margin: 0.375rem 0;
+}
+.prose-jot-yougile summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: #d4d4d8;
+  font-size: 0.6875rem;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.prose-jot-yougile summary::before {
+  content: '▸';
+  font-size: 0.625rem;
+  transition: transform 0.15s;
+}
+.prose-jot-yougile details[open] summary::before {
+  transform: rotate(90deg);
+}
+.prose-jot-yougile details[open] {
+  border-color: rgba(34, 211, 238, 0.2);
+}
+
+/* Inline span with background (Yougile highlight) */
+.prose-jot-yougile span[style*="background"] {
+  border-radius: 0.125rem;
+  padding: 0 0.125rem;
+}
+
+/* ── Yougile rich description — light theme ──────────────────────────────── */
+
+[data-theme="light"] .prose-jot-yougile { color: #52525b; }
+[data-theme="light"] .prose-jot-yougile h1,
+[data-theme="light"] .prose-jot-yougile h2,
+[data-theme="light"] .prose-jot-yougile h3,
+[data-theme="light"] .prose-jot-yougile h4 { color: #18181b; }
+[data-theme="light"] .prose-jot-yougile strong,
+[data-theme="light"] .prose-jot-yougile b { color: #18181b; }
+[data-theme="light"] .prose-jot-yougile em,
+[data-theme="light"] .prose-jot-yougile i { color: #3f3f46; }
+[data-theme="light"] .prose-jot-yougile s,
+[data-theme="light"] .prose-jot-yougile strike,
+[data-theme="light"] .prose-jot-yougile del { color: #a1a1aa; }
+[data-theme="light"] .prose-jot-yougile a { color: #0891b2; }
+[data-theme="light"] .prose-jot-yougile a:hover { color: #0e7490; }
+[data-theme="light"] .prose-jot-yougile code { background: rgba(228, 228, 231, 0.6); color: #3f3f46; }
+[data-theme="light"] .prose-jot-yougile pre { background: rgba(244, 244, 245, 0.8); border-color: #e4e4e7; }
+[data-theme="light"] .prose-jot-yougile pre code { color: #52525b; }
+[data-theme="light"] .prose-jot-yougile blockquote { border-left-color: #d4d4d8; color: #71717a; }
+[data-theme="light"] .prose-jot-yougile th { background: rgba(244, 244, 245, 0.8); color: #3f3f46; border-color: #e4e4e7; }
+[data-theme="light"] .prose-jot-yougile td { border-color: #e4e4e7; color: #52525b; }
+[data-theme="light"] .prose-jot-yougile tr:hover td { background: rgba(244, 244, 245, 0.5); }
+[data-theme="light"] .prose-jot-yougile hr { border-top-color: #e4e4e7; }
+[data-theme="light"] .prose-jot-yougile details { border-color: #e4e4e7; }
+[data-theme="light"] .prose-jot-yougile summary { color: #3f3f46; }
+[data-theme="light"] .prose-jot-yougile details[open] { border-color: rgba(8, 145, 178, 0.3); }
+[data-theme="light"] .prose-jot-yougile input[type="checkbox"] { border-color: #a1a1aa; }
+[data-theme="light"] .prose-jot-yougile input[type="checkbox"]:checked { background: #0891b2; border-color: #0891b2; }
+[data-theme="light"] .prose-jot-yougile input[type="checkbox"]:checked::after { border-color: #fff; }
+
+/* ── Description editor (contentEditable) ──────────────────────────────── */
+
+.prose-jot-editor {
+  border-radius: 0.25rem;
+  transition: box-shadow 0.15s;
+}
+.prose-jot-editor:focus {
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.1);
+}
+
+/* Placeholder when empty */
+.prose-jot-editor:empty::before {
+  content: attr(data-placeholder);
+  color: #52525b;
+  pointer-events: none;
+  display: block;
+}
+
+/* Checkboxes inside editor are interactive */
+.prose-jot-editor input[type="checkbox"] {
+  pointer-events: auto;
+}
+
+/* Toolbar hover feedback */
+.yougile-desc-toolbar button:focus-visible {
+  outline: 1px solid rgba(34, 211, 238, 0.3);
+  outline-offset: -1px;
+}

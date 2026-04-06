@@ -531,17 +531,18 @@ export function dispatchFocusKey(
       state.drillUp();
       actions.onEscape?.();
       return { handled: true };
-    case 'i':
+    case 'i': {
       event.preventDefault();
       // activateSelection fires the node's onActivate callback, which
       // focuses the underlying input and sets INSERT mode for editor fields.
       state.activateSelection();
       // Fallback: if no active node existed (activateSelection was a no-op),
-      // still enter INSERT mode so standalone mode toggle works.
+      // still enter INSERT mode so standalone mode toggle works (e.g. capture bar).
       if (engine.getState().mode === 'NORMAL') {
         engine.getState().setMode('INSERT');
       }
       return { handled: true };
+    }
     case '/':
       event.preventDefault();
       state.setMode('COMMAND');

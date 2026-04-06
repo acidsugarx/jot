@@ -36,6 +36,7 @@ Tags, priority, due date, and a linked note — all from one line. No forms, no 
 
 - **Instant capture** — `Opt+Space` summons the input bar, type your task, press Enter
 - **Natural language** — `Meeting friday #work !high` parses tags, priority, and dates automatically
+- **Rich-text descriptions** — Format Yougile task descriptions with bold, italic, lists, links, and checkboxes right in the editor
 - **Dashboard** — `Cmd+Shift+Space` opens list, kanban, and calendar views
 - **Vim everywhere** — `j/k` navigate, `x` toggle done, `e` edit, `s` cycle status, `d` delete
 - **Obsidian bridge** — add `@zettel` to any task and a linked markdown note appears in your vault

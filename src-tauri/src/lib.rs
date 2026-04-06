@@ -3,6 +3,8 @@ mod models;
 mod parser;
 mod yougile;
 
+use std::process::Command as StdCommand;
+
 use tauri::{
     menu::MenuItem,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -222,6 +224,38 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+// ── IPC commands ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if url.trim().is_empty() {
+        return Err("URL cannot be empty.".to_string());
+    }
+
+    let status = if cfg!(target_os = "macos") {
+        StdCommand::new("open")
+            .arg(&url)
+            .status()
+            .map_err(|e| format!("Failed to open URL: {e}"))?
+    } else if cfg!(target_os = "windows") {
+        StdCommand::new("cmd")
+            .args(["/c", "start", "", &url])
+            .status()
+            .map_err(|e| format!("Failed to open URL: {e}"))?
+    } else {
+        StdCommand::new("xdg-open")
+            .arg(&url)
+            .status()
+            .map_err(|e| format!("Failed to open URL: {e}"))?
+    };
+
+    if !status.success() {
+        return Err(format!("Opening URL failed with status: {status}"));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn show_window(app: AppHandle) -> Result<String, String> {
     show_main_window(&app).map_err(|error| error.to_string())?;
@@ -369,6 +403,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             show_window,
             hide_window,
+            open_url,
             open_settings_window,
             open_dashboard_window,
             create_task,

@@ -518,6 +518,9 @@ export default function Dashboard() {
       return ['list'];
     };
 
+    // Register task view — order 0 so it becomes the default active pane
+    engine.registerPane('task-view', { regions: getTaskViewRegions(), order: 0 });
+
     // Register sidebar (only for list view, local mode)
     // Sidebar is order 1 so task-view (order 0) is the default active pane.
     if (activeTab === 'list' && !isYougile) {
@@ -526,11 +529,15 @@ export default function Dashboard() {
       engine.unregisterPane('sidebar');
     }
 
-    // Register task view — order 0 so it becomes the default active pane
-    engine.registerPane('task-view', { regions: getTaskViewRegions(), order: 0 });
+    if (isYougile) {
+      engine.registerPane('context', { regions: ['org', 'project', 'board'], order: 1 });
+    } else {
+      engine.unregisterPane('context');
+    }
 
     return () => {
       engine.unregisterPane('sidebar');
+      engine.unregisterPane('context');
       engine.unregisterPane('task-view');
     };
   }, [activeTab, isYougile, yougileStore.columns.length, columns.length]);

@@ -91,7 +91,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
         style={style}
         {...attributes}
         {...listeners}
-        onClick={() => selectTask(task.id)}
+        onClick={() => selectYougileTask(task.id)}
         onDoubleClick={() => setIsEditorOpen(true)}
         className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
           isOverlay
