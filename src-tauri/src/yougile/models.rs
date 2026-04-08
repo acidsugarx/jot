@@ -1,5 +1,3 @@
-#![allow(dead_code)] // TODO: add #[allow(dead_code)] on individual unused items
-
 use std::collections::HashMap;
 
 use serde::{de::Deserializer, Deserialize, Serialize};
@@ -362,6 +360,8 @@ pub struct CreateYougileTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_tracking: Option<YougileTimeTracking>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stickers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checklists: Option<Vec<YougileChecklist>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopwatch: Option<YougileStopwatch>,
@@ -413,7 +413,6 @@ pub struct YougileAccount {
     pub email: String,
     pub company_id: String,
     pub company_name: String,
-    pub api_key: String,
     pub created_at: String,
 }
 

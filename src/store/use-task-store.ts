@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauriAvailable } from '@/lib/tauri';
 import type {
   AppSettings,
   Checklist,
@@ -24,7 +25,7 @@ interface TasksUpdatedPayload {
 }
 
 function notifyTasksChanged() {
-  if ('__TAURI_INTERNALS__' in window) {
+  if (isTauriAvailable()) {
     void emit(TASKS_UPDATED_EVENT, {
       sourceWindowLabel: getCurrentWindow().label,
     } satisfies TasksUpdatedPayload);
@@ -33,7 +34,7 @@ function notifyTasksChanged() {
 
 function applyTheme(theme: string) {
   document.documentElement.setAttribute('data-theme', theme);
-  if ('__TAURI_INTERNALS__' in window) {
+  if (isTauriAvailable()) {
     void getCurrentWindow().setTheme(theme === 'light' ? 'light' : 'dark');
   }
 }
@@ -102,7 +103,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   tags: [],
 
   fetchTasks: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     set({ isLoading: true, error: null });
     try {
       const tasks = await invoke<Task[]>('get_tasks');
@@ -113,7 +114,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   createTask: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     set({ isLoading: true, error: null });
     try {
       const task = await invoke<Task>('create_task', { input });
@@ -127,7 +128,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateTask: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       const updatedTask = await invoke<Task>('update_task', { input });
       set((state) => ({
@@ -142,7 +143,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateTaskStatus: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     set({ isLoading: true, error: null });
     try {
       const updatedTask = await invoke<Task>('update_task_status', { input });
@@ -157,7 +158,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   deleteTask: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     set({ isLoading: true, error: null });
     try {
       await invoke('delete_task', { id });
@@ -174,7 +175,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   openLinkedNote: async (path) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('open_linked_note', { path });
     } catch (error) {
@@ -185,7 +186,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   // ── Column actions ───────────────────────────────────────────────────────
 
   fetchColumns: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const columns = await invoke<KanbanColumn[]>('get_columns');
       set({ columns });
@@ -195,7 +196,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   createColumn: async (name) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       const column = await invoke<KanbanColumn>('create_column', { input: { name } });
       set((state) => ({ columns: [...state.columns, column] }));
@@ -207,7 +208,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateColumn: async (input) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       const updated = await invoke<KanbanColumn>('update_column', { input });
       set((state) => ({
@@ -221,7 +222,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   deleteColumn: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('delete_column', { id });
       set((state) => ({ columns: state.columns.filter((c) => c.id !== id) }));
@@ -231,7 +232,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   reorderColumns: async (ids) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const columns = await invoke<KanbanColumn[]>('reorder_columns', { input: { ids } });
       set({ columns });
@@ -243,7 +244,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   // ── Settings ─────────────────────────────────────────────────────────────
 
   fetchSettings: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const settings = await invoke<AppSettings>('get_settings');
       set({ settings });
@@ -253,7 +254,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateSettings: async (vaultDir) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     set({ isLoading: true, error: null });
     try {
       const settings = await invoke<AppSettings>('update_settings', { input: { vaultDir } });
@@ -264,7 +265,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateTheme: async (theme) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const settings = await invoke<AppSettings>('update_theme', { theme });
       set({ settings });
@@ -278,7 +279,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   // ── Checklist actions ─────────────────────────────────────────────────────
 
   getChecklists: async (taskId) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       return await invoke<Checklist[]>('get_checklists', { taskId });
     } catch (error) {
@@ -288,7 +289,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   createChecklist: async (taskId, title) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       return await invoke<Checklist>('create_checklist', { taskId, title });
     } catch (error) {
@@ -298,7 +299,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   addChecklistItem: async (checklistId, text) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       return await invoke<ChecklistItem>('add_checklist_item', { checklistId, text });
     } catch (error) {
@@ -308,7 +309,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateChecklistItem: async (id, text, completed) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('update_checklist_item', { id, text, completed });
     } catch (error) {
@@ -317,7 +318,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   deleteChecklist: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('delete_checklist', { id });
     } catch (error) {
@@ -326,7 +327,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   deleteChecklistItem: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('delete_checklist_item', { id });
     } catch (error) {
@@ -337,7 +338,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   // ── Tag actions ───────────────────────────────────────────────────────────
 
   fetchTags: async () => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const tags = await invoke<Tag[]>('get_tags');
       set({ tags });
@@ -347,7 +348,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   createTag: async (name, color) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       const tag = await invoke<Tag>('create_tag', { name, color });
       set((state) => ({ tags: [...state.tags, tag] }));
@@ -359,7 +360,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateTag: async (id, name, color) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       const updated = await invoke<Tag>('update_tag', { id, name, color });
       set((state) => ({ tags: state.tags.map((t) => (t.id === updated.id ? updated : t)) }));
@@ -369,7 +370,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   deleteTag: async (id) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('delete_tag', { id });
       set((state) => ({ tags: state.tags.filter((t) => t.id !== id) }));
@@ -379,7 +380,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   getTaskTags: async (taskId) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       return await invoke<Tag[]>('get_task_tags', { taskId });
     } catch (error) {
@@ -389,7 +390,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   setTaskTags: async (taskId, tagIds) => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     try {
       await invoke('set_task_tags', { taskId, tagIds });
     } catch (error) {
@@ -400,7 +401,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   // ── Subtask actions ───────────────────────────────────────────────────────
 
   getSubtasks: async (parentId) => {
-    if (!('__TAURI_INTERNALS__' in window)) return null;
+    if (!isTauriAvailable()) return null;
     try {
       return await invoke<Task[]>('get_subtasks', { parentId });
     } catch (error) {
@@ -415,7 +416,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   clearError: () => set({ error: null }),
 
   listenForUpdates: () => {
-    if (!('__TAURI_INTERNALS__' in window)) return () => {};
+    if (!isTauriAvailable()) return () => {};
     const unlistenTasks = listen<TasksUpdatedPayload>(TASKS_UPDATED_EVENT, (event) => {
       if (event.payload?.sourceWindowLabel === getCurrentWindow().label) {
         return;

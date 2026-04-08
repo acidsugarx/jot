@@ -5,6 +5,13 @@ use crate::parser::parse_task_input;
 use chrono::DateTime;
 use tauri::State;
 
+fn require_non_empty(value: &str, field: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{field} cannot be empty."));
+    }
+    Ok(())
+}
+
 fn apply_raw_input(payload: CreateYougileTask) -> CreateYougileTask {
     let Some(raw_input) = payload.raw_input.as_deref() else {
         return payload;
@@ -41,6 +48,7 @@ fn apply_raw_input(payload: CreateYougileTask) -> CreateYougileTask {
         assigned: payload.assigned,
         deadline,
         time_tracking: payload.time_tracking,
+        stickers: payload.stickers,
         checklists: payload.checklists,
         stopwatch: payload.stopwatch,
         timer: payload.timer,
@@ -159,6 +167,9 @@ pub async fn yougile_upload_file_path(
     file_path: String,
     state: State<'_, DatabaseState>,
 ) -> Result<FileUploadResponse, String> {
+    require_non_empty(&account_id, "Account ID")?;
+    require_non_empty(&file_path, "File path")?;
+
     let client = auth::client_for_account(&state, &account_id)?;
     let path = std::path::Path::new(&file_path);
     let canonical = path
@@ -184,26 +195,32 @@ pub async fn yougile_upload_file_path(
 
 #[tauri::command]
 pub async fn yougile_download_file(url: String, save_path: String) -> Result<(), String> {
-    // Validate save path: reject path traversal
-    let save = std::path::Path::new(&save_path);
-    if save_path.contains("..") {
-        return Err("Invalid save path: path traversal not allowed".to_string());
-    }
-    let canonical_save = save
-        .canonicalize()
-        .or_else(|_| {
-            // Parent may not exist yet; canonicalize parent instead
-            save.parent()
-                .filter(|p| p.exists())
-                .map(|p| p.canonicalize())
-                .unwrap_or_else(|| {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "parent dir not found",
-                    ))
-                })
-        })
-        .map_err(|e| format!("Failed to resolve save path: {e}"))?;
+    require_non_empty(&url, "Download URL")?;
+    require_non_empty(&save_path, "Save path")?;
+
+    let requested_path = std::path::PathBuf::from(save_path.trim());
+    let file_name = requested_path
+        .file_name()
+        .ok_or_else(|| "Save path must include a file name.".to_string())?
+        .to_os_string();
+    let parent = requested_path
+        .parent()
+        .ok_or_else(|| "Save path must include a parent directory.".to_string())?;
+
+    tokio::fs::create_dir_all(parent).await.map_err(|error| {
+        format!(
+            "Failed to create download directory '{}': {error}",
+            parent.display()
+        )
+    })?;
+
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve download directory '{}': {error}",
+            parent.display()
+        )
+    })?;
+    let canonical_save = canonical_parent.join(file_name);
 
     let bytes = super::client::YougileClient::download_file(&url).await?;
     tokio::fs::write(&canonical_save, &bytes)
@@ -349,4 +366,62 @@ pub async fn yougile_delete_task(
 ) -> Result<(), String> {
     let client = auth::client_for_account(&state, &account_id)?;
     client.delete_task(&task_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn apply_raw_input_preserves_template_fields() {
+        let payload = CreateYougileTask {
+            title: "Fallback title".to_string(),
+            raw_input: Some("Write release notes tomorrow".to_string()),
+            column_id: "column-1".to_string(),
+            description: Some("<p>Template body</p>".to_string()),
+            color: Some("task-blue".to_string()),
+            assigned: None,
+            deadline: None,
+            time_tracking: None,
+            stickers: Some(HashMap::from([(
+                "sticker-1".to_string(),
+                "state-1".to_string(),
+            )])),
+            checklists: Some(vec![YougileChecklist {
+                id: None,
+                title: "Checklist".to_string(),
+                items: vec![YougileChecklistItem {
+                    id: None,
+                    title: "Ship".to_string(),
+                    completed: false,
+                }],
+            }]),
+            stopwatch: None,
+            timer: None,
+        };
+
+        let applied = apply_raw_input(payload);
+
+        assert_eq!(applied.title, "Write release notes");
+        assert_eq!(applied.description.as_deref(), Some("<p>Template body</p>"));
+        assert_eq!(applied.color.as_deref(), Some("task-blue"));
+        assert_eq!(
+            applied
+                .stickers
+                .as_ref()
+                .and_then(|stickers| stickers.get("sticker-1")),
+            Some(&"state-1".to_string())
+        );
+        assert_eq!(
+            applied
+                .checklists
+                .as_ref()
+                .and_then(|checklists| checklists.first())
+                .map(|checklist| checklist.title.as_str()),
+            Some("Checklist")
+        );
+        assert!(applied.deadline.is_some());
+    }
 }

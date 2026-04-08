@@ -218,3 +218,44 @@ pub struct ReorderColumnsInput {
     /// Column IDs in their desired order.
     pub ids: Vec<String>,
 }
+
+// ── Task templates ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTemplate {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    /// JSON array of YougileChecklist-shaped objects.
+    pub checklists: String,
+    /// JSON object: sticker ID -> state ID.
+    pub stickers: String,
+    pub column_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTaskTemplateInput {
+    pub title: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub checklists: Option<String>,
+    pub stickers: Option<String>,
+    pub column_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskTemplateInput {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub checklists: Option<String>,
+    pub stickers: Option<String>,
+    pub column_id: Option<String>,
+}

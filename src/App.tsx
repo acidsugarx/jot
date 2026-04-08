@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
+import { emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowUpDown,
@@ -21,15 +22,30 @@ import {
 import { Command } from 'cmdk';
 import { YougileTaskEditor } from '@/components/YougileTaskEditor';
 import { dispatchFocusKey, focusEngine } from '@/lib/focus-engine';
+import { resolveNormalKeyActions, useRegisteredNormalKeyActions } from '@/lib/focus-actions';
 import { useTaskStore } from '@/store/use-task-store';
+import { useTemplateStore } from '@/store/use-template-store';
 import { useYougileStore } from '@/store/use-yougile-store';
-import { tokenize, toDateInputValue } from '@/lib/formatting';
+import { todayDateInput, tokenize, toDateInputValue } from '@/lib/formatting';
+import { isTauriAvailable } from '@/lib/tauri';
 import { priorityOptions, priorityColor } from '@/lib/constants';
+import { getYougileTaskColorValue } from '@/lib/yougile';
+import {
+  captureShortcutLabel,
+  dashboardShortcutLabel,
+  settingsShortcutLabel,
+} from '@/lib/shortcuts';
+import {
+  persistSettingsTab,
+  persistTemplateIntent,
+  SETTINGS_NAVIGATION_EVENT,
+  type TemplateNavigationDraft,
+} from '@/lib/settings-navigation';
 import type { Task, TaskPriority, TaskStatus } from '@/types';
 import type { YougileTask } from '@/types/yougile';
 
 type CaptureMode = 'insert' | 'normal';
-type PickerMode = 'none' | 'org' | 'project' | 'board';
+type PickerMode = 'none' | 'org' | 'project' | 'board' | 'template';
 
 const ITEM_HEIGHT = 36;
 const GROUP_HEADER_HEIGHT = 28;
@@ -262,7 +278,7 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
               <button
                 type="button"
                 onClick={() => {
-                  const today = new Date().toISOString().split('T')[0] ?? '';
+                  const today = todayDateInput();
                   handleDueDateChange(today);
                 }}
                 className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
@@ -335,6 +351,7 @@ function App() {
   const [mode, setMode] = useState<CaptureMode>('insert');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pickerMode, setPickerMode] = useState<PickerMode>('none');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const isDialogOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const suppressNextBlurHideRef = useRef(false);
@@ -355,6 +372,12 @@ function App() {
   } = useTaskStore();
 
   const yougileStore = useYougileStore();
+  const {
+    templates,
+    fetchTemplates,
+    error: templateError,
+    clearError: clearTemplateError,
+  } = useTemplateStore();
   const {
     yougileEnabled,
     activeSource,
@@ -385,6 +408,10 @@ function App() {
     () => yougileTasks.filter((task) => !task.deleted && !task.archived),
     [yougileTasks]
   );
+  const activeTemplate = useMemo(
+    () => templates.find((template) => template.id === selectedTemplateId) ?? null,
+    [selectedTemplateId, templates]
+  );
   const activeTasks = useMemo(() => {
     const list = isYougile ? visibleYougileTasks : tasks;
     return list.filter((task) => {
@@ -392,13 +419,18 @@ function App() {
       return task.status !== 'done';
     });
   }, [isYougile, visibleYougileTasks, tasks]);
-  const visibleError = pickerMode !== 'none' || isYougile
-    ? (yougileError ?? localError)
-    : localError;
+  const createDraftTitle = query.trim() || activeTemplate?.title.trim() || '';
+  const hasCreateDraft = createDraftTitle.length > 0;
+  const visibleError = templateError ?? (
+    pickerMode !== 'none' || isYougile
+      ? (yougileError ?? localError)
+      : localError
+  );
   const clearSourceError = useCallback(() => {
     clearLocalError();
     clearYougileError();
-  }, [clearLocalError, clearYougileError]);
+    clearTemplateError();
+  }, [clearLocalError, clearTemplateError, clearYougileError]);
 
   const hasQuery = query.trim().length > 0;
   const tokens = useMemo(() => tokenize(query), [query]);
@@ -449,7 +481,7 @@ function App() {
       {
         id: '__dashboard',
         label: 'Dashboard',
-        shortcut: '⌘⇧Space',
+        shortcut: dashboardShortcutLabel(),
         Icon: LayoutDashboard,
         iconWrapClass: 'bg-cyan-500/10',
         iconClass: 'text-cyan-400',
@@ -457,7 +489,7 @@ function App() {
       {
         id: '__settings',
         label: 'Settings',
-        shortcut: '⌘,',
+        shortcut: settingsShortcutLabel(),
         Icon: Settings,
         iconWrapClass: 'bg-zinc-800',
         iconClass: 'text-zinc-400',
@@ -487,6 +519,20 @@ function App() {
     if (isYougile) {
       items.push(
         {
+          id: '__use-template',
+          label: 'Create from Template…',
+          Icon: FileText,
+          iconWrapClass: 'bg-zinc-800',
+          iconClass: 'text-zinc-400',
+        },
+        {
+          id: '__new-template',
+          label: 'New Template…',
+          Icon: Plus,
+          iconWrapClass: 'bg-zinc-800',
+          iconClass: 'text-zinc-400',
+        },
+        {
           id: '__switch-board',
           label: 'Switch Board…',
           Icon: ChevronRight,
@@ -500,17 +546,28 @@ function App() {
   }, [isYougile, yougileEnabled]);
 
   const normalModeItems = useMemo(() => {
-    if (hasQuery) return [{ id: '__create', label: `Create "${query}"` }];
+    if (hasCreateDraft) {
+      return [
+        { id: '__create', label: `Create "${createDraftTitle}"` },
+        ...(isYougile ? [{ id: '__save-template', label: `Save "${createDraftTitle}" as template` }] : []),
+      ];
+    }
     return [...activeTasks.map((task) => ({ id: task.id, label: task.title })), ...actionItems];
-  }, [activeTasks, hasQuery, query, actionItems]);
+  }, [actionItems, activeTasks, createDraftTitle, hasCreateDraft, isYougile]);
 
   // Picker items for vim navigation inside org/project/board pickers
-  const pickerItems = useMemo((): { id: string }[] => {
+  const pickerItems = useMemo((): Array<{ id: string }> => {
     if (pickerMode === 'org') return accounts;
     if (pickerMode === 'project') return projects;
     if (pickerMode === 'board') return boards;
+    if (pickerMode === 'template') {
+      return [
+        ...templates.map((template) => ({ id: template.id })),
+        { id: '__manage-templates' },
+      ];
+    }
     return [];
-  }, [pickerMode, accounts, projects, boards]);
+  }, [pickerMode, accounts, projects, boards, templates]);
 
   // Reset selection when picker mode or its items change
   useEffect(() => {
@@ -535,6 +592,20 @@ function App() {
     }
   }, [settings, setYougileEnabled]);
 
+  useEffect(() => {
+    if (!yougileEnabled) {
+      setSelectedTemplateId(null);
+      return;
+    }
+    void fetchTemplates();
+  }, [fetchTemplates, yougileEnabled]);
+
+  useEffect(() => {
+    if (selectedTemplateId && !templates.some((template) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(null);
+    }
+  }, [selectedTemplateId, templates]);
+
   const syncYougileState = useCallback(async () => {
     if (!yougileEnabled) return;
     await hydrateSyncState();
@@ -543,7 +614,7 @@ function App() {
 
   // Enter insert mode + focus input when window gains focus
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     void fetchTasks();
     if (yougileEnabled) {
       void syncYougileState();
@@ -576,7 +647,7 @@ function App() {
 
   const lastFocusFetchRef = useRef(0);
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
@@ -589,6 +660,7 @@ function App() {
           void fetchTasks();
           if (yougileEnabled) {
             void syncYougileState();
+            void fetchTemplates();
           }
         }
         if (preserveModeOnNextFocusRef.current) {
@@ -604,18 +676,22 @@ function App() {
         preserveModeOnNextFocusRef.current = true;
         void invoke('show_window');
       } else if (!isDialogOpenRef.current) {
-        hideTimer = setTimeout(() => void invoke('hide_window'), 50);
+        hideTimer = setTimeout(() => {
+          if (!document.hasFocus()) {
+            void invoke('hide_window');
+          }
+        }, 180);
       }
     });
     return () => {
       if (hideTimer) clearTimeout(hideTimer);
       unlisten.then((fn) => fn());
     };
-  }, [fetchTasks, syncYougileState, yougileEnabled]);
+  }, [fetchTasks, fetchTemplates, syncYougileState, yougileEnabled]);
 
   // Dynamic window sizing based on actual content, clamped to screen
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
 
     let contentHeight: number;
 
@@ -628,7 +704,7 @@ function App() {
       } else {
         contentHeight = EDITOR_HEIGHT;
       }
-    } else if (hasQuery) {
+    } else if (hasCreateDraft) {
       // "Create task" item
       contentHeight = GROUP_HEADER_HEIGHT + ACTION_ITEM_HEIGHT;
     } else {
@@ -638,9 +714,10 @@ function App() {
       contentHeight = tasksHeight + actionsHeight;
     }
 
+    const templateHeight = activeTemplate ? 24 : 0;
     const statusHeight = (statusMessage || visibleError) ? 24 : 0;
     const inputHeight = editingTask ? 0 : INPUT_AREA_HEIGHT;
-    const totalHeight = inputHeight + statusHeight + contentHeight + FOOTER_HEIGHT + WINDOW_CHROME;
+    const totalHeight = inputHeight + templateHeight + statusHeight + contentHeight + FOOTER_HEIGHT + WINDOW_CHROME;
     // Clamp to 80% of screen height to avoid overflowing off-screen
     const maxScreenHeight = Math.floor(window.screen.availHeight * 0.8);
     const clampedHeight = Math.max(Math.min(totalHeight, maxScreenHeight), 200);
@@ -654,10 +731,11 @@ function App() {
     ));
   }, [
     actionItems.length,
+    activeTemplate,
     activeTasks.length,
     editingTask,
     editingYougileTask,
-    hasQuery,
+    hasCreateDraft,
     visibleError,
     statusMessage,
   ]);
@@ -678,6 +756,7 @@ function App() {
       boardName: null,
     });
     setEditingTaskId(null);
+    setSelectedTemplateId(null);
     await fetchProjects();
     const nextState = useYougileStore.getState();
     if (!nextState.error && nextState.projects.length === 0) {
@@ -699,6 +778,7 @@ function App() {
       boardName: null,
     });
     setEditingTaskId(null);
+    setSelectedTemplateId(null);
     await Promise.all([fetchBoards(projectId), fetchUsers(projectId)]);
     const nextState = useYougileStore.getState();
     if (!nextState.error && nextState.boards.length === 0) {
@@ -716,13 +796,64 @@ function App() {
     setYougileContext({ boardId: board.id, boardName: board.title });
     setActiveSource('yougile');
     setEditingTaskId(null);
+    setSelectedTemplateId(null);
     await fetchYougileColumns(board.id);
     await fetchYougileTasks();
     setPickerMode('none');
   }, [boards, fetchYougileColumns, fetchYougileTasks, setActiveSource, setYougileContext]);
 
+  const handleSelectTemplate = useCallback((templateId: string) => {
+    const template = templates.find((item) => item.id === templateId);
+    if (!template) return;
+
+    setSelectedTemplateId(templateId);
+    setQuery(template.title);
+    setPickerMode('none');
+    setMode('insert');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [templates]);
+
+  const buildTemplateDraftFromCapture = useCallback((): TemplateNavigationDraft | null => {
+    const title = createDraftTitle.trim();
+    if (!title) return null;
+
+    return {
+      title,
+      description: activeTemplate?.description ?? null,
+      color: activeTemplate?.color ?? null,
+      checklists: activeTemplate?.checklists ? structuredClone(activeTemplate.checklists) : [],
+      stickers: activeTemplate?.stickers ? { ...activeTemplate.stickers } : {},
+      columnId: activeTemplate?.columnId ?? null,
+    };
+  }, [activeTemplate, createDraftTitle]);
+
+  const openTemplatesSettings = useCallback(async (draft?: TemplateNavigationDraft) => {
+    persistSettingsTab('templates');
+    if (draft) {
+      persistTemplateIntent({
+        mode: 'new',
+        draft,
+      });
+    }
+    await invoke('open_settings_window');
+    if (isTauriAvailable()) {
+      await emit(SETTINGS_NAVIGATION_EVENT, {
+        tab: 'templates',
+        ...(draft
+          ? {
+              templateIntent: {
+                mode: 'new' as const,
+                draft,
+              },
+            }
+          : {}),
+      });
+    }
+    await invoke('hide_window');
+  }, []);
+
   const handleCreateTask = useCallback(async () => {
-    if (!query.trim()) return;
+    if (!createDraftTitle) return;
     try {
       if (isYougile) {
         if (!yougileContext.boardId) {
@@ -737,13 +868,27 @@ function App() {
           firstColumn = useYougileStore.getState().columns[0];
         }
         if (firstColumn) {
+          const templateColumnId = activeTemplate?.columnId && yougileColumns.some(
+            (column) => column.id === activeTemplate.columnId
+          )
+            ? activeTemplate.columnId
+            : null;
           const task = await yougileStore.createTask({
-            title: query.trim(),
-            rawInput: query.trim(),
-            columnId: firstColumn.id,
+            title: createDraftTitle,
+            rawInput: query.trim() || undefined,
+            columnId: templateColumnId ?? firstColumn.id,
+            description: activeTemplate?.description ?? undefined,
+            color: activeTemplate?.color ?? undefined,
+            stickers: activeTemplate && Object.keys(activeTemplate.stickers).length > 0
+              ? activeTemplate.stickers
+              : undefined,
+            checklists: activeTemplate && activeTemplate.checklists.length > 0
+              ? activeTemplate.checklists
+              : undefined,
           });
           if (task) {
             setQuery('');
+            setSelectedTemplateId(null);
             setMode('insert');
             setStatusMessage(`Created in Yougile: ${task.title}`);
             setTimeout(() => setStatusMessage(''), 2000);
@@ -754,6 +899,7 @@ function App() {
         const task = await createTask({ rawInput: query.trim() });
         if (task) {
           setQuery('');
+          setSelectedTemplateId(null);
           setMode('insert');
           setStatusMessage(`Created: ${task.title}`);
           setTimeout(() => setStatusMessage(''), 2000);
@@ -763,7 +909,17 @@ function App() {
     } catch (err) {
       console.error(err);
     }
-  }, [query, createTask, fetchYougileColumns, isYougile, yougileContext.boardId, yougileColumns, yougileStore]);
+  }, [
+    activeTemplate,
+    createDraftTitle,
+    createTask,
+    fetchYougileColumns,
+    isYougile,
+    query,
+    yougileColumns,
+    yougileContext.boardId,
+    yougileStore,
+  ]);
 
   const handleToggleStatus = useCallback(async (task: Task | YougileTask) => {
     try {
@@ -818,10 +974,24 @@ function App() {
         await invoke('hide_window');
         await invoke('open_settings_window');
         return;
+      case '__new-template':
+        await openTemplatesSettings();
+        return;
+      case '__save-template': {
+        const draft = buildTemplateDraftFromCapture();
+        if (!draft) {
+          setStatusMessage('Type a task title first');
+          setTimeout(() => setStatusMessage(''), 2000);
+          return;
+        }
+        await openTemplatesSettings(draft);
+        return;
+      }
       case '__toggle-source':
         if (isYougile) {
           selectYougileTask(null);
           setEditingTaskId(null);
+          setSelectedTemplateId(null);
           setActiveSource('local');
           return;
         }
@@ -831,6 +1001,15 @@ function App() {
           return;
         }
         setPickerMode('org');
+        return;
+      case '__use-template':
+        if (templates.length === 0) {
+          await fetchTemplates();
+        }
+        setPickerMode('template');
+        return;
+      case '__manage-templates':
+        await openTemplatesSettings();
         return;
       case '__switch-org':
         await fetchAccounts();
@@ -855,67 +1034,61 @@ function App() {
         return;
     }
   }, [
+    buildTemplateDraftFromCapture,
     fetchAccounts,
+    fetchTemplates,
     fetchProjects,
     isYougile,
+    openTemplatesSettings,
     projects.length,
     selectYougileTask,
     setActiveSource,
+    templates.length,
     yougileContext.accountId,
   ]);
 
-  // Register capture-bar actions for FocusProvider dispatch
-  useEffect(() => {
-    window.__jotActions = {
-      onEscape: () => {
-        const engineMode = focusEngine.getState().mode;
-        if (engineMode === 'INSERT') {
-          // Let the editor or focus engine handle INSERT → NORMAL transition
-          return;
-        }
-        if (editingTask) {
-          // Close the editor, return to task list — don't hide the window
-          setEditingTaskId(null);
-        } else {
-          void invoke('hide_window');
-        }
-      },
-      onNewItem: () => {
-        setQuery('');
-        setMode('insert');
-        requestAnimationFrame(() => inputRef.current?.focus());
-      },
-      onToggleDone: () => {
-        const item = normalModeItems[selectedIndex];
-        if (item && !item.id.startsWith('__')) {
-          const task = activeTasks.find((t) => t.id === item.id);
-          if (task) void handleToggleStatus(task);
-        }
-      },
-      onDelete: () => {
-        const item = normalModeItems[selectedIndex];
-        if (item && !item.id.startsWith('__')) {
-          void handleDeleteTask(item.id);
-        }
-      },
-      onOpenItem: () => {
-        const item = normalModeItems[selectedIndex];
-        if (!item) return;
-        if (item.id === '__create') {
-          void handleCreateTask();
-        } else if (item.id.startsWith('__')) {
-          void handleAction(item.id);
-        } else {
-          setEditingTaskId(item.id);
-        }
-      },
-    };
-    return () => {
-      if (window.__jotActions) {
-        delete window.__jotActions;
+  useRegisteredNormalKeyActions('app:capture', {
+    onEscape: () => {
+      const engineMode = focusEngine.getState().mode;
+      if (engineMode === 'INSERT') {
+        return;
       }
-    };
-  }, [normalModeItems, selectedIndex, activeTasks, editingTask, handleToggleStatus, handleDeleteTask, handleCreateTask, handleAction]);
+      if (editingTask) {
+        setEditingTaskId(null);
+      } else {
+        void invoke('hide_window');
+      }
+    },
+    onNewItem: () => {
+      setQuery('');
+      setMode('insert');
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+    onToggleDone: () => {
+      const item = normalModeItems[selectedIndex];
+      if (item && !item.id.startsWith('__')) {
+        const task = activeTasks.find((t) => t.id === item.id);
+        if (task) void handleToggleStatus(task);
+      }
+    },
+    onDelete: () => {
+      const item = normalModeItems[selectedIndex];
+      if (item && !item.id.startsWith('__')) {
+        void handleDeleteTask(item.id);
+      }
+    },
+    onOpenItem: () => {
+      const item = normalModeItems[selectedIndex];
+      if (!item) return;
+      if (item.id === '__create') {
+        void handleCreateTask();
+      } else if (item.id.startsWith('__')) {
+        void handleAction(item.id);
+      } else {
+        setEditingTaskId(item.id);
+      }
+    },
+  });
 
   // Single focus-engine keydown handler — replaces old inline handlers
   useEffect(() => {
@@ -941,10 +1114,12 @@ function App() {
           if (hasQuery) {
             // Clear query first, stay in insert mode
             setQuery('');
+          } else if (activeTemplate) {
+            setSelectedTemplateId(null);
           } else {
             // Empty input — switch to NORMAL mode
             // The focus engine dispatch handles the mode change
-            const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+            const result = dispatchFocusKey(focusEngine, e, resolveNormalKeyActions());
             if (result.stopPropagation) e.stopPropagation();
             // Sync capture mode with engine
             if (focusEngine.getState().mode === 'NORMAL') {
@@ -1036,6 +1211,10 @@ function App() {
             if (pickerMode === 'org') void handleSelectAccount(pick.id);
             else if (pickerMode === 'project') void handleSelectProject(pick.id);
             else if (pickerMode === 'board') void handleSelectBoard(pick.id);
+            else if (pickerMode === 'template') {
+              if (pick.id === '__manage-templates') void handleAction('__manage-templates');
+              else handleSelectTemplate(pick.id);
+            }
             return;
           }
           case 'Escape':
@@ -1056,7 +1235,7 @@ function App() {
       }
 
       // Normal mode (no picker) — let focus engine dispatch
-      const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+      const result = dispatchFocusKey(focusEngine, e, resolveNormalKeyActions());
       if (result.handled) {
         if (result.stopPropagation) e.stopPropagation();
       }
@@ -1073,8 +1252,11 @@ function App() {
     handleSelectAccount,
     handleSelectBoard,
     handleSelectProject,
+    handleSelectTemplate,
+    activeTemplate,
     hasQuery,
     mode,
+    normalModeItems,
     pickerItems,
     pickerMode,
     selectedIndex,
@@ -1209,7 +1391,7 @@ function App() {
                     }
                     return;
                   }
-                  if (e.key === 'Enter' && hasQuery) { e.preventDefault(); void handleCreateTask(); }
+                  if (e.key === 'Enter' && hasCreateDraft) { e.preventDefault(); void handleCreateTask(); }
                   if ((e.metaKey || e.ctrlKey) && e.key === ',') {
                     e.preventDefault();
                     void invoke('hide_window');
@@ -1251,9 +1433,25 @@ function App() {
               </div>
             )}
             <kbd className="shrink-0 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
-              Opt+Space
+              {captureShortcutLabel()}
             </kbd>
           </div>
+
+          {activeTemplate && (
+            <div className="mt-2 flex items-center gap-2 pl-10 text-[10px] font-mono">
+              <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-400">
+                TEMPLATE
+              </span>
+              <span className="truncate text-zinc-500">{activeTemplate.title}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedTemplateId(null)}
+                className="text-zinc-600 transition-colors hover:text-zinc-300"
+              >
+                clear
+              </button>
+            </div>
+          )}
 
           {(statusMessage || visibleError) && (
             <div className="mt-1.5 flex items-center gap-2 pl-10 text-[11px]">
@@ -1284,7 +1482,15 @@ function App() {
             {/* Picker Mode — replaces task list when active */}
             {pickerMode !== 'none' && (
               <Command.Group
-                heading={pickerMode === 'org' ? 'Select Organization' : pickerMode === 'project' ? 'Select Project' : 'Select Board'}
+                heading={
+                  pickerMode === 'org'
+                    ? 'Select Organization'
+                    : pickerMode === 'project'
+                      ? 'Select Project'
+                      : pickerMode === 'board'
+                        ? 'Select Board'
+                        : 'Select Template'
+                }
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
               >
                 {pickerMode === 'org' && accounts.map((account, idx) => (
@@ -1361,10 +1567,76 @@ function App() {
                     No boards found in this project.
                   </div>
                 )}
+                {pickerMode === 'template' && templates.map((template, idx) => {
+                  const templateColor = getYougileTaskColorValue(template.color);
+                  const checklistCount = template.checklists.reduce(
+                    (count, checklist) => count + checklist.items.length,
+                    0,
+                  );
+                  const stickerCount = Object.keys(template.stickers).length;
+                  const subtitle = [
+                    checklistCount > 0 ? `${checklistCount} checklist item${checklistCount === 1 ? '' : 's'}` : null,
+                    stickerCount > 0 ? `${stickerCount} sticker${stickerCount === 1 ? '' : 's'}` : null,
+                    template.description ? 'description' : null,
+                  ].filter(Boolean).join(' · ');
+
+                  return (
+                    <Command.Item
+                      key={template.id}
+                      value={`template-${template.id}`}
+                      onSelect={() => handleSelectTemplate(template.id)}
+                      className={`flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm text-zinc-300 outline-none transition-colors ${
+                        mode === 'normal' && selectedIndex === idx
+                          ? 'bg-zinc-900/80'
+                          : 'data-[selected=true]:bg-zinc-900/80'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          {templateColor && (
+                            <span
+                              className="h-2 w-2 shrink-0 rounded-full border border-zinc-700/80"
+                              style={{ backgroundColor: templateColor }}
+                            />
+                          )}
+                          <span className="truncate text-zinc-200">{template.title}</span>
+                        </div>
+                        {subtitle && (
+                          <div className="truncate pt-0.5 text-[11px] text-zinc-500">
+                            {subtitle}
+                          </div>
+                        )}
+                      </div>
+                      {selectedTemplateId === template.id && <Check className="h-3 w-3 text-cyan-400" />}
+                    </Command.Item>
+                  );
+                })}
+                {pickerMode === 'template' && (
+                  <Command.Item
+                    value="manage-templates"
+                    onSelect={() => void handleAction('__manage-templates')}
+                    className={`flex h-10 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      mode === 'normal' && selectedIndex === templates.length
+                        ? 'bg-zinc-900/80'
+                        : 'data-[selected=true]:bg-zinc-900/80'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Settings className="h-3.5 w-3.5 text-zinc-500" />
+                      <span className="text-zinc-200">Manage Templates…</span>
+                    </div>
+                    <kbd className="font-mono text-[10px] text-zinc-600">⌘,</kbd>
+                  </Command.Item>
+                )}
+                {pickerMode === 'template' && templates.length === 0 && !visibleError && (
+                  <div className="px-3 py-3 text-xs text-zinc-500">
+                    No task templates found yet. Create one in Settings.
+                  </div>
+                )}
               </Command.Group>
             )}
 
-            {pickerMode === 'none' && !hasQuery && activeTasks.length > 0 && (
+            {pickerMode === 'none' && !hasCreateDraft && activeTasks.length > 0 && (
               <Command.Group
                 heading={isYougile ? 'Yougile Tasks' : 'Tasks'}
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
@@ -1456,7 +1728,7 @@ function App() {
               </Command.Group>
             )}
 
-            {pickerMode === 'none' && (!hasQuery ? (
+            {pickerMode === 'none' && (!hasCreateDraft ? (
               <Command.Group
                 heading="Actions"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
@@ -1505,14 +1777,34 @@ function App() {
                       : 'data-[selected=true]:bg-zinc-900/80'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-cyan-500/10">
-                      <Plus className="h-3.5 w-3.5 text-cyan-400" />
-                    </div>
-                    <span className="text-zinc-200 truncate">Create "<span className="text-cyan-400">{query}</span>"</span>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-6 w-6 items-center justify-center rounded-md bg-cyan-500/10">
+                        <Plus className="h-3.5 w-3.5 text-cyan-400" />
+                      </div>
+                    <span className="text-zinc-200 truncate">Create "<span className="text-cyan-400">{createDraftTitle}</span>"</span>
                   </div>
                   <kbd className="shrink-0 font-mono text-[10px] text-cyan-500/60">↵</kbd>
                 </Command.Item>
+                {isYougile && (
+                  <Command.Item
+                    value="save-template"
+                    data-capture-index={1}
+                    onSelect={() => void handleAction('__save-template')}
+                    className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      mode === 'normal' && selectedIndex === 1
+                        ? 'bg-zinc-900/80'
+                        : 'data-[selected=true]:bg-zinc-900/80'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800">
+                        <FileText className="h-3.5 w-3.5 text-zinc-400" />
+                      </div>
+                      <span className="text-zinc-200 truncate">Save As Template…</span>
+                    </div>
+                    <kbd className="shrink-0 font-mono text-[10px] text-zinc-600">↵</kbd>
+                  </Command.Item>
+                )}
               </Command.Group>
             ))}
           </Command.List>
@@ -1524,11 +1816,11 @@ function App() {
             {mode === 'insert' ? (
               <>
                 <div className="flex items-center gap-2">
-                  <span>↵ {hasQuery ? 'create' : 'edit'}</span>
+                  <span>↵ {hasCreateDraft ? 'create' : 'edit'}</span>
                   <span className="text-zinc-800">·</span>
                   <span>⌘, settings</span>
                   <span className="text-zinc-800">·</span>
-                  <span>esc {hasQuery ? 'clear' : 'navigate'}</span>
+                  <span>esc {hasQuery || activeTemplate ? 'clear' : 'navigate'}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <ArrowUpDown className="h-2.5 w-2.5" />

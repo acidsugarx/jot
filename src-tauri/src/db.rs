@@ -1,14 +1,27 @@
-use std::{env, fs, path::PathBuf, process::Command, sync::Mutex};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+};
+
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::OnceLock;
 
 use chrono::Utc;
+#[cfg(not(test))]
+use keyring::Entry;
 use rusqlite::{params, Connection, OptionalExtension};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, Checklist, ChecklistItem, CreateColumnInput, CreateTaskInput, KanbanColumn,
-    ReorderColumnsInput, Tag, Task, TaskPriority, UpdateColumnInput, UpdateSettingsInput,
-    UpdateTaskInput, UpdateTaskStatusInput, YougileSyncState,
+    AppSettings, Checklist, ChecklistItem, CreateColumnInput, CreateTaskInput,
+    CreateTaskTemplateInput, KanbanColumn, ReorderColumnsInput, Tag, Task, TaskPriority,
+    TaskTemplate, UpdateColumnInput, UpdateSettingsInput, UpdateTaskInput, UpdateTaskStatusInput,
+    UpdateTaskTemplateInput, YougileSyncState,
 };
 use crate::parser::parse_task_input;
 
@@ -58,10 +71,206 @@ pub fn init_database(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(test))]
+const YOUGILE_KEYRING_SERVICE: &str = "dev.acidsugarx.jot.yougile";
+
+#[cfg(test)]
+static TEST_YOUGILE_KEYRING: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn db_error(action: &str, error: impl std::fmt::Display) -> String {
+    format!("Failed to {action}: {error}")
+}
+
+fn build_patch_query(table: &str, sets: &[&str]) -> String {
+    format!("UPDATE {table} SET {} WHERE id = ?", sets.join(", "))
+}
+
+#[cfg(test)]
+fn store_yougile_api_key(account_id: &str, api_key: &str) -> Result<(), String> {
+    let keyring = TEST_YOUGILE_KEYRING.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut keyring = keyring
+        .lock()
+        .map_err(|error| db_error("lock test keyring", error))?;
+    keyring.insert(account_id.to_string(), api_key.to_string());
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn store_yougile_api_key(account_id: &str, api_key: &str) -> Result<(), String> {
+    let entry = Entry::new(YOUGILE_KEYRING_SERVICE, account_id)
+        .map_err(|error| db_error("create Yougile keychain entry", error))?;
+    entry
+        .set_password(api_key)
+        .map_err(|error| db_error("store Yougile API key in the system keychain", error))
+}
+
+#[cfg(test)]
+fn load_yougile_api_key(account_id: &str) -> Result<Option<String>, String> {
+    let keyring = TEST_YOUGILE_KEYRING.get_or_init(|| Mutex::new(HashMap::new()));
+    let keyring = keyring
+        .lock()
+        .map_err(|error| db_error("lock test keyring", error))?;
+    Ok(keyring.get(account_id).cloned())
+}
+
+#[cfg(not(test))]
+fn load_yougile_api_key(account_id: &str) -> Result<Option<String>, String> {
+    let entry = Entry::new(YOUGILE_KEYRING_SERVICE, account_id)
+        .map_err(|error| db_error("create Yougile keychain entry", error))?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(db_error(
+            "read Yougile API key from the system keychain",
+            error,
+        )),
+    }
+}
+
+#[cfg(test)]
+fn delete_yougile_api_key(account_id: &str) -> Result<(), String> {
+    let keyring = TEST_YOUGILE_KEYRING.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut keyring = keyring
+        .lock()
+        .map_err(|error| db_error("lock test keyring", error))?;
+    keyring.remove(account_id);
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn delete_yougile_api_key(account_id: &str) -> Result<(), String> {
+    let entry = Entry::new(YOUGILE_KEYRING_SERVICE, account_id)
+        .map_err(|error| db_error("create Yougile keychain entry", error))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(db_error(
+            "delete the Yougile API key from the system keychain",
+            error,
+        )),
+    }
+}
+
+fn table_has_foreign_key(
+    connection: &Connection,
+    table: &str,
+    from_column: &str,
+    target_table: &str,
+) -> Result<bool, String> {
+    let sql = format!("PRAGMA foreign_key_list({table})");
+    let mut stmt = connection
+        .prepare(&sql)
+        .map_err(|error| db_error("prepare foreign key inspection query", error))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+        })
+        .map_err(|error| db_error("query foreign key metadata", error))?;
+
+    for row in rows {
+        let (table_name, from) =
+            row.map_err(|error| db_error("read foreign key metadata", error))?;
+        if table_name == target_table && from == from_column {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn rebuild_checklists_table(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE checklists RENAME TO checklists_old;
+            CREATE TABLE checklists (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO checklists (id, task_id, title, position)
+            SELECT c.id, c.task_id, c.title, c.position
+            FROM checklists_old c
+            INNER JOIN tasks t ON t.id = c.task_id;
+            DROP TABLE checklists_old;
+            PRAGMA foreign_keys = ON;
+            ",
+        )
+        .map_err(|error| db_error("rebuild checklists table with foreign keys", error))
+}
+
+fn rebuild_checklist_items_table(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE checklist_items RENAME TO checklist_items_old;
+            CREATE TABLE checklist_items (
+                id TEXT PRIMARY KEY,
+                checklist_id TEXT NOT NULL REFERENCES checklists(id) ON DELETE CASCADE,
+                text TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO checklist_items (id, checklist_id, text, completed, position)
+            SELECT ci.id, ci.checklist_id, ci.text, ci.completed, ci.position
+            FROM checklist_items_old ci
+            INNER JOIN checklists c ON c.id = ci.checklist_id;
+            DROP TABLE checklist_items_old;
+            PRAGMA foreign_keys = ON;
+            ",
+        )
+        .map_err(|error| db_error("rebuild checklist_items table with foreign keys", error))
+}
+
+fn rebuild_task_tags_table(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE task_tags RENAME TO task_tags_old;
+            CREATE TABLE task_tags (
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (task_id, tag_id)
+            );
+            INSERT INTO task_tags (task_id, tag_id)
+            SELECT tt.task_id, tt.tag_id
+            FROM task_tags_old tt
+            INNER JOIN tasks t ON t.id = tt.task_id
+            INNER JOIN tags g ON g.id = tt.tag_id;
+            DROP TABLE task_tags_old;
+            PRAGMA foreign_keys = ON;
+            ",
+        )
+        .map_err(|error| db_error("rebuild task_tags table with foreign keys", error))
+}
+
+fn ensure_foreign_key_constraints(connection: &Connection) -> Result<(), String> {
+    if !table_has_foreign_key(connection, "checklists", "task_id", "tasks")? {
+        rebuild_checklists_table(connection)?;
+    }
+
+    if !table_has_foreign_key(connection, "checklist_items", "checklist_id", "checklists")? {
+        rebuild_checklist_items_table(connection)?;
+    }
+
+    let has_task_fk = table_has_foreign_key(connection, "task_tags", "task_id", "tasks")?;
+    let has_tag_fk = table_has_foreign_key(connection, "task_tags", "tag_id", "tags")?;
+    if !has_task_fk || !has_tag_fk {
+        rebuild_task_tags_table(connection)?;
+    }
+
+    Ok(())
+}
+
 fn run_migrations(connection: &Connection) -> Result<(), String> {
     connection
         .execute_batch(
             "
+            PRAGMA foreign_keys = ON;
+
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -173,14 +382,14 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             "
             CREATE TABLE IF NOT EXISTS checklists (
                 id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
                 title TEXT NOT NULL,
                 position INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS checklist_items (
                 id TEXT PRIMARY KEY,
-                checklist_id TEXT NOT NULL,
+                checklist_id TEXT NOT NULL REFERENCES checklists(id) ON DELETE CASCADE,
                 text TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
                 position INTEGER NOT NULL DEFAULT 0
@@ -200,8 +409,8 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
             );
 
             CREATE TABLE IF NOT EXISTS task_tags (
-                task_id TEXT NOT NULL,
-                tag_id TEXT NOT NULL,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
                 PRIMARY KEY (task_id, tag_id)
             );
             ",
@@ -222,6 +431,23 @@ fn run_migrations(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS task_templates (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                color TEXT,
+                checklists TEXT NOT NULL DEFAULT '[]',
+                stickers TEXT NOT NULL DEFAULT '{}',
+                column_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .map_err(|e| format!("Failed to create task_templates table: {e}"))?;
+
+    ensure_foreign_key_constraints(connection)?;
     seed_default_columns(connection)?;
 
     Ok(())
@@ -472,10 +698,19 @@ pub fn update_yougile_sync_state(
 // ── Note commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn open_linked_note(path: String) -> Result<(), String> {
+pub fn open_linked_note(db: State<'_, DatabaseState>, path: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("Linked note path cannot be empty.".to_string());
     }
+
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+    let vault_dir = resolve_vault_dir(&connection)?;
+    let vault_dir_canonical = Path::new(&vault_dir)
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve vault directory: {error}"))?;
 
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() {
@@ -488,6 +723,13 @@ pub fn open_linked_note(path: String) -> Result<(), String> {
 
     if !canonical.is_file() {
         return Err(format!("Path is not a file: {}", canonical.display()));
+    }
+
+    if !canonical.starts_with(&vault_dir_canonical) {
+        return Err(format!(
+            "Linked note must stay inside the configured vault: {}",
+            vault_dir_canonical.display()
+        ));
     }
 
     let canonical_str = canonical
@@ -656,6 +898,54 @@ pub fn reorder_columns(
     }
 
     list_columns(&connection)
+}
+
+// ── Template commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_task_templates(db: State<'_, DatabaseState>) -> Result<Vec<TaskTemplate>, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    list_task_templates(&connection)
+}
+
+#[tauri::command]
+pub fn create_task_template(
+    db: State<'_, DatabaseState>,
+    input: CreateTaskTemplateInput,
+) -> Result<TaskTemplate, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    insert_task_template(&connection, input)
+}
+
+#[tauri::command]
+pub fn update_task_template(
+    db: State<'_, DatabaseState>,
+    input: UpdateTaskTemplateInput,
+) -> Result<TaskTemplate, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    patch_task_template(&connection, &input)
+}
+
+#[tauri::command]
+pub fn delete_task_template(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    remove_task_template(&connection, &id)
 }
 
 // ── Checklist commands ────────────────────────────────────────────────────────
@@ -844,8 +1134,10 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 created_at,
                 updated_at,
                 parent_id,
-                color
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                color,
+                time_estimated,
+                time_spent
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ",
             params![
                 task.id,
@@ -859,7 +1151,9 @@ fn insert_task(connection: &Connection, task: &Task) -> Result<(), String> {
                 task.created_at,
                 task.updated_at,
                 task.parent_id,
-                task.color
+                task.color,
+                task.time_estimated,
+                task.time_spent
             ],
         )
         .map_err(|error| format!("Failed to insert task into SQLite: {error}"))?;
@@ -933,7 +1227,7 @@ fn fetch_task(connection: &Connection, id: &str) -> Result<Option<Task>, String>
 }
 
 fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, String> {
-    let mut sets: Vec<String> = Vec::new();
+    let mut sets: Vec<&str> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if let Some(ref title) = input.title {
@@ -941,49 +1235,49 @@ fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, 
         if trimmed.is_empty() {
             return Err("Task title cannot be empty.".to_string());
         }
-        sets.push("title = ?".to_string());
+        sets.push("title = ?");
         values.push(Box::new(trimmed.to_string()));
     }
 
     if let Some(ref description) = input.description {
-        sets.push("description = ?".to_string());
+        sets.push("description = ?");
         values.push(Box::new(description.clone()));
     }
 
     if let Some(ref status) = input.status {
-        sets.push("status = ?".to_string());
+        sets.push("status = ?");
         values.push(Box::new(status.clone()));
     }
 
     if let Some(priority) = input.priority {
-        sets.push("priority = ?".to_string());
+        sets.push("priority = ?");
         values.push(Box::new(priority.as_str().to_string()));
     }
 
     if let Some(ref tags) = input.tags {
         let tags_json = serde_json::to_string(tags)
             .map_err(|error| format!("Failed to serialize tags: {error}"))?;
-        sets.push("tags = ?".to_string());
+        sets.push("tags = ?");
         values.push(Box::new(tags_json));
     }
 
     if let Some(ref due_date) = input.due_date {
-        sets.push("due_date = ?".to_string());
+        sets.push("due_date = ?");
         values.push(Box::new(due_date.clone()));
     }
 
     if let Some(ref color) = input.color {
-        sets.push("color = ?".to_string());
+        sets.push("color = ?");
         values.push(Box::new(color.clone()));
     }
 
     if let Some(time_estimated) = input.time_estimated {
-        sets.push("time_estimated = ?".to_string());
+        sets.push("time_estimated = ?");
         values.push(Box::new(time_estimated));
     }
 
     if let Some(time_spent) = input.time_spent {
-        sets.push("time_spent = ?".to_string());
+        sets.push("time_spent = ?");
         values.push(Box::new(time_spent));
     }
 
@@ -993,11 +1287,11 @@ fn patch_task(connection: &Connection, input: &UpdateTaskInput) -> Result<Task, 
     }
 
     let updated_at = timestamp();
-    sets.push("updated_at = ?".to_string());
+    sets.push("updated_at = ?");
     values.push(Box::new(updated_at));
     values.push(Box::new(input.id.clone()));
 
-    let sql = format!("UPDATE tasks SET {} WHERE id = ?", sets.join(", "));
+    let sql = build_patch_query("tasks", &sets);
 
     let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
 
@@ -1076,6 +1370,233 @@ fn fetch_column(connection: &Connection, id: &str) -> Result<Option<KanbanColumn
         )
         .optional()
         .map_err(|error| format!("Failed to fetch column: {error}"))
+}
+
+fn insert_task_template(
+    connection: &Connection,
+    input: CreateTaskTemplateInput,
+) -> Result<TaskTemplate, String> {
+    let title = normalize_required_title(&input.title, "Template title")?;
+    let now = timestamp();
+    let template = TaskTemplate {
+        id: Uuid::new_v4().to_string(),
+        title,
+        description: normalize_optional_text(input.description),
+        color: normalize_optional_text(input.color),
+        checklists: normalize_json_array(input.checklists.as_deref(), "checklists")?,
+        stickers: normalize_json_object(input.stickers.as_deref(), "stickers")?,
+        column_id: normalize_optional_text(input.column_id),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    connection
+        .execute(
+            "
+            INSERT INTO task_templates (
+                id,
+                title,
+                description,
+                color,
+                checklists,
+                stickers,
+                column_id,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ",
+            params![
+                template.id,
+                template.title,
+                template.description,
+                template.color,
+                template.checklists,
+                template.stickers,
+                template.column_id,
+                template.created_at,
+                template.updated_at,
+            ],
+        )
+        .map_err(|error| format!("Failed to insert task template: {error}"))?;
+
+    Ok(template)
+}
+
+fn list_task_templates(connection: &Connection) -> Result<Vec<TaskTemplate>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT id, title, description, color, checklists, stickers, column_id, created_at, updated_at
+            FROM task_templates
+            ORDER BY updated_at DESC, created_at DESC
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare task template query: {error}"))?;
+
+    let rows = statement
+        .query_map([], map_task_template_row)
+        .map_err(|error| format!("Failed to query task templates: {error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to read task templates from SQLite: {error}"))
+}
+
+fn fetch_task_template(connection: &Connection, id: &str) -> Result<Option<TaskTemplate>, String> {
+    connection
+        .query_row(
+            "
+            SELECT id, title, description, color, checklists, stickers, column_id, created_at, updated_at
+            FROM task_templates
+            WHERE id = ?1
+            ",
+            params![id],
+            map_task_template_row,
+        )
+        .optional()
+        .map_err(|error| format!("Failed to fetch task template: {error}"))
+}
+
+fn patch_task_template(
+    connection: &Connection,
+    input: &UpdateTaskTemplateInput,
+) -> Result<TaskTemplate, String> {
+    let mut sets: Vec<&str> = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(ref title) = input.title {
+        let title = normalize_required_title(title, "Template title")?;
+        sets.push("title = ?");
+        values.push(Box::new(title));
+    }
+
+    if let Some(ref description) = input.description {
+        sets.push("description = ?");
+        values.push(Box::new(normalize_optional_text(Some(description.clone()))));
+    }
+
+    if let Some(ref color) = input.color {
+        sets.push("color = ?");
+        values.push(Box::new(normalize_optional_text(Some(color.clone()))));
+    }
+
+    if let Some(ref checklists) = input.checklists {
+        sets.push("checklists = ?");
+        values.push(Box::new(normalize_json_array(
+            Some(checklists),
+            "checklists",
+        )?));
+    }
+
+    if let Some(ref stickers) = input.stickers {
+        sets.push("stickers = ?");
+        values.push(Box::new(normalize_json_object(Some(stickers), "stickers")?));
+    }
+
+    if let Some(ref column_id) = input.column_id {
+        sets.push("column_id = ?");
+        values.push(Box::new(normalize_optional_text(Some(column_id.clone()))));
+    }
+
+    if sets.is_empty() {
+        return fetch_task_template(connection, &input.id)?
+            .ok_or_else(|| format!("Task template {} was not found.", input.id));
+    }
+
+    let updated_at = timestamp();
+    sets.push("updated_at = ?");
+    values.push(Box::new(updated_at));
+    values.push(Box::new(input.id.clone()));
+
+    let sql = build_patch_query("task_templates", &sets);
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        values.iter().map(|value| value.as_ref()).collect();
+
+    let affected_rows = connection
+        .execute(&sql, params.as_slice())
+        .map_err(|error| format!("Failed to update task template: {error}"))?;
+
+    if affected_rows == 0 {
+        return Err(format!("Task template {} was not found.", input.id));
+    }
+
+    fetch_task_template(connection, &input.id)?
+        .ok_or_else(|| format!("Task template {} was not found after update.", input.id))
+}
+
+fn remove_task_template(connection: &Connection, id: &str) -> Result<(), String> {
+    let affected_rows = connection
+        .execute("DELETE FROM task_templates WHERE id = ?1", params![id])
+        .map_err(|error| format!("Failed to delete task template: {error}"))?;
+
+    if affected_rows == 0 {
+        return Err(format!("Task template {id} was not found."));
+    }
+
+    Ok(())
+}
+
+fn map_task_template_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskTemplate> {
+    Ok(TaskTemplate {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        color: row.get(3)?,
+        checklists: row.get(4)?,
+        stickers: row.get(5)?,
+        column_id: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn normalize_required_title(value: &str, field_name: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_name} cannot be empty."));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn normalize_json_array(value: Option<&str>, field_name: &str) -> Result<String, String> {
+    normalize_json_value(value, field_name, true)
+}
+
+fn normalize_json_object(value: Option<&str>, field_name: &str) -> Result<String, String> {
+    normalize_json_value(value, field_name, false)
+}
+
+fn normalize_json_value(
+    value: Option<&str>,
+    field_name: &str,
+    expect_array: bool,
+) -> Result<String, String> {
+    let default = if expect_array { "[]" } else { "{}" };
+    let raw = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default);
+    let parsed: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| format!("Invalid JSON for {field_name}: {error}"))?;
+
+    match (expect_array, &parsed) {
+        (true, serde_json::Value::Array(_)) | (false, serde_json::Value::Object(_)) => {
+            serde_json::to_string(&parsed)
+                .map_err(|error| format!("Failed to serialize {field_name}: {error}"))
+        }
+        (true, _) => Err(format!("{field_name} must be a JSON array.")),
+        (false, _) => Err(format!("{field_name} must be a JSON object.")),
+    }
 }
 
 fn unique_status_key(connection: &Connection, name: &str) -> Result<String, String> {
@@ -1326,54 +1847,82 @@ fn format_note(title: &str, due_date: Option<&str>) -> String {
 
 fn list_checklists(connection: &Connection, task_id: &str) -> Result<Vec<Checklist>, String> {
     let mut stmt = connection
-        .prepare("SELECT id, task_id, title, position FROM checklists WHERE task_id = ?1 ORDER BY position ASC")
+        .prepare(
+            "
+            SELECT
+                c.id,
+                c.task_id,
+                c.title,
+                c.position,
+                ci.id,
+                ci.checklist_id,
+                ci.text,
+                ci.completed,
+                ci.position
+            FROM checklists c
+            LEFT JOIN checklist_items ci ON ci.checklist_id = c.id
+            WHERE c.task_id = ?1
+            ORDER BY c.position ASC, ci.position ASC
+            ",
+        )
         .map_err(|error| format!("Failed to prepare checklists query: {error}"))?;
 
-    let rows = stmt
-        .query_map(params![task_id], |row| {
-            Ok(Checklist {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                title: row.get(2)?,
-                position: row.get(3)?,
-                items: Vec::new(),
-            })
-        })
+    let mut rows = stmt
+        .query(params![task_id])
         .map_err(|error| format!("Failed to query checklists: {error}"))?;
 
-    let mut checklists: Vec<Checklist> = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to read checklists: {error}"))?;
+    let mut checklists: Vec<Checklist> = Vec::new();
 
-    for checklist in &mut checklists {
-        checklist.items = list_checklist_items(connection, &checklist.id)?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| format!("Failed to read checklists row: {error}"))?
+    {
+        let checklist_id: String = row
+            .get(0)
+            .map_err(|error| format!("Failed to read checklist id: {error}"))?;
+
+        if checklists.last().map(|checklist| checklist.id.as_str()) != Some(checklist_id.as_str()) {
+            checklists.push(Checklist {
+                id: checklist_id.clone(),
+                task_id: row
+                    .get(1)
+                    .map_err(|error| format!("Failed to read checklist task id: {error}"))?,
+                title: row
+                    .get(2)
+                    .map_err(|error| format!("Failed to read checklist title: {error}"))?,
+                position: row
+                    .get(3)
+                    .map_err(|error| format!("Failed to read checklist position: {error}"))?,
+                items: Vec::new(),
+            });
+        }
+
+        let item_id: Option<String> = row
+            .get(4)
+            .map_err(|error| format!("Failed to read checklist item id: {error}"))?;
+        if let Some(item_id) = item_id {
+            let checklist = checklists
+                .last_mut()
+                .ok_or_else(|| "Checklist grouping failed while reading items.".to_string())?;
+            checklist.items.push(ChecklistItem {
+                id: item_id,
+                checklist_id: row.get(5).map_err(|error| {
+                    format!("Failed to read checklist item checklist id: {error}")
+                })?,
+                text: row
+                    .get(6)
+                    .map_err(|error| format!("Failed to read checklist item text: {error}"))?,
+                completed: row.get::<_, i64>(7).map_err(|error| {
+                    format!("Failed to read checklist item completion: {error}")
+                })? != 0,
+                position: row
+                    .get(8)
+                    .map_err(|error| format!("Failed to read checklist item position: {error}"))?,
+            });
+        }
     }
 
     Ok(checklists)
-}
-
-fn list_checklist_items(
-    connection: &Connection,
-    checklist_id: &str,
-) -> Result<Vec<ChecklistItem>, String> {
-    let mut stmt = connection
-        .prepare("SELECT id, checklist_id, text, completed, position FROM checklist_items WHERE checklist_id = ?1 ORDER BY position ASC")
-        .map_err(|error| format!("Failed to prepare checklist items query: {error}"))?;
-
-    let rows = stmt
-        .query_map(params![checklist_id], |row| {
-            Ok(ChecklistItem {
-                id: row.get(0)?,
-                checklist_id: row.get(1)?,
-                text: row.get(2)?,
-                completed: row.get::<_, i64>(3)? != 0,
-                position: row.get(4)?,
-            })
-        })
-        .map_err(|error| format!("Failed to query checklist items: {error}"))?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to read checklist items: {error}"))
 }
 
 fn insert_checklist(
@@ -1467,10 +2016,7 @@ fn patch_checklist_item(
     }
 
     values.push(Box::new(id.to_string()));
-    let sql = format!(
-        "UPDATE checklist_items SET {} WHERE id = ?",
-        sets.join(", ")
-    );
+    let sql = build_patch_query("checklist_items", &sets);
     let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
 
     connection
@@ -1565,7 +2111,7 @@ fn patch_tag(
     }
 
     values.push(Box::new(id.to_string()));
-    let sql = format!("UPDATE tags SET {} WHERE id = ?", sets.join(", "));
+    let sql = build_patch_query("tags", &sets);
     let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
 
     connection
@@ -1653,31 +2199,214 @@ fn list_subtasks(connection: &Connection, parent_id: &str) -> Result<Vec<Task>, 
 
 // ── Yougile account helpers ───────────────────────────────────────────────────
 
-pub fn get_yougile_accounts_impl(
-    db: &DatabaseState,
-) -> Result<Vec<crate::yougile::models::YougileAccount>, String> {
-    let conn = db.connection.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
+struct StoredYougileAccount {
+    id: String,
+    email: String,
+    company_id: String,
+    company_name: String,
+    legacy_api_key: String,
+    created_at: String,
+}
+
+fn list_stored_yougile_accounts(
+    connection: &Connection,
+) -> Result<Vec<StoredYougileAccount>, String> {
+    let mut stmt = connection
         .prepare(
-            "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts ORDER BY created_at",
+            "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts ORDER BY created_at DESC",
         )
-        .map_err(|e| e.to_string())?;
-    let accounts = stmt
+        .map_err(|error| db_error("prepare Yougile accounts query", error))?;
+
+    let rows = stmt
         .query_map([], |row| {
-            Ok(crate::yougile::models::YougileAccount {
+            Ok(StoredYougileAccount {
                 id: row.get(0)?,
                 email: row.get(1)?,
                 company_id: row.get(2)?,
                 company_name: row.get(3)?,
-                api_key: row.get(4)?,
+                legacy_api_key: row.get(4)?,
                 created_at: row.get(5)?,
             })
         })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read accounts: {e}"))?;
+        .map_err(|error| db_error("query Yougile accounts", error))?;
 
-    Ok(accounts)
+    let accounts = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| db_error("read Yougile accounts", error))?;
+
+    let mut deduped: Vec<StoredYougileAccount> = Vec::with_capacity(accounts.len());
+    for account in accounts {
+        let duplicate = deduped.iter().any(|existing| {
+            existing.company_id == account.company_id
+                && existing.email.eq_ignore_ascii_case(&account.email)
+        });
+        if !duplicate {
+            deduped.push(account);
+        }
+    }
+
+    Ok(deduped)
+}
+
+fn get_stored_yougile_account(
+    connection: &Connection,
+    account_id: &str,
+) -> Result<StoredYougileAccount, String> {
+    connection
+        .query_row(
+            "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts WHERE id = ?1",
+            rusqlite::params![account_id],
+            |row| {
+                Ok(StoredYougileAccount {
+                    id: row.get(0)?,
+                    email: row.get(1)?,
+                    company_id: row.get(2)?,
+                    company_name: row.get(3)?,
+                    legacy_api_key: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|error| db_error("load Yougile account", error))
+}
+
+fn resolve_yougile_api_key(
+    connection: &Connection,
+    account_id: &str,
+    legacy_api_key: &str,
+) -> Result<String, String> {
+    let legacy_api_key = legacy_api_key.trim();
+
+    match load_yougile_api_key(account_id) {
+        Ok(Some(api_key)) => {
+            if legacy_api_key.is_empty() {
+                if let Err(error) = connection.execute(
+                    "UPDATE yougile_accounts SET api_key = ?1 WHERE id = ?2",
+                    params![api_key, account_id],
+                ) {
+                    log::warn!(
+                        "Failed to backfill legacy SQLite API key for account '{account_id}': {error}"
+                    );
+                }
+            }
+            return Ok(api_key);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            log::warn!(
+                "Failed to read Yougile API key from keychain for account '{account_id}': {error}"
+            );
+        }
+    }
+
+    if legacy_api_key.is_empty() {
+        return Err(
+            "Yougile account is missing its API key in keychain and local storage. Remove and re-add this account."
+                .to_string(),
+        );
+    }
+
+    if let Err(error) = store_yougile_api_key(account_id, legacy_api_key) {
+        log::warn!(
+            "Failed to migrate Yougile API key to keychain for account '{account_id}': {error}. Falling back to SQLite key."
+        );
+    }
+
+    Ok(legacy_api_key.to_string())
+}
+
+fn recover_yougile_api_key_from_related_accounts(
+    connection: &Connection,
+    missing_account: &StoredYougileAccount,
+) -> Result<Option<String>, String> {
+    let mut stmt = connection
+        .prepare(
+            "SELECT id, email, company_id, company_name, api_key, created_at
+             FROM yougile_accounts
+             WHERE LOWER(email) = LOWER(?1) AND company_id = ?2 AND id != ?3
+             ORDER BY created_at DESC",
+        )
+        .map_err(|error| db_error("prepare related Yougile account lookup", error))?;
+
+    let candidates = stmt
+        .query_map(
+            params![
+                &missing_account.email,
+                &missing_account.company_id,
+                &missing_account.id
+            ],
+            |row| {
+                Ok(StoredYougileAccount {
+                    id: row.get(0)?,
+                    email: row.get(1)?,
+                    company_id: row.get(2)?,
+                    company_name: row.get(3)?,
+                    legacy_api_key: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|error| db_error("query related Yougile accounts", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| db_error("read related Yougile accounts", error))?;
+
+    for candidate in candidates {
+        let recovered_key =
+            match resolve_yougile_api_key(connection, &candidate.id, &candidate.legacy_api_key) {
+                Ok(key) => key,
+                Err(_) => continue,
+            };
+
+        if missing_account.legacy_api_key.trim().is_empty() {
+            if let Err(error) = connection.execute(
+                "UPDATE yougile_accounts SET api_key = ?1 WHERE id = ?2",
+                params![recovered_key, &missing_account.id],
+            ) {
+                log::warn!(
+                    "Failed to backfill recovered API key into SQLite for account '{}': {error}",
+                    missing_account.id
+                );
+            }
+        }
+
+        if let Err(error) = store_yougile_api_key(&missing_account.id, &recovered_key) {
+            log::warn!(
+                "Failed to backfill recovered API key into keychain for account '{}': {error}",
+                missing_account.id
+            );
+        }
+
+        log::warn!(
+            "Recovered missing Yougile API key for account '{}' from related account '{}'",
+            missing_account.id,
+            candidate.id
+        );
+        return Ok(Some(recovered_key));
+    }
+
+    Ok(None)
+}
+
+pub fn get_yougile_accounts_impl(
+    db: &DatabaseState,
+) -> Result<Vec<crate::yougile::models::YougileAccount>, String> {
+    let conn = db
+        .connection
+        .lock()
+        .map_err(|error| db_error("lock SQLite connection", error))?;
+
+    list_stored_yougile_accounts(&conn).map(|accounts| {
+        accounts
+            .into_iter()
+            .map(|account| crate::yougile::models::YougileAccount {
+                id: account.id,
+                email: account.email,
+                company_id: account.company_id,
+                company_name: account.company_name,
+                created_at: account.created_at,
+            })
+            .collect()
+    })
 }
 
 pub fn add_yougile_account_impl(
@@ -1687,59 +2416,103 @@ pub fn add_yougile_account_impl(
     company_name: &str,
     api_key: &str,
 ) -> Result<crate::yougile::models::YougileAccount, String> {
-    let conn = db.connection.lock().map_err(|e| e.to_string())?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let conn = db
+        .connection
+        .lock()
+        .map_err(|error| db_error("lock SQLite connection", error))?;
     let created_at = timestamp();
-    conn.execute(
-        "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, email, company_id, company_name, api_key, created_at],
-    )
-    .map_err(|e| e.to_string())?;
+    let existing_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM yougile_accounts WHERE LOWER(email) = LOWER(?1) AND company_id = ?2 ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![email, company_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error("check existing Yougile account", error))?;
+    let id = existing_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    if existing_id.is_some() {
+        conn.execute(
+            "UPDATE yougile_accounts
+             SET company_name = ?1, api_key = ?2, created_at = ?3
+             WHERE id = ?4",
+            rusqlite::params![company_name, api_key, created_at, id],
+        )
+        .map_err(|error| db_error("update existing Yougile account", error))?;
+    } else {
+        conn.execute(
+            "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, email, company_id, company_name, api_key, created_at],
+        )
+        .map_err(|error| db_error("insert Yougile account", error))?;
+    }
+
+    if let Err(error) = store_yougile_api_key(&id, api_key) {
+        log::warn!(
+            "Failed to store Yougile API key in keychain for account '{id}': {error}. Keeping legacy SQLite storage fallback."
+        );
+    }
+
     Ok(crate::yougile::models::YougileAccount {
         id,
         email: email.to_string(),
         company_id: company_id.to_string(),
         company_name: company_name.to_string(),
-        api_key: api_key.to_string(),
         created_at,
     })
 }
 
 pub fn remove_yougile_account_impl(db: &DatabaseState, account_id: &str) -> Result<(), String> {
-    let conn = db.connection.lock().map_err(|e| e.to_string())?;
+    let conn = db
+        .connection
+        .lock()
+        .map_err(|error| db_error("lock SQLite connection", error))?;
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM yougile_accounts WHERE id = ?1",
+            params![account_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| db_error("look up Yougile account", error))?;
+    if exists == 0 {
+        return Err("Account not found".to_string());
+    }
+
+    delete_yougile_api_key(account_id)?;
+
     let rows = conn
         .execute(
             "DELETE FROM yougile_accounts WHERE id = ?1",
             rusqlite::params![account_id],
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| db_error("delete Yougile account", error))?;
     if rows == 0 {
         return Err("Account not found".to_string());
     }
     Ok(())
 }
 
-pub fn get_yougile_account_by_id_impl(
+pub fn get_yougile_account_api_key_impl(
     db: &DatabaseState,
     account_id: &str,
-) -> Result<crate::yougile::models::YougileAccount, String> {
-    let conn = db.connection.lock().map_err(|e| e.to_string())?;
-    conn.query_row(
-        "SELECT id, email, company_id, company_name, api_key, created_at FROM yougile_accounts WHERE id = ?1",
-        rusqlite::params![account_id],
-        |row| {
-            Ok(crate::yougile::models::YougileAccount {
-                id: row.get(0)?,
-                email: row.get(1)?,
-                company_id: row.get(2)?,
-                company_name: row.get(3)?,
-                api_key: row.get(4)?,
-                created_at: row.get(5)?,
-            })
-        },
-    )
-    .map_err(|e| e.to_string())
+) -> Result<String, String> {
+    let conn = db
+        .connection
+        .lock()
+        .map_err(|error| db_error("lock SQLite connection", error))?;
+    let account = get_stored_yougile_account(&conn, account_id)?;
+    match resolve_yougile_api_key(&conn, &account.id, &account.legacy_api_key) {
+        Ok(api_key) => Ok(api_key),
+        Err(primary_error) => {
+            if let Some(api_key) = recover_yougile_api_key_from_related_accounts(&conn, &account)? {
+                return Ok(api_key);
+            }
+            Err(primary_error)
+        }
+    }
 }
 
 fn slugify_title(title: &str) -> String {
@@ -1767,6 +2540,16 @@ mod tests {
         let connection = Connection::open_in_memory().expect("in-memory database should open");
         run_migrations(&connection).expect("migrations should succeed");
         connection
+    }
+
+    fn insert_minimal_task(connection: &Connection, id: &str) {
+        let now = timestamp();
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, status, priority, tags, created_at, updated_at) VALUES (?1, ?2, 'todo', 'none', '[]', ?3, ?3)",
+                params![id, format!("Task {id}"), now],
+            )
+            .expect("task should insert");
     }
 
     #[test]
@@ -2055,6 +2838,7 @@ mod tests {
     #[test]
     fn checklists_tables_exist_after_migration() {
         let connection = test_connection();
+        insert_minimal_task(&connection, "task-1");
 
         connection
             .execute(
@@ -2152,6 +2936,7 @@ mod tests {
     #[test]
     fn checklist_crud_round_trips() {
         let connection = test_connection();
+        insert_minimal_task(&connection, "task-1");
 
         // Create checklist
         let checklist = insert_checklist(&connection, "task-1", "My Checklist")
@@ -2262,6 +3047,50 @@ mod tests {
     }
 
     #[test]
+    fn foreign_keys_cascade_checklists_and_task_tags() {
+        let connection = test_connection();
+        insert_minimal_task(&connection, "task-fk");
+
+        let checklist = insert_checklist(&connection, "task-fk", "Linked checklist")
+            .expect("checklist should insert");
+        insert_checklist_item(&connection, &checklist.id, "Cascade me")
+            .expect("checklist item should insert");
+        let tag = insert_tag(&connection, "fk-tag", None).expect("tag should insert");
+        replace_task_tags(&connection, "task-fk", std::slice::from_ref(&tag.id))
+            .expect("task tags should insert");
+
+        connection
+            .execute("DELETE FROM tasks WHERE id = 'task-fk'", [])
+            .expect("task delete should cascade");
+
+        let checklist_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM checklists WHERE id = ?1",
+                params![checklist.id],
+                |row| row.get(0),
+            )
+            .expect("should count checklists");
+        let item_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM checklist_items WHERE checklist_id = ?1",
+                params![checklist.id],
+                |row| row.get(0),
+            )
+            .expect("should count checklist items");
+        let task_tag_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM task_tags WHERE tag_id = ?1",
+                params![tag.id],
+                |row| row.get(0),
+            )
+            .expect("should count task tags");
+
+        assert_eq!(checklist_count, 0);
+        assert_eq!(item_count, 0);
+        assert_eq!(task_tag_count, 0);
+    }
+
+    #[test]
     fn subtask_listing_returns_children() {
         let connection = test_connection();
 
@@ -2344,5 +3173,242 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "TestCo");
+    }
+
+    #[test]
+    fn yougile_api_keys_stay_available_in_sqlite_fallback() {
+        let db = DatabaseState::new(test_connection());
+
+        let account = add_yougile_account_impl(
+            &db,
+            "user@example.com",
+            "company-1",
+            "Acme",
+            "secret-api-key",
+        )
+        .expect("account should insert");
+
+        let api_key = get_yougile_account_api_key_impl(&db, &account.id)
+            .expect("api key should resolve from keyring");
+        assert_eq!(api_key, "secret-api-key");
+
+        let conn = db.connection.lock().expect("db lock should succeed");
+        let stored: String = conn
+            .query_row(
+                "SELECT api_key FROM yougile_accounts WHERE id = ?1",
+                params![account.id],
+                |row| row.get(0),
+            )
+            .expect("should read stored api key column");
+
+        assert_eq!(stored, "secret-api-key");
+    }
+
+    #[test]
+    fn legacy_yougile_api_keys_migrate_on_first_read() {
+        let db = DatabaseState::new(test_connection());
+        let created_at = timestamp();
+        {
+            let conn = db.connection.lock().expect("db lock should succeed");
+            conn.execute(
+                "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+                 VALUES ('legacy-account', 'legacy@example.com', 'company-1', 'Acme', 'legacy-key', ?1)",
+                params![created_at],
+            )
+            .expect("legacy account should insert");
+        }
+
+        let api_key = get_yougile_account_api_key_impl(&db, "legacy-account")
+            .expect("legacy api key should migrate");
+        assert_eq!(api_key, "legacy-key");
+
+        let conn = db.connection.lock().expect("db lock should succeed");
+        let stored: String = conn
+            .query_row(
+                "SELECT api_key FROM yougile_accounts WHERE id = 'legacy-account'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should read cleared legacy api key");
+
+        assert_eq!(stored, "legacy-key");
+    }
+
+    #[test]
+    fn add_yougile_account_updates_existing_company_case_insensitively() {
+        let db = DatabaseState::new(test_connection());
+
+        let first =
+            add_yougile_account_impl(&db, "User@example.com", "company-1", "Acme", "first-key")
+                .expect("first account should insert");
+
+        let second = add_yougile_account_impl(
+            &db,
+            "user@example.com",
+            "company-1",
+            "Acme Updated",
+            "second-key",
+        )
+        .expect("second account should update existing row");
+
+        assert_eq!(first.id, second.id);
+
+        let conn = db.connection.lock().expect("db lock should succeed");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM yougile_accounts WHERE LOWER(email) = LOWER(?1) AND company_id = ?2",
+                params!["user@example.com", "company-1"],
+                |row| row.get(0),
+            )
+            .expect("should count matching accounts");
+        assert_eq!(count, 1);
+
+        let company_name: String = conn
+            .query_row(
+                "SELECT company_name FROM yougile_accounts WHERE id = ?1",
+                params![first.id],
+                |row| row.get(0),
+            )
+            .expect("should read updated company name");
+        assert_eq!(company_name, "Acme Updated");
+
+        drop(conn);
+
+        let api_key = get_yougile_account_api_key_impl(&db, &first.id)
+            .expect("updated account key should resolve");
+        assert_eq!(api_key, "second-key");
+    }
+
+    #[test]
+    fn missing_yougile_key_recovers_from_related_account() {
+        let db = DatabaseState::new(test_connection());
+        {
+            let conn = db.connection.lock().expect("db lock should succeed");
+            conn.execute(
+                "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+                 VALUES ('stale', 'User@example.com', 'company-1', 'Acme', '', '2025-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("stale account should insert");
+            conn.execute(
+                "INSERT INTO yougile_accounts (id, email, company_id, company_name, api_key, created_at)
+                 VALUES ('fresh', 'user@example.com', 'company-1', 'Acme', 'fresh-key', '2025-01-01T00:00:01Z')",
+                [],
+            )
+            .expect("fresh account should insert");
+        }
+
+        let api_key = get_yougile_account_api_key_impl(&db, "stale")
+            .expect("stale account should recover key from related account");
+        assert_eq!(api_key, "fresh-key");
+
+        let conn = db.connection.lock().expect("db lock should succeed");
+        let stale_key: String = conn
+            .query_row(
+                "SELECT api_key FROM yougile_accounts WHERE id = 'stale'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("should read stale account api key");
+        assert_eq!(stale_key, "fresh-key");
+    }
+
+    #[test]
+    fn slugify_title_handles_edge_cases() {
+        assert_eq!(slugify_title("Hello, World!"), "hello-world");
+        assert_eq!(slugify_title("  ###  "), "");
+        assert_eq!(slugify_title("Привет мир"), "");
+        assert_eq!(slugify_title("Release 1.2.3 notes"), "release-1-2-3-notes");
+    }
+
+    #[test]
+    fn task_template_crud_round_trips() {
+        let connection = test_connection();
+
+        let created = insert_task_template(
+            &connection,
+            CreateTaskTemplateInput {
+                title: "  Bug Report  ".to_string(),
+                description: Some("  Standard bug report body  ".to_string()),
+                color: Some(" task-danger ".to_string()),
+                checklists: Some(
+                    r#"[{"title":"Triage","items":[{"title":"Repro","completed":false}]}]"#
+                        .to_string(),
+                ),
+                stickers: Some(r#"{"sticker-1":"state-1"}"#.to_string()),
+                column_id: Some("  column-1  ".to_string()),
+            },
+        )
+        .expect("template should insert");
+
+        assert_eq!(created.title, "Bug Report");
+        assert_eq!(
+            created.description.as_deref(),
+            Some("Standard bug report body")
+        );
+        assert_eq!(created.color.as_deref(), Some("task-danger"));
+        assert_eq!(created.column_id.as_deref(), Some("column-1"));
+
+        let listed = list_task_templates(&connection).expect("templates should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+
+        let updated = patch_task_template(
+            &connection,
+            &UpdateTaskTemplateInput {
+                id: created.id.clone(),
+                title: Some("Incident".to_string()),
+                description: Some(String::new()),
+                color: Some(String::new()),
+                checklists: Some("[]".to_string()),
+                stickers: Some("{}".to_string()),
+                column_id: Some(String::new()),
+            },
+        )
+        .expect("template should update");
+
+        assert_eq!(updated.title, "Incident");
+        assert_eq!(updated.description, None);
+        assert_eq!(updated.color, None);
+        assert_eq!(updated.column_id, None);
+        assert_eq!(updated.checklists, "[]");
+        assert_eq!(updated.stickers, "{}");
+
+        remove_task_template(&connection, &created.id).expect("template should delete");
+        let listed = list_task_templates(&connection).expect("templates should list after delete");
+        assert!(listed.is_empty());
+    }
+
+    #[test]
+    fn task_template_json_validation_rejects_wrong_shapes() {
+        let connection = test_connection();
+
+        let checklist_error = insert_task_template(
+            &connection,
+            CreateTaskTemplateInput {
+                title: "Bad".to_string(),
+                description: None,
+                color: None,
+                checklists: Some("{}".to_string()),
+                stickers: None,
+                column_id: None,
+            },
+        )
+        .expect_err("object checklists should fail");
+        assert!(checklist_error.contains("checklists must be a JSON array"));
+
+        let sticker_error = insert_task_template(
+            &connection,
+            CreateTaskTemplateInput {
+                title: "Bad".to_string(),
+                description: None,
+                color: None,
+                checklists: None,
+                stickers: Some("[]".to_string()),
+                column_id: None,
+            },
+        )
+        .expect_err("array stickers should fail");
+        assert!(sticker_error.contains("stickers must be a JSON object"));
     }
 }

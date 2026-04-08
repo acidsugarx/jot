@@ -21,6 +21,6 @@ pub async fn add_account(
 
 /// Get a YougileClient for a stored account
 pub fn client_for_account(db: &DatabaseState, account_id: &str) -> Result<YougileClient, String> {
-    let account = crate::db::get_yougile_account_by_id_impl(db, account_id)?;
-    Ok(YougileClient::new(account.api_key))
+    let api_key = crate::db::get_yougile_account_api_key_impl(db, account_id)?;
+    Ok(YougileClient::new(api_key))
 }

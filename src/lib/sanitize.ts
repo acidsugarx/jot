@@ -14,7 +14,7 @@ purify.setConfig({
     'width', 'height', 'type', 'checked', 'disabled', 'open',
     'data-*',
   ],
-  ALLOW_DATA_ATTR: false,
+  ALLOW_DATA_ATTR: true,
 });
 
 export function sanitizeHtml(dirty: string): string {

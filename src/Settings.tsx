@@ -1,16 +1,25 @@
 import { useEffect, useState, useRef } from 'react';
-import { FolderOpen, Keyboard, Database, Palette, Users } from 'lucide-react';
+import { FolderOpen, Keyboard, Database, Palette, Users, FileText } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { AccountsSettings } from '@/components/AccountsSettings';
+import { TaskTemplatesSettings } from '@/components/TaskTemplatesSettings';
 import { focusEngine, dispatchFocusKey } from '@/lib/focus-engine';
+import { resolveNormalKeyActions, useRegisteredNormalKeyActions } from '@/lib/focus-actions';
+import { isTauriAvailable } from '@/lib/tauri';
+import {
+  consumeStoredSettingsTab,
+  persistTemplateIntent,
+  SETTINGS_NAVIGATION_EVENT,
+  type SettingsNavigationPayload,
+} from '@/lib/settings-navigation';
 import type { AppSettings } from '@/types';
 
-type Tab = 'general' | 'vault' | 'ui' | 'accounts';
+type Tab = 'general' | 'vault' | 'ui' | 'templates' | 'accounts';
 
 const baseTabIds: Tab[] = ['general', 'vault', 'ui'];
 
@@ -18,11 +27,13 @@ const tabDefs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
   { id: 'general', label: 'General', icon: Keyboard },
   { id: 'vault', label: 'Vault', icon: Database },
   { id: 'ui', label: 'Appearance', icon: Palette },
+  { id: 'templates', label: 'Templates', icon: FileText },
   { id: 'accounts', label: 'Accounts', icon: Users },
 ];
 
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState<Tab>('general');
+  const [activeTab, setActiveTab] = useState<Tab>(() => consumeStoredSettingsTab() ?? 'general');
+  const [templateIntentNonce, setTemplateIntentNonce] = useState(0);
   const [vaultDirInput, setVaultDirInput] = useState('');
   const isDialogOpenRef = useRef(false);
   const tabIdsRef = useRef<Tab[]>(baseTabIds);
@@ -32,10 +43,16 @@ export default function Settings() {
 
   // Derive visible tabs based on yougileEnabled
   const tabIds: Tab[] = yougileStore.yougileEnabled
-    ? [...baseTabIds, 'accounts']
+    ? [...baseTabIds, 'templates', 'accounts']
     : baseTabIds;
   const tabs = tabDefs.filter((t) => tabIds.includes(t.id));
   tabIdsRef.current = tabIds;
+
+  useEffect(() => {
+    if (!tabIds.includes(activeTab)) {
+      setActiveTab('general');
+    }
+  }, [activeTab, tabIds]);
 
   useEffect(() => {
     void fetchSettings();
@@ -50,6 +67,23 @@ export default function Settings() {
       yougileStore.setYougileEnabled(settings.yougileEnabled);
     }
   }, [settings, yougileStore.setYougileEnabled]);
+
+  useEffect(() => {
+    if (!isTauriAvailable()) return;
+
+    const unlisten = listen<SettingsNavigationPayload>(SETTINGS_NAVIGATION_EVENT, (event) => {
+      const nextTab = event.payload.tab;
+      setActiveTab(nextTab);
+      if (event.payload.templateIntent) {
+        persistTemplateIntent(event.payload.templateIntent);
+        setTemplateIntentNonce((value) => value + 1);
+      }
+    }).catch(() => {});
+
+    return () => {
+      void unlisten.then((fn) => { if (typeof fn === 'function') fn(); }).catch(() => {});
+    };
+  }, []);
 
   const saveVaultPath = async (val: string) => {
     try {
@@ -69,22 +103,13 @@ export default function Settings() {
     };
   }, []);
 
-  // Register action callbacks for focus engine dispatch
-  useEffect(() => {
-    window.__jotActions = {
-      onEscape: () => {
-        const engineMode = focusEngine.getState().mode;
-        if (engineMode === 'NORMAL') {
-          void getCurrentWindow().close();
-        }
-      },
-    };
-    return () => {
-      if (window.__jotActions) {
-        delete window.__jotActions;
+  useRegisteredNormalKeyActions('settings:window', {
+    onEscape: () => {
+      if (focusEngine.getState().mode === 'NORMAL') {
+        void getCurrentWindow().close();
       }
-    };
-  }, []);
+    },
+  });
 
   // Focus-engine keydown handler — replaces inline addEventListener
   useEffect(() => {
@@ -122,7 +147,7 @@ export default function Settings() {
       }
 
       // Dispatch remaining keys (Escape, Tab, etc.) through focus engine
-      const result = dispatchFocusKey(focusEngine, e, window.__jotActions);
+      const result = dispatchFocusKey(focusEngine, e, resolveNormalKeyActions());
       if (result.handled) {
         if (result.stopPropagation) e.stopPropagation();
       }
@@ -193,7 +218,7 @@ export default function Settings() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-xl py-6 px-6">
+        <div className="mx-auto max-w-[820px] px-6 py-6">
 
           {activeTab === 'general' && (
             <div className="space-y-1">
@@ -240,13 +265,9 @@ export default function Settings() {
                     onClick={() => {
                       const newValue = !yougileStore.yougileEnabled;
                       yougileStore.setYougileEnabled(newValue);
-                      if ('__TAURI_INTERNALS__' in window) {
+                      if (isTauriAvailable()) {
                         void invoke<AppSettings>('update_yougile_enabled', { enabled: newValue });
                         void emit('settings-updated');
-                      }
-                      // If disabling while on accounts tab, go back to general
-                      if (!newValue && (activeTab as Tab) === 'accounts') {
-                        setActiveTab('general');
                       }
                     }}
                     className={`relative w-10 h-5 rounded-full transition-colors ${
@@ -365,6 +386,10 @@ export default function Settings() {
                 Theme applies to all windows instantly.
               </p>
             </div>
+          )}
+
+          {activeTab === 'templates' && (
+            <TaskTemplatesSettings key={templateIntentNonce} />
           )}
 
           {activeTab === 'accounts' && (

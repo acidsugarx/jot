@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useTaskStore } from '@/store/use-task-store';
 import { FileText, Link as LinkIcon, X, Plus, Calendar, Eye, PenLine } from 'lucide-react';
-import { toDateInputValue } from '@/lib/formatting';
+import { todayDateInput, toDateInputValue } from '@/lib/formatting';
 import { priorityOptions, priorityColor } from '@/lib/constants';
 import { TaskPriority } from '@/types';
 import type { Checklist, Task as TaskType } from '@/types';
@@ -306,7 +306,7 @@ export function TaskEditorPane() {
                     <button
                       type="button"
                       onClick={() => {
-                        const today = new Date().toISOString().split('T')[0] ?? '';
+                        const today = todayDateInput();
                         handleDueDateChange(today);
                       }}
                       className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"
@@ -507,4 +507,3 @@ function inlineFormat(text: string): string {
     .replace(/`(.+?)`/g, '<code>$1</code>')
     .replace(/\[(.+?)\]\(((https?:\/\/)[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
-

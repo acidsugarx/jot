@@ -7,6 +7,7 @@ import {
   type FocusState,
   type NormalKeyActions,
 } from '@/lib/focus-engine';
+import { resolveNormalKeyActions } from '@/lib/focus-actions';
 import { FocusEngineContext } from '@/components/focus-engine-context';
 import { ModeIndicator } from '@/components/ModeIndicator';
 
@@ -30,7 +31,7 @@ export function FocusProvider({
 
     const handler = (event: KeyboardEvent) => {
       const prevMode = engine.getState().mode;
-      const result = dispatchFocusKey(engine, event, actions ?? window.__jotActions);
+      const result = dispatchFocusKey(engine, event, resolveNormalKeyActions(actions));
       if (result.stopPropagation) {
         event.stopPropagation();
       }

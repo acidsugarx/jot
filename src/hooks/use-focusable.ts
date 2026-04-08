@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { RefObject } from 'react';
+import type { MutableRefObject } from 'react';
 
 import { useFocusStoreApi, useFocusEngineStore } from '@/hooks/use-focus-engine';
 
@@ -15,7 +15,7 @@ export interface UseFocusableOptions {
 }
 
 export interface UseFocusableResult<T extends HTMLElement> {
-  ref: RefObject<T | null>;
+  ref: MutableRefObject<T | null>;
   isSelected: boolean;
   isPaneActive: boolean;
   focus: () => void;

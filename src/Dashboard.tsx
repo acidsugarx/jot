@@ -31,8 +31,10 @@ import { Task, KanbanColumn } from '@/types';
 import { CardTask } from '@/components/KanbanTaskCard';
 import type { YougileTask } from '@/types/yougile';
 import { PRIORITY_DOT_CLASS } from '@/lib/yougile';
+import { isTauriAvailable } from '@/lib/tauri';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { focusEngine } from '@/lib/focus-engine';
+import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
 import { useFocusEngineStore } from '@/hooks/use-focus-engine';
 import { useFocusable } from '@/hooks/use-focusable';
 
@@ -559,82 +561,61 @@ export default function Dashboard() {
     };
   }, [isEditorOpen]);
 
-  // Register action callbacks on window for FocusProvider
-  useEffect(() => {
-    const selectedTask = isYougile
-      ? yougileStore.tasks.find(t => t.id === yougileStore.selectedTaskId)
-      : tasks.find(t => t.id === localSelectedTaskId);
+  const selectedTaskForActions = isYougile
+    ? yougileStore.tasks.find((task) => task.id === yougileStore.selectedTaskId)
+    : tasks.find((task) => task.id === localSelectedTaskId);
 
-    window.__jotActions = {
-      onSourceToggle: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
-      onSwitchView: (view: 'list' | 'kanban' | 'calendar') => setActiveTab(view),
-      onNewItem: () => setIsQuickAddOpen(true),
-      onToggleDone: () => {
-        if (!selectedTask) return;
-        if (isYougile) {
-          const yt = selectedTask as YougileTask;
-          void yougileStore.updateTask(yt.id, { completed: !yt.completed });
-        } else {
-          const lt = selectedTask as Task;
-          void updateTaskStatus({ id: lt.id, status: lt.status === 'done' ? 'todo' : 'done' });
-        }
-      },
-      onDelete: () => {
-        if (!selectedTask) return;
-        requestDelete(buildDeleteRequest(selectedTask));
-      },
-      onOpenItem: () => {
-        if (!selectedTask) return;
-        setIsEditorOpen(true);
-      },
-      onMoveNext: () => {
-        if (!selectedTask || isYougile) return;
-        const task = selectedTask as Task;
-        void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
-      },
-      onRefresh: () => {
-        if (isYougile) {
-          void yougileStore.fetchTasks();
-        } else {
-          void fetchTasks();
-        }
-      },
-      onToggleHelp: () => setShowHelp(v => !v),
-      onEscape: () => {
-        // Deselect current task but keep pane focused
-        // (drillUp nulls activePane; re-focus task-view so navigation keeps working)
-        if (isYougile) {
-          yougileStore.selectTask('');
-        } else {
-          selectLocalTask('');
-        }
-        setIsEditorOpen(false);
-        // Re-focus task-view synchronously after drillUp nulled activePane.
-        // Using rAF here left a gap where hjkl hit activePane===null and did nothing.
-        const state = focusEngine.getState();
-        if (state.activePane === null && state.panes.has('task-view')) {
-          state.focusPane('task-view');
-        }
-      },
-    };
-  }, [
-    isYougile,
-    yougileStore.activeSource,
-    yougileStore.setActiveSource,
-    yougileStore.selectedTaskId,
-    yougileStore.tasks,
-    localSelectedTaskId,
-    tasks,
-    requestDelete,
-    buildDeleteRequest,
-    updateTaskStatus,
-    yougileStore.updateTask,
-    yougileStore.fetchTasks,
-    fetchTasks,
-    openLinkedNote,
-    setIsEditorOpen,
-    setIsQuickAddOpen,
-  ]);
+  useRegisteredNormalKeyActions('dashboard:main', {
+    onSourceToggle: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
+    onSwitchView: (view: 'list' | 'kanban' | 'calendar') => setActiveTab(view),
+    onNewItem: () => setIsQuickAddOpen(true),
+    onToggleDone: () => {
+      if (!selectedTaskForActions) return;
+      if (isYougile) {
+        const task = selectedTaskForActions as YougileTask;
+        void yougileStore.updateTask(task.id, { completed: !task.completed });
+      } else {
+        const task = selectedTaskForActions as Task;
+        void updateTaskStatus({
+          id: task.id,
+          status: task.status === 'done' ? 'todo' : 'done',
+        });
+      }
+    },
+    onDelete: () => {
+      if (!selectedTaskForActions) return;
+      requestDelete(buildDeleteRequest(selectedTaskForActions));
+    },
+    onOpenItem: () => {
+      if (!selectedTaskForActions) return;
+      setIsEditorOpen(true);
+    },
+    onMoveNext: () => {
+      if (!selectedTaskForActions || isYougile) return;
+      const task = selectedTaskForActions as Task;
+      void updateTaskStatus({ id: task.id, status: getNextStatus(task.status) });
+    },
+    onRefresh: () => {
+      if (isYougile) {
+        void yougileStore.fetchTasks();
+      } else {
+        void fetchTasks();
+      }
+    },
+    onToggleHelp: () => setShowHelp((value) => !value),
+    onEscape: () => {
+      if (isYougile) {
+        yougileStore.selectTask('');
+      } else {
+        selectLocalTask('');
+      }
+      setIsEditorOpen(false);
+      const state = focusEngine.getState();
+      if (state.activePane === null && state.panes.has('task-view')) {
+        state.focusPane('task-view');
+      }
+    },
+  });
 
   // Focus quick-add input when opened
   useEffect(() => {
@@ -673,7 +654,7 @@ export default function Dashboard() {
 
   const lastDashFocusRef = useRef(0);
   useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!isTauriAvailable()) return;
     const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (focused && yougileStore.yougileEnabled) {
         const now = Date.now();

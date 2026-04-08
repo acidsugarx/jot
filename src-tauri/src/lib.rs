@@ -15,12 +15,13 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use crate::db::{
-    add_checklist_item, create_checklist, create_column, create_tag, create_task, delete_checklist,
-    delete_checklist_item, delete_column, delete_tag, delete_task, get_checklists, get_columns,
-    get_settings, get_subtasks, get_tags, get_task_tags, get_tasks, get_yougile_sync_state,
-    init_database, open_linked_note, reorder_columns, set_task_tags, update_checklist_item,
-    update_column, update_settings, update_tag, update_task, update_task_status, update_theme,
-    update_yougile_enabled, update_yougile_sync_state, DatabaseState,
+    add_checklist_item, create_checklist, create_column, create_tag, create_task,
+    create_task_template, delete_checklist, delete_checklist_item, delete_column, delete_tag,
+    delete_task, delete_task_template, get_checklists, get_columns, get_settings, get_subtasks,
+    get_tags, get_task_tags, get_task_templates, get_tasks, get_yougile_sync_state, init_database,
+    open_linked_note, reorder_columns, set_task_tags, update_checklist_item, update_column,
+    update_settings, update_tag, update_task, update_task_status, update_task_template,
+    update_theme, update_yougile_enabled, update_yougile_sync_state, DatabaseState,
 };
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
@@ -46,20 +47,27 @@ tauri_nspanel::tauri_panel! {
 #[cfg(target_os = "macos")]
 fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     use tauri_nspanel::ManagerExt;
-    let panel = app
-        .get_webview_panel("main")
-        .map_err(|_| to_tauri_error("Panel not found"))?;
-    panel.show_and_make_key();
+    if let Ok(panel) = app.get_webview_panel("main") {
+        panel.show_and_make_key();
+        return Ok(());
+    }
+
+    let window = main_window(app)?;
+    window.show()?;
+    window.set_focus()?;
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn hide_main_window(app: &AppHandle) -> tauri::Result<()> {
     use tauri_nspanel::ManagerExt;
-    let panel = app
-        .get_webview_panel("main")
-        .map_err(|_| to_tauri_error("Panel not found"))?;
-    panel.hide();
+    if let Ok(panel) = app.get_webview_panel("main") {
+        panel.hide();
+        return Ok(());
+    }
+
+    let window = main_window(app)?;
+    window.hide()?;
     Ok(())
 }
 
@@ -86,18 +94,41 @@ fn hide_main_window(app: &AppHandle) -> tauri::Result<()> {
 // ── Shortcuts, tray, window behavior ────────────────────────────────────────
 
 #[cfg(desktop)]
-fn register_main_shortcut(app: &AppHandle) -> tauri::Result<()> {
-    let capture_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-    let dashboard_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+fn capture_shortcut() -> Shortcut {
+    #[cfg(target_os = "windows")]
+    {
+        return Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+    }
 
+    #[cfg(not(target_os = "windows"))]
+    {
+        Shortcut::new(Some(Modifiers::ALT), Code::Space)
+    }
+}
+
+#[cfg(desktop)]
+fn dashboard_shortcut() -> Shortcut {
+    #[cfg(target_os = "windows")]
+    {
+        return Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space)
+    }
+}
+
+#[cfg(desktop)]
+fn register_main_shortcut(app: &AppHandle) -> tauri::Result<()> {
     let global_shortcut = app.global_shortcut();
 
     global_shortcut
-        .register(capture_shortcut)
+        .register(capture_shortcut())
         .map_err(|error| to_tauri_error(error.to_string()))?;
 
     global_shortcut
-        .register(dashboard_shortcut)
+        .register(dashboard_shortcut())
         .map_err(|error| to_tauri_error(error.to_string()))?;
 
     Ok(())
@@ -157,6 +188,23 @@ fn setup_main_window_behavior(app: &AppHandle) -> tauri::Result<()> {
     });
 
     Ok(())
+}
+
+#[cfg(desktop)]
+fn setup_desktop_integrations(app: &AppHandle) -> bool {
+    if let Err(error) = setup_tray(app) {
+        log::warn!("Tray setup failed; continuing without tray icon: {error}");
+    }
+
+    match register_main_shortcut(app) {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!(
+                "Global shortcut registration failed; continuing without shortcuts: {error}"
+            );
+            false
+        }
+    }
 }
 
 /// Convert the main window to an NSPanel so it can overlay fullscreen apps.
@@ -228,23 +276,29 @@ fn setup_capture_panel(app: &AppHandle) -> tauri::Result<()> {
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
-    if url.trim().is_empty() {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
         return Err("URL cannot be empty.".to_string());
+    }
+
+    let parsed = url::Url::parse(trimmed).map_err(|error| format!("Invalid URL: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http:// and https:// URLs are allowed.".to_string());
     }
 
     let status = if cfg!(target_os = "macos") {
         StdCommand::new("open")
-            .arg(&url)
+            .arg(parsed.as_str())
             .status()
             .map_err(|e| format!("Failed to open URL: {e}"))?
     } else if cfg!(target_os = "windows") {
         StdCommand::new("cmd")
-            .args(["/c", "start", "", &url])
+            .args(["/c", "start", "", parsed.as_str()])
             .status()
             .map_err(|e| format!("Failed to open URL: {e}"))?
     } else {
         StdCommand::new("xdg-open")
-            .arg(&url)
+            .arg(parsed.as_str())
             .status()
             .map_err(|e| format!("Failed to open URL: {e}"))?
     };
@@ -353,9 +407,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    let capture_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-                    let dashboard_shortcut =
-                        Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+                    let capture_shortcut = capture_shortcut();
+                    let dashboard_shortcut = dashboard_shortcut();
 
                     if event.state() == ShortcutState::Pressed {
                         if shortcut == &capture_shortcut {
@@ -394,8 +447,18 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                setup_tray(app.handle())?;
-                register_main_shortcut(app.handle())?;
+                let shortcuts_ready = setup_desktop_integrations(app.handle());
+
+                if cfg!(debug_assertions) || !shortcuts_ready {
+                    let _ = show_main_window(app.handle());
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                // On Windows, launching a hidden skip-taskbar app from the installer looks broken.
+                // Show the main window on direct launch; closing still hides it to tray.
+                let _ = show_main_window(app.handle());
             }
 
             Ok(())
@@ -419,6 +482,10 @@ pub fn run() {
             update_column,
             delete_column,
             reorder_columns,
+            get_task_templates,
+            create_task_template,
+            update_task_template,
+            delete_task_template,
             update_theme,
             update_yougile_enabled,
             get_yougile_sync_state,

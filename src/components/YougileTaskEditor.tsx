@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { X, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon, Bold, Italic, Strikethrough, Link, List, ListOrdered, Code } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
+import { todayDateInput } from '@/lib/formatting';
 import { formatYougileTrackedHours, getYougileTaskColorValue, YOUGILE_TASK_COLOR_OPTIONS } from '@/lib/yougile';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { useYougileStore } from '@/store/use-yougile-store';
@@ -32,7 +34,7 @@ function YougileEditorField({ index, id: idProp, onActivate, onEnter, children }
 
   return (
     <div
-      ref={(node) => { (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      ref={ref}
     >
       {children(isSelected)}
     </div>
@@ -199,6 +201,10 @@ function formatStickerValue(value: unknown, fallback: string): string {
   }
 }
 
+function cloneChecklists(checklists: YougileChecklist[] | undefined): YougileChecklist[] {
+  return checklists ? structuredClone(checklists) : [];
+}
+
 export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditorProps) {
   const {
     updateTask,
@@ -222,14 +228,16 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
 
   const [title, setTitle] = useState(task.title);
   const [descHtml, setDescHtml] = useState(task.description ?? '');
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [linkDraft, setLinkDraft] = useState('https://');
   const descEditorRef = useRef<HTMLDivElement>(null);
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  const pendingLinkRangeRef = useRef<Range | null>(null);
   const [columnId, setColumnId] = useState(task.columnId ?? '');
   const [deadlineValue, setDeadlineValue] = useState(
     unixMsToDateInput(task.deadline?.deadline ?? null)
   );
-  const [checklists, setChecklists] = useState<YougileChecklist[]>(
-    task.checklists ? structuredClone(task.checklists) : []
-  );
+  const [checklists, setChecklists] = useState<YougileChecklist[]>(() => cloneChecklists(task.checklists));
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
   const [editingItemText, setEditingItemText] = useState('');
   const [color, setColor] = useState(task.color ?? 'task-primary');
@@ -255,6 +263,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const stickerRefs = useRef<Map<string, HTMLInputElement | HTMLSelectElement | null>>(new Map());
   const colorButtonRef = useRef<HTMLButtonElement>(null);
   const assigneeButtonRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
+  const lastTaskChecklistsRef = useRef(task.checklists);
   const taskId = task.id;
 
   // Fetch chat when opening the chat panel
@@ -272,19 +281,46 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     }
   }, [chatMessages, showChat]);
 
-  // Sync when task changes externally
+  const syncDescriptionFromTask = useCallback((rawDescription: string) => {
+    setDescHtml(rawDescription);
+
+    const editor = descEditorRef.current;
+    if (!editor || editor.contains(document.activeElement)) {
+      return;
+    }
+
+    const nextHtml = sanitizeHtml(rawDescription) || '<p><br></p>';
+    if (editor.innerHTML !== nextHtml) {
+      editor.innerHTML = nextHtml;
+    }
+  }, []);
+
+  // Sync when task identity changes externally
   useEffect(() => {
     setTitle(task.title);
-    setDescHtml(task.description ?? '');
+    syncDescriptionFromTask(task.description ?? '');
     setColumnId(task.columnId ?? '');
     setDeadlineValue(unixMsToDateInput(task.deadline?.deadline ?? null));
-    setChecklists(task.checklists ? structuredClone(task.checklists) : []);
+    setChecklists(cloneChecklists(task.checklists));
+    lastTaskChecklistsRef.current = task.checklists;
     setColor(task.color ?? 'task-primary');
     setAssignedUserIds(task.assigned);
     setStickerValues(normalizeStickerMap(task.stickers));
     setShowAssigneePicker(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: sync local state on task identity change, not on every task mutation
-  }, [taskId]);
+    setShowLinkInput(false);
+    setLinkDraft('https://');
+    pendingLinkRangeRef.current = null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: reset local editor state only when task identity changes
+  }, [syncDescriptionFromTask, taskId]);
+
+  useEffect(() => {
+    if (lastTaskChecklistsRef.current === task.checklists) {
+      return;
+    }
+
+    lastTaskChecklistsRef.current = task.checklists;
+    setChecklists(cloneChecklists(task.checklists));
+  }, [task.checklists]);
 
   useEffect(() => {
     if (yougileContext.projectId && users.length === 0) {
@@ -329,57 +365,44 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     });
   }, []);
 
-  // Wire Escape + onNewItem into focus engine
-  useEffect(() => {
-    const existing = window.__jotActions;
-    window.__jotActions = {
-      ...existing,
-      onEscape: () => {
-        const engineMode = focusEngine.getState().mode;
-        if (engineMode === 'INSERT') {
-          focusEngine.getState().setMode('NORMAL');
-        } else {
-          onClose();
-        }
-      },
-      onNewItem: () => {
-        const { activePane, activeRegion, activeIndex, nodes } = focusEngine.getState();
-        if (!activePane || !activeRegion) return;
-        const key = `${activePane}:${activeRegion}`;
-        const nodeList = nodes.get(key) ?? [];
-        const activeNode = nodeList[activeIndex];
-        if (!activeNode?.id.startsWith('yougile-checklist-')) return;
-
-        // Parse clIdx from id: "yougile-checklist-{clIdx}-{itemIdx}"
-        const parts = activeNode.id.split('-');
-        const clIdx = parseInt(parts[2] ?? '', 10);
-        if (isNaN(clIdx) || clIdx < 0 || clIdx >= checklists.length) return;
-
-        const targetChecklist = checklists[clIdx];
-        if (!targetChecklist) return;
-
-        const newItemIdx = targetChecklist.items.length;
-        const updated = checklists.map((cl, ci) => {
-          if (ci !== clIdx) return cl;
-          return { ...cl, items: [...cl.items, { title: '', completed: false }] };
-        });
-        setChecklists(updated);
-        void updateTask(task.id, { checklists: updated });
-
-        const newKey = `${clIdx}:${newItemIdx}`;
-        setEditingItemKey(newKey);
-        setEditingItemText('');
-        focusEngine.getState().setMode('INSERT');
-      },
-    };
-    return () => {
-      if (existing) {
-        window.__jotActions = existing;
-      } else if (window.__jotActions) {
-        delete window.__jotActions;
+  useRegisteredNormalKeyActions(`yougile-editor:${task.id}`, {
+    onEscape: () => {
+      if (focusEngine.getState().mode === 'INSERT') {
+        focusEngine.getState().setMode('NORMAL');
+      } else {
+        onClose();
       }
-    };
-  }, [onClose, checklists, task.id, updateTask]);
+    },
+    onNewItem: () => {
+      const { activePane, activeRegion, activeIndex, nodes } = focusEngine.getState();
+      if (!activePane || !activeRegion) return;
+      const key = `${activePane}:${activeRegion}`;
+      const nodeList = nodes.get(key) ?? [];
+      const activeNode = nodeList[activeIndex];
+      if (!activeNode?.id.startsWith('yougile-checklist-')) return;
+
+      const parts = activeNode.id.split('-');
+      const clIdx = parseInt(parts[2] ?? '', 10);
+      if (Number.isNaN(clIdx) || clIdx < 0 || clIdx >= checklists.length) return;
+
+      const targetChecklist = checklists[clIdx];
+      if (!targetChecklist) return;
+
+      const newItemIdx = targetChecklist.items.length;
+      const updated = checklists.map((checklist, checklistIndex) => (
+        checklistIndex === clIdx
+          ? { ...checklist, items: [...checklist.items, { title: '', completed: false }] }
+          : checklist
+      ));
+      setChecklists(updated);
+      void updateTask(task.id, { checklists: updated });
+
+      const newKey = `${clIdx}:${newItemIdx}`;
+      setEditingItemKey(newKey);
+      setEditingItemText('');
+      focusEngine.getState().setMode('INSERT');
+    },
+  });
 
   const handleTitleBlur = () => {
     const trimmed = title.trim();
@@ -414,25 +437,57 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     );
   }, []);
 
-  const insertLink = useCallback(() => {
+  const openLinkInput = useCallback(() => {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) {
-      const href = window.prompt('URL:', 'https://');
-      if (!href) return;
-      descEditorRef.current?.focus();
-      document.execCommand('createLink', false, href);
+    if (!sel || sel.rangeCount === 0) return;
+
+    pendingLinkRangeRef.current = sel.getRangeAt(0).cloneRange();
+    const selectedText = sel.toString().trim();
+    setLinkDraft(/^https?:\/\//i.test(selectedText) ? selectedText : 'https://');
+    setShowLinkInput(true);
+    requestAnimationFrame(() => linkInputRef.current?.focus());
+  }, []);
+
+  const applyLink = useCallback(() => {
+    const href = linkDraft.trim();
+    if (!href) {
+      setShowLinkInput(false);
       return;
     }
-    const selectedText = sel.toString();
-    if (/^https?:\/\//.test(selectedText)) {
-      document.execCommand('insertHTML', false,
-        `<a href="${selectedText}">${selectedText}</a>`);
-    } else {
-      const href = window.prompt('URL:', 'https://');
-      if (!href) return;
-      document.execCommand('createLink', false, href);
+
+    let parsedHref: URL;
+    try {
+      parsedHref = new URL(href);
+    } catch {
+      return;
     }
-  }, []);
+
+    if (!/^https?:$/i.test(parsedHref.protocol)) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const pendingRange = pendingLinkRangeRef.current;
+    if (selection && pendingRange) {
+      selection.removeAllRanges();
+      selection.addRange(pendingRange);
+    }
+
+    descEditorRef.current?.focus();
+    if (selection?.rangeCount && !selection.isCollapsed) {
+      document.execCommand('createLink', false, parsedHref.toString());
+    } else {
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${parsedHref.toString()}">${parsedHref.toString()}</a>`,
+      );
+    }
+
+    setShowLinkInput(false);
+    setLinkDraft('https://');
+    pendingLinkRangeRef.current = null;
+  }, [linkDraft]);
 
   const handleDescriptionKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     const mod = e.ctrlKey || e.metaKey;
@@ -444,7 +499,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     // Ctrl+Shift+S strikethrough
     if (mod && e.shiftKey && e.key === 'S') { e.preventDefault(); execFormatCommand('strikeThrough'); return; }
     // Ctrl+K insert link
-    if (mod && e.key === 'k') { e.preventDefault(); insertLink(); return; }
+    if (mod && e.key === 'k') { e.preventDefault(); openLinkInput(); return; }
     // Ctrl+Shift+C insert checkbox
     if (mod && e.shiftKey && e.key === 'C') { e.preventDefault(); insertCheckbox(); return; }
     // Tab indent
@@ -463,7 +518,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
         );
       }
     }
-  }, [execFormatCommand, insertCheckbox, insertLink]);
+  }, [execFormatCommand, insertCheckbox, openLinkInput]);
 
   const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const text = e.clipboardData?.getData('text/plain');
@@ -490,16 +545,14 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     }
   }, []);
 
-  // Sync contentEditable when task description changes externally
   useEffect(() => {
-    const el = descEditorRef.current;
-    if (el && !el.contains(document.activeElement)) {
-      const raw = task.description ?? '';
-      if (el.innerHTML.trim() !== raw.trim()) {
-        el.innerHTML = sanitizeHtml(raw);
-      }
+    const rawDescription = task.description ?? '';
+    if ((descEditorRef.current?.contains(document.activeElement) ?? false) || descHtml === rawDescription) {
+      return;
     }
-  }, [task.description]);
+
+    syncDescriptionFromTask(rawDescription);
+  }, [descHtml, syncDescriptionFromTask, task.description]);
 
   const handleColumnChange = (newColumnId: string) => {
     setColumnId(newColumnId);
@@ -845,7 +898,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                   <ToolbarBtn icon={Italic} title="Italic (Ctrl+I)" onMouseDown={() => execFormatCommand('italic')} />
                   <ToolbarBtn icon={Strikethrough} title="Strikethrough (Ctrl+Shift+S)" onMouseDown={() => execFormatCommand('strikeThrough')} />
                   <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
-                  <ToolbarBtn icon={Link} title="Link (Ctrl+K)" onMouseDown={() => insertLink()} />
+                  <ToolbarBtn icon={Link} title="Link (Ctrl+K)" onMouseDown={() => openLinkInput()} />
                   <ToolbarBtn icon={List} title="Bullet list" onMouseDown={() => execFormatCommand('insertUnorderedList')} />
                   <ToolbarBtn icon={ListOrdered} title="Numbered list" onMouseDown={() => execFormatCommand('insertOrderedList')} />
                   <ToolbarBtn icon={Code} title="Code (Ctrl+Shift+`)" onMouseDown={() => execFormatCommand('formatBlock', 'pre')} />
@@ -880,6 +933,38 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                 data-placeholder="Add a description…"
                 spellCheck={false}
               />
+              {showLinkInput && (
+                <div className="mt-2 flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
+                  <input
+                    ref={linkInputRef}
+                    type="url"
+                    value={linkDraft}
+                    onChange={(event) => setLinkDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        applyLink();
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        setShowLinkInput(false);
+                        setLinkDraft('https://');
+                        pendingLinkRangeRef.current = null;
+                        descEditorRef.current?.focus();
+                      }
+                    }}
+                    placeholder="https://example.com"
+                    className="flex-1 rounded border border-zinc-800 bg-black/20 px-2 py-1 font-mono text-xs text-zinc-200 outline-none placeholder:text-zinc-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyLink}
+                    className="rounded border border-zinc-700 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+                  >
+                    Apply
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </YougileEditorField>
@@ -957,7 +1042,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
               if (deadlineValue) {
                 deadlineInputRef.current?.focus();
               } else {
-                const today = new Date().toISOString().split('T')[0] ?? '';
+                const today = todayDateInput();
                 handleDeadlineChange(today);
                 requestAnimationFrame(() => deadlineInputRef.current?.focus());
               }
@@ -990,7 +1075,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                     <button
                       type="button"
                       onClick={() => {
-                        const today = new Date().toISOString().split('T')[0] ?? '';
+                        const today = todayDateInput();
                         handleDeadlineChange(today);
                       }}
                       className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors"

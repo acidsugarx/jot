@@ -10,7 +10,6 @@ export interface YougileAccount {
   email: string;
   companyId: string;
   companyName: string;
-  apiKey: string;
   createdAt: string;
 }
 
@@ -150,6 +149,7 @@ export interface CreateYougileTask {
   assigned?: string[];
   deadline?: YougileDeadline;
   timeTracking?: YougileTimeTracking;
+  stickers?: Record<string, string>;
   checklists?: YougileChecklist[];
   stopwatch?: YougileStopwatch;
   timer?: YougileTimer;
@@ -199,4 +199,35 @@ export interface YougileContext {
 
 export interface YougileSyncState extends YougileContext {
   activeSource: 'local' | 'yougile';
+}
+
+export interface TaskTemplate {
+  id: string;
+  title: string;
+  description: string | null;
+  color: string | null;
+  checklists: YougileChecklist[];
+  stickers: Record<string, string>;
+  columnId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTaskTemplateInput {
+  title: string;
+  description?: string | null;
+  color?: string | null;
+  checklists?: YougileChecklist[];
+  stickers?: Record<string, string>;
+  columnId?: string | null;
+}
+
+export interface UpdateTaskTemplateInput {
+  id: string;
+  title?: string;
+  description?: string | null;
+  color?: string | null;
+  checklists?: YougileChecklist[];
+  stickers?: Record<string, string>;
+  columnId?: string | null;
 }

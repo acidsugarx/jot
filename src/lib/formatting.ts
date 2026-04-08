@@ -60,6 +60,10 @@ export function toDateInputValue(isoString: string): string {
   }
 }
 
+export function todayDateInput(): string {
+  return toDateInputValue(new Date().toISOString());
+}
+
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { escapeHtml } from '@/lib/formatting';
+import { isTauriAvailable } from '@/lib/tauri';
 import type {
   YougileAccount,
   YougileProject,
@@ -20,10 +21,6 @@ import type {
   UpdateYougileTask,
   YougileSyncState,
 } from '@/types/yougile';
-
-function isTauri(): boolean {
-  return '__TAURI_INTERNALS__' in window;
-}
 
 const FETCH_TIMEOUT_MS = 15_000;
 const UPLOAD_TIMEOUT_MS = 90_000;
@@ -53,7 +50,6 @@ function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> 
   });
 }
 
-let lastFetchTime = 0;
 const FETCH_DEBOUNCE_MS = 2_000;
 
 export type ActiveSource = 'local' | 'yougile';
@@ -90,6 +86,7 @@ interface YougileState {
   users: YougileUser[];
   stringStickers: YougileStringSticker[];
   sprintStickers: YougileSprintSticker[];
+  lastSyncHydratedAt: number;
 
   // Loading & error state
   isLoading: boolean;
@@ -150,21 +147,26 @@ function sortChatMessages(messages: YougileChatMessage[]): YougileChatMessage[] 
   return [...messages].sort((a, b) => a.id - b.id);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function nextOptimisticMessageId(messages: YougileChatMessage[]): number {
+  const currentLastId = messages[messages.length - 1]?.id ?? 0;
+  return Math.max(Date.now(), currentLastId + 1);
 }
 
-async function refreshChatAfterSend(
-  get: () => YougileState,
-  taskId: string,
-  expectedMessageId: number
-): Promise<void> {
-  await get().fetchChatMessages(taskId);
-  if (get().chatMessages.some((message) => message.id === expectedMessageId)) {
-    return;
-  }
-  await sleep(300);
-  await get().fetchChatMessages(taskId);
+function buildOptimisticChatMessage(
+  state: Pick<YougileState, 'accounts' | 'chatMessages' | 'yougileContext'>,
+  text: string,
+  textHtml?: string,
+): YougileChatMessage {
+  const sender = state.accounts.find((account) => account.id === state.yougileContext.accountId)?.email
+    ?? 'you';
+
+  return {
+    id: nextOptimisticMessageId(state.chatMessages),
+    fromUserId: sender,
+    text,
+    textHtml,
+    deleted: false,
+  };
 }
 
 function toSyncState(activeSource: ActiveSource, yougileContext: YougileContext): YougileSyncState {
@@ -221,14 +223,14 @@ function applySyncState(
 }
 
 function scheduleSyncPersist(get: () => YougileState) {
-  if (!isTauri()) return;
+  if (!isTauriAvailable()) return;
   queueMicrotask(() => {
     void get().persistSyncState();
   });
 }
 
 async function emitYougileTasksUpdated(boardId: string | null) {
-  if (!isTauri()) return;
+  if (!isTauriAvailable()) return;
   await emit(YOUGILE_TASKS_UPDATED_EVENT, {
     boardId,
     sourceWindowLabel: getCurrentWindow().label,
@@ -303,6 +305,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   users: [],
   stringStickers: [],
   sprintStickers: [],
+  lastSyncHydratedAt: 0,
 
   isLoading: false,
   error: null,
@@ -314,17 +317,48 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   // --- Auth ---
 
   fetchAccounts: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     try {
       const accounts = await invoke<YougileAccount[]>('yougile_get_accounts');
-      set({ accounts });
+      let resetContext = false;
+      set((state) => {
+        const selectedAccountId = state.yougileContext.accountId;
+        const hasSelectedAccount = selectedAccountId
+          ? accounts.some((account) => account.id === selectedAccountId)
+          : true;
+
+        if (hasSelectedAccount) {
+          return { accounts };
+        }
+
+        resetContext = true;
+        return {
+          activeSource: 'local' as ActiveSource,
+          accounts,
+          yougileContext: initialContext,
+          projects: [],
+          boards: [],
+          columns: [],
+          tasks: [],
+          users: [],
+          stringStickers: [],
+          sprintStickers: [],
+          chatMessages: [],
+          chatLoading: false,
+          companyUsers: [],
+          selectedTaskId: null,
+        };
+      });
+      if (resetContext) {
+        scheduleSyncPersist(get);
+      }
     } catch (e) {
       set({ error: String(e) });
     }
   },
 
   login: async (email, password) => {
-    if (!isTauri()) return [];
+    if (!isTauriAvailable()) return [];
     try {
       return await invoke<YougileCompany[]>('yougile_login', { login: email, password });
     } catch (e) {
@@ -334,19 +368,30 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   addAccount: async (email, password, companyId, companyName) => {
-    if (!isTauri()) throw new Error('Tauri not available');
+    if (!isTauriAvailable()) throw new Error('Tauri not available');
     const account = await invoke<YougileAccount>('yougile_add_account', {
       login: email,
       password,
       companyId,
       companyName,
     });
-    set((state) => ({ accounts: [...state.accounts, account] }));
+    set((state) => ({
+      accounts: [
+        account,
+        ...state.accounts.filter((existing) => (
+          existing.id !== account.id
+          && !(
+            existing.companyId === account.companyId
+            && existing.email.toLowerCase() === account.email.toLowerCase()
+          )
+        )),
+      ],
+    }));
     return account;
   },
 
   removeAccount: async (accountId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     await invoke('yougile_remove_account', { accountId });
     set((state) => {
       const removedSelectedAccount = state.yougileContext.accountId === accountId;
@@ -374,7 +419,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   // --- Navigation ---
 
   fetchProjects: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     set({ isLoading: true, error: null });
@@ -391,7 +436,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchBoards: async (projectId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     set({ isLoading: true, error: null });
@@ -409,7 +454,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchColumns: async (boardId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     set({ isLoading: true, error: null });
@@ -427,7 +472,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchUsers: async (projectId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     try {
@@ -442,7 +487,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchStringStickers: async (boardId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     try {
@@ -457,7 +502,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchSprintStickers: async (boardId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     try {
@@ -474,7 +519,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   // --- Tasks ---
 
   fetchTasks: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId || !yougileContext.boardId) return;
 
@@ -494,7 +539,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   createTask: async (payload) => {
-    if (!isTauri()) return null;
+    if (!isTauriAvailable()) return null;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return null;
     try {
@@ -512,7 +557,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   updateTask: async (taskId, payload) => {
-    if (!isTauri()) return null;
+    if (!isTauriAvailable()) return null;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return null;
     try {
@@ -533,10 +578,10 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   moveTask: async (taskId, columnId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    // Optimistic update
+    const previousTasks = get().tasks;
     set((state) => ({
       tasks: state.tasks.map((t) =>
         t.id === taskId ? { ...t, columnId } : t
@@ -550,14 +595,12 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       });
       await emitYougileTasksUpdated(yougileContext.boardId);
     } catch (e) {
-      set({ error: String(e) });
-      // Revert optimistic update by re-fetching
-      void get().fetchTasks();
+      set({ error: String(e), tasks: previousTasks });
     }
   },
 
   deleteTask: async (taskId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     // Optimistic update
@@ -582,7 +625,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   companyUsers: [],
 
   fetchCompanyUsers: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext, companyUsers } = get();
     if (!yougileContext.accountId || companyUsers.length > 0) return;
     try {
@@ -598,7 +641,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   fetchChatMessages: async (taskId) => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
     set({ chatLoading: true });
@@ -621,11 +664,21 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   sendChatMessage: async (taskId, text) => {
-    if (!isTauri()) return false;
+    if (!isTauriAvailable()) return false;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return false;
+    const optimistic = buildOptimisticChatMessage(
+      get(),
+      text,
+      text.trim() ? `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>` : undefined,
+    );
+
+    set((state) => ({
+      chatMessages: sortChatMessages([...state.chatMessages, optimistic]),
+    }));
+
     try {
-      const response = await withTimeout(
+      await withTimeout(
         invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
           accountId: yougileContext.accountId,
           taskId,
@@ -633,18 +686,21 @@ export const useYougileStore = create<YougileState>((set, get) => ({
           textHtml: undefined,
         })
       );
-      await refreshChatAfterSend(get, taskId, response.id);
       return true;
     } catch (e) {
-      set({ error: String(e) });
+      set((state) => ({
+        error: String(e),
+        chatMessages: state.chatMessages.filter((message) => message.id !== optimistic.id),
+      }));
       return false;
     }
   },
 
   sendChatWithAttachments: async (taskId, text, files) => {
-    if (!isTauri()) return false;
+    if (!isTauriAvailable()) return false;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return false;
+    let optimisticMessageId: number | null = null;
     try {
       const uploadedFiles: Array<{ url: string; name: string; image: boolean }> = [];
       for (const entry of files) {
@@ -670,7 +726,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
           invoke<YougileFileUploadResponse>('yougile_upload_file', {
             accountId: yougileContext.accountId,
             fileName: entry.name,
-            fileBytes: Array.from(new Uint8Array(bytes)),
+            fileBytes: new Uint8Array(bytes),
             mimeType: entry.type || 'application/octet-stream',
           }),
           UPLOAD_TIMEOUT_MS,
@@ -696,8 +752,14 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       const plainText = [text.trim(), ...uploadedFiles.map((file) => file.url)]
         .filter(Boolean)
         .join(' ');
+      const optimistic = buildOptimisticChatMessage(get(), plainText, html);
+      optimisticMessageId = optimistic.id;
 
-      const response = await withTimeout(
+      set((state) => ({
+        chatMessages: sortChatMessages([...state.chatMessages, optimistic]),
+      }));
+
+      await withTimeout(
         invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
           accountId: yougileContext.accountId,
           taskId,
@@ -706,19 +768,23 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         }),
         UPLOAD_TIMEOUT_MS,
       );
-      await refreshChatAfterSend(get, taskId, response.id);
       return true;
     } catch (e) {
-      set({ error: `Failed to upload attachment: ${String(e)}` });
+      set((state) => ({
+        error: `Failed to upload attachment: ${String(e)}`,
+        chatMessages: optimisticMessageId == null
+          ? state.chatMessages
+          : state.chatMessages.filter((message) => message.id !== optimisticMessageId),
+      }));
       return false;
     }
   },
 
   hydrateSyncState: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const now = Date.now();
-    if (now - lastFetchTime < FETCH_DEBOUNCE_MS) return;
-    lastFetchTime = now;
+    if (now - get().lastSyncHydratedAt < FETCH_DEBOUNCE_MS) return;
+    set({ lastSyncHydratedAt: now });
     try {
       const syncState = await withTimeout(
         invoke<YougileSyncState>('get_yougile_sync_state')
@@ -730,7 +796,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   persistSyncState: async () => {
-    if (!isTauri()) return;
+    if (!isTauriAvailable()) return;
     const state = get();
     const syncState = toSyncState(
       state.yougileEnabled ? state.activeSource : 'local',
@@ -747,7 +813,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   listenForSyncUpdates: () => {
-    if (!isTauri()) return () => {};
+    if (!isTauriAvailable()) return () => {};
     const unlisten = listen<YougileSyncState>(YOUGILE_SYNC_UPDATED_EVENT, (event) => {
       set((state) => applySyncState(state, event.payload));
     }).catch(() => {});
@@ -757,7 +823,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   },
 
   listenForTaskUpdates: () => {
-    if (!isTauri()) return () => {};
+    if (!isTauriAvailable()) return () => {};
     const unlisten = listen<YougileTasksUpdatedPayload>(YOUGILE_TASKS_UPDATED_EVENT, (event) => {
       const { activeSource, yougileContext, columns } = get();
       const payloadBoardId = event.payload.boardId;

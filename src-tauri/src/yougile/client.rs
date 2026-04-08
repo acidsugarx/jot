@@ -3,6 +3,7 @@ use reqwest::{Client, StatusCode};
 
 const BASE_URL: &str = "https://yougile.com/api-v2";
 
+#[derive(Clone)]
 pub struct YougileClient {
     http: Client,
     api_key: String,
@@ -10,10 +11,16 @@ pub struct YougileClient {
 
 impl YougileClient {
     pub fn new(api_key: String) -> Self {
-        let http = Client::builder()
+        let http = match Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_else(|_| Client::new());
+        {
+            Ok(client) => client,
+            Err(error) => {
+                log::warn!("Failed to build reqwest client with timeout; falling back to default client: {error}");
+                Client::new()
+            }
+        };
         Self { http, api_key }
     }
 
@@ -118,11 +125,8 @@ impl YougileClient {
         let mut join_set = tokio::task::JoinSet::new();
         for col in &active_columns {
             let col_id = col.id.clone();
-            let api_key = self.api_key.clone();
-            join_set.spawn(async move {
-                let client = YougileClient::new(api_key);
-                client.get_tasks(&col_id).await
-            });
+            let client = self.clone();
+            join_set.spawn(async move { client.get_tasks(&col_id).await });
         }
 
         let mut all_tasks = Vec::new();
