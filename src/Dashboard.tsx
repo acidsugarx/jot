@@ -27,6 +27,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
+import { useShallow } from 'zustand/react/shallow';
 import { Task, KanbanColumn } from '@/types';
 import { CardTask } from '@/components/KanbanTaskCard';
 import type { YougileTask } from '@/types/yougile';
@@ -111,7 +112,7 @@ function LocalTaskListRow({
 
   return (
     <div
-      ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      ref={(node) => { focusRef.current = node; }}
       data-task-selected={highlighted ? 'true' : undefined}
       onClick={() => focus()}
       onDoubleClick={() => {
@@ -255,7 +256,7 @@ function YougileTaskListRow({
 
   return (
     <div
-      ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      ref={(node) => { focusRef.current = node; }}
       data-task-selected={highlighted ? 'true' : undefined}
       onClick={() => focus()}
       onDoubleClick={() => {
@@ -395,9 +396,57 @@ export default function Dashboard() {
     openLinkedNote,
     selectedTaskId: localSelectedTaskId,
     selectTask: selectLocalTask,
-  } = useTaskStore();
+  } = useTaskStore(
+    useShallow((s) => ({
+      tasks: s.tasks,
+      columns: s.columns,
+      settings: s.settings,
+      error: s.error,
+      isLoading: s.isLoading,
+      fetchTasks: s.fetchTasks,
+      fetchColumns: s.fetchColumns,
+      fetchSettings: s.fetchSettings,
+      listenForUpdates: s.listenForUpdates,
+      updateTaskStatus: s.updateTaskStatus,
+      deleteTask: s.deleteTask,
+      clearError: s.clearError,
+      isEditorOpen: s.isEditorOpen,
+      setIsEditorOpen: s.setIsEditorOpen,
+      isQuickAddOpen: s.isQuickAddOpen,
+      setIsQuickAddOpen: s.setIsQuickAddOpen,
+      createTask: s.createTask,
+      openLinkedNote: s.openLinkedNote,
+      selectedTaskId: s.selectedTaskId,
+      selectTask: s.selectTask,
+    }))
+  );
 
-  const yougileStore = useYougileStore();
+  const yougileStore = useYougileStore(
+    useShallow((s) => ({
+      yougileEnabled: s.yougileEnabled,
+      activeSource: s.activeSource,
+      yougileContext: s.yougileContext,
+      tasks: s.tasks,
+      columns: s.columns,
+      selectedTaskId: s.selectedTaskId,
+      isLoading: s.isLoading,
+      error: s.error,
+      setYougileEnabled: s.setYougileEnabled,
+      setActiveSource: s.setActiveSource,
+      setYougileContext: s.setYougileContext,
+      hydrateSyncState: s.hydrateSyncState,
+      fetchProjects: s.fetchProjects,
+      fetchBoards: s.fetchBoards,
+      fetchColumns: s.fetchColumns,
+      fetchTasks: s.fetchTasks,
+      fetchUsers: s.fetchUsers,
+      selectTask: s.selectTask,
+      createTask: s.createTask,
+      updateTask: s.updateTask,
+      deleteTask: s.deleteTask,
+      clearError: s.clearError,
+    }))
+  );
   const setYougileEnabled = yougileStore.setYougileEnabled;
   const hydrateYougileSyncState = yougileStore.hydrateSyncState;
   const yougileActiveSource = yougileStore.activeSource;

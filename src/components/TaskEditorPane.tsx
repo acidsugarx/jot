@@ -30,7 +30,7 @@ function EditorField({ index, onActivate, children }: {
 
   return (
     <div
-      ref={(node) => { (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
+      ref={(node) => { ref.current = node; }}
     >
       {children(isSelected)}
     </div>

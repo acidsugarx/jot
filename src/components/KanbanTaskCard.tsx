@@ -58,7 +58,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
   // Merge refs for both dnd-kit and focus engine
   const mergedRef = (node: HTMLDivElement | null) => {
     setNodeRef(node);
-    (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+    focusRef.current = node;
   };
 
   const style = {

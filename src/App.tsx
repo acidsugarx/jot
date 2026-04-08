@@ -26,6 +26,7 @@ import { resolveNormalKeyActions, useRegisteredNormalKeyActions } from '@/lib/fo
 import { useTaskStore } from '@/store/use-task-store';
 import { useTemplateStore } from '@/store/use-template-store';
 import { useYougileStore } from '@/store/use-yougile-store';
+import { useShallow } from 'zustand/react/shallow';
 import { todayDateInput, tokenize, toDateInputValue } from '@/lib/formatting';
 import { isTauriAvailable } from '@/lib/tauri';
 import { priorityOptions, priorityColor } from '@/lib/constants';
@@ -67,7 +68,13 @@ export function setCaptureKeysBlocked(v: boolean) { captureKeysBlocked = v; }
 // ── Inline Task Editor ────────────────────────────────────────────────────────
 
 function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }) {
-  const { updateTask, columns, fetchColumns } = useTaskStore();
+  const { updateTask, columns, fetchColumns } = useTaskStore(
+    useShallow((s) => ({
+      updateTask: s.updateTask,
+      columns: s.columns,
+      fetchColumns: s.fetchColumns,
+    }))
+  );
 
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || '');
@@ -129,8 +136,35 @@ function InlineTaskEditor({ task, onClose }: { task: Task; onClose: () => void }
     return () => window.removeEventListener('keydown', handler, true);
   }, [onClose, fieldRefs]);
 
+  // Debounced save: accumulate rapid changes into a single IPC call
+  const pendingPatchRef = useRef<Record<string, unknown>>({});
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const save = useCallback((patch: Record<string, unknown>) => {
-    void updateTask({ id: task.id, ...patch });
+    Object.assign(pendingPatchRef.current, patch);
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = setTimeout(() => {
+      const pending = pendingPatchRef.current;
+      pendingPatchRef.current = {};
+      flushTimerRef.current = null;
+      if (Object.keys(pending).length > 0) {
+        void updateTask({ id: task.id, ...pending });
+      }
+    }, 150);
+  }, [updateTask, task.id]);
+
+  // Flush any pending changes on unmount
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        const pending = pendingPatchRef.current;
+        pendingPatchRef.current = {};
+        if (Object.keys(pending).length > 0) {
+          void updateTask({ id: task.id, ...pending });
+        }
+      }
+    };
   }, [updateTask, task.id]);
 
   const handleTitleBlur = () => {
@@ -361,7 +395,17 @@ function App() {
     pickerModeRef.current = pickerMode;
     captureKeysBlocked = pickerMode !== 'none';
   }, [pickerMode]);
-  const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(new Set());
+  const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('jot:hiddenColumnIds');
+      if (stored) return new Set(JSON.parse(stored) as string[]);
+    } catch { /* ignore corrupt data */ }
+    return new Set();
+  });
+  // Persist hidden columns to localStorage
+  useEffect(() => {
+    localStorage.setItem('jot:hiddenColumnIds', JSON.stringify([...hiddenColumnIds]));
+  }, [hiddenColumnIds]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [nlpSuggestionIndex, setNlpSuggestionIndex] = useState(0);
   // Confirmation state for destructive actions (x=toggle, d=delete)
@@ -386,15 +430,23 @@ function App() {
     openLinkedNote,
     clearError: clearLocalError,
     listenForUpdates,
-  } = useTaskStore();
+  } = useTaskStore(
+    useShallow((s) => ({
+      tasks: s.tasks,
+      columns: s.columns,
+      settings: s.settings,
+      error: s.error,
+      fetchTasks: s.fetchTasks,
+      fetchSettings: s.fetchSettings,
+      createTask: s.createTask,
+      updateTaskStatus: s.updateTaskStatus,
+      deleteTask: s.deleteTask,
+      openLinkedNote: s.openLinkedNote,
+      clearError: s.clearError,
+      listenForUpdates: s.listenForUpdates,
+    }))
+  );
 
-  const yougileStore = useYougileStore();
-  const {
-    templates,
-    fetchTemplates,
-    error: templateError,
-    clearError: clearTemplateError,
-  } = useTemplateStore();
   const {
     yougileEnabled,
     activeSource,
@@ -417,7 +469,43 @@ function App() {
     selectTask: selectYougileTask,
     error: yougileError,
     clearError: clearYougileError,
-  } = yougileStore;
+    createTask: createYougileTask,
+    updateTask: updateYougileTask,
+    deleteTask: deleteYougileTask,
+  } = useYougileStore(
+    useShallow((s) => ({
+      yougileEnabled: s.yougileEnabled,
+      activeSource: s.activeSource,
+      setActiveSource: s.setActiveSource,
+      setYougileEnabled: s.setYougileEnabled,
+      yougileContext: s.yougileContext,
+      accounts: s.accounts,
+      projects: s.projects,
+      boards: s.boards,
+      columns: s.columns,
+      tasks: s.tasks,
+      fetchAccounts: s.fetchAccounts,
+      fetchProjects: s.fetchProjects,
+      fetchBoards: s.fetchBoards,
+      fetchColumns: s.fetchColumns,
+      fetchTasks: s.fetchTasks,
+      fetchUsers: s.fetchUsers,
+      hydrateSyncState: s.hydrateSyncState,
+      setYougileContext: s.setYougileContext,
+      selectTask: s.selectTask,
+      error: s.error,
+      clearError: s.clearError,
+      createTask: s.createTask,
+      updateTask: s.updateTask,
+      deleteTask: s.deleteTask,
+    }))
+  );
+  const {
+    templates,
+    fetchTemplates,
+    error: templateError,
+    clearError: clearTemplateError,
+  } = useTemplateStore();
 
   const isYougile = yougileEnabled && activeSource === 'yougile';
   const activeAccount = accounts.find((account) => account.id === yougileContext.accountId);
@@ -918,7 +1006,7 @@ function App() {
           )
             ? activeTemplate.columnId
             : null;
-          const task = await yougileStore.createTask({
+          const task = await createYougileTask({
             title: createDraftTitle,
             rawInput: query.trim() || undefined,
             columnId: templateColumnId ?? firstColumn.id,
@@ -963,13 +1051,13 @@ function App() {
     query,
     yougileColumns,
     yougileContext.boardId,
-    yougileStore,
+    createYougileTask,
   ]);
 
   const handleToggleStatus = useCallback(async (task: Task | YougileTask) => {
     try {
       if (isYougileTask(task)) {
-        await yougileStore.updateTask(task.id, { completed: !task.completed });
+        await updateYougileTask(task.id, { completed: !task.completed });
       } else {
         const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done';
         await updateTaskStatus({ id: task.id, status: newStatus });
@@ -977,19 +1065,19 @@ function App() {
     } catch (err) {
       console.error(err);
     }
-  }, [updateTaskStatus, yougileStore]);
+  }, [updateTaskStatus, updateYougileTask]);
 
   const handleDeleteTask = useCallback(async (taskId: string) => {
     try {
       if (isYougile) {
-        await yougileStore.deleteTask(taskId);
+        await deleteYougileTask(taskId);
       } else {
         await deleteTask(taskId);
       }
     } catch (err) {
       console.error(err);
     }
-  }, [deleteTask, isYougile, yougileStore]);
+  }, [deleteTask, isYougile, deleteYougileTask]);
 
   const handleOpenNote = useCallback(async (path: string) => {
     try { await openLinkedNote(path); } catch (err) { console.error(err); }
@@ -1663,10 +1751,10 @@ function App() {
                     value={`org-${account.id}`}
                     data-capture-index={idx}
                     onSelect={() => void handleSelectAccount(account.id)}
-                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    className={`flex h-9 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
-                        ? 'bg-zinc-900/80'
-                        : 'data-[selected=true]:bg-zinc-900/80'
+                        ? 'border-l-cyan-500 bg-zinc-900/80'
+                        : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
@@ -1692,10 +1780,10 @@ function App() {
                     value={`project-${project.id}`}
                     data-capture-index={idx}
                     onSelect={() => void handleSelectProject(project.id)}
-                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    className={`flex h-9 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
-                        ? 'bg-zinc-900/80'
-                        : 'data-[selected=true]:bg-zinc-900/80'
+                        ? 'border-l-cyan-500 bg-zinc-900/80'
+                        : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
@@ -1716,10 +1804,10 @@ function App() {
                     value={`board-${board.id}`}
                     data-capture-index={idx}
                     onSelect={() => void handleSelectBoard(board.id)}
-                    className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    className={`flex h-9 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
-                        ? 'bg-zinc-900/80'
-                        : 'data-[selected=true]:bg-zinc-900/80'
+                        ? 'border-l-cyan-500 bg-zinc-900/80'
+                        : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
@@ -1753,10 +1841,10 @@ function App() {
                       value={`template-${template.id}`}
                       data-capture-index={idx}
                       onSelect={() => handleSelectTemplate(template.id)}
-                      className={`flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm text-zinc-300 outline-none transition-colors ${
+                      className={`flex min-h-11 cursor-pointer items-center justify-between gap-3 border-l-2 px-3 py-2 text-sm text-zinc-300 outline-none transition-colors ${
                         mode === 'normal' && selectedIndex === idx
-                          ? 'bg-zinc-900/80'
-                          : 'data-[selected=true]:bg-zinc-900/80'
+                          ? 'border-l-cyan-500 bg-zinc-900/80'
+                          : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                       }`}
                     >
                       <div className="min-w-0 flex-1">
@@ -1784,10 +1872,10 @@ function App() {
                     value="manage-templates"
                     data-capture-index={templates.length}
                     onSelect={() => void handleAction('__manage-templates')}
-                    className={`flex h-10 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    className={`flex h-10 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === templates.length
-                        ? 'bg-zinc-900/80'
-                        : 'data-[selected=true]:bg-zinc-900/80'
+                        ? 'border-l-cyan-500 bg-zinc-900/80'
+                        : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
@@ -1826,10 +1914,10 @@ function App() {
                           return next;
                         });
                       }}
-                      className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      className={`flex h-9 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                         mode === 'normal' && selectedIndex === idx
-                          ? 'bg-zinc-900/80'
-                          : 'data-[selected=true]:bg-zinc-900/80'
+                          ? 'border-l-cyan-500 bg-zinc-900/80'
+                          : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                       }`}
                     >
                       <div className="flex items-center gap-2.5">
@@ -2006,10 +2094,10 @@ function App() {
                       value={action.id}
                       data-capture-index={itemIndex}
                       onSelect={() => void handleAction(action.id)}
-                      className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                      className={`group flex h-11 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                         mode === 'normal' && selectedIndex === itemIndex
-                          ? 'bg-zinc-900/80'
-                          : 'data-[selected=true]:bg-zinc-900/80'
+                          ? 'border-l-cyan-500 bg-zinc-900/80'
+                          : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                       }`}
                     >
                       <div className="flex items-center gap-3">
@@ -2034,10 +2122,10 @@ function App() {
                   value="create-task"
                   data-capture-index={0}
                   onSelect={() => void handleCreateTask()}
-                  className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                  className={`group flex h-11 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                     mode === 'normal' && selectedIndex === 0
-                      ? 'bg-zinc-900/80'
-                      : 'data-[selected=true]:bg-zinc-900/80'
+                      ? 'border-l-cyan-500 bg-zinc-900/80'
+                      : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                   }`}
                 >
                     <div className="flex items-center gap-3">
@@ -2053,10 +2141,10 @@ function App() {
                     value="save-template"
                     data-capture-index={1}
                     onSelect={() => void handleAction('__save-template')}
-                    className={`group flex h-11 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                    className={`group flex h-11 cursor-pointer items-center justify-between border-l-2 px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === 1
-                        ? 'bg-zinc-900/80'
-                        : 'data-[selected=true]:bg-zinc-900/80'
+                        ? 'border-l-cyan-500 bg-zinc-900/80'
+                        : 'border-l-transparent data-[selected=true]:border-l-cyan-500 data-[selected=true]:bg-zinc-900/80'
                     }`}
                   >
                     <div className="flex items-center gap-3">

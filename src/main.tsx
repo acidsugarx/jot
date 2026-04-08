@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import App from './App';
 import Settings from './Settings';
 import Dashboard from './Dashboard';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { FocusProvider } from './components/FocusProvider';
 import { useYougileStore } from './store/use-yougile-store';
 import type { AppSettings } from './types';
@@ -48,9 +49,11 @@ if (label === 'settings') {
 const needsKeyCapture = label === 'main' || label === 'dashboard';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <FocusProvider captureKeys={needsKeyCapture}>
-      {Page}
-    </FocusProvider>
-  </React.StrictMode>
+  <ErrorBoundary windowLabel={label}>
+    <React.StrictMode>
+      <FocusProvider captureKeys={needsKeyCapture}>
+        {Page}
+      </FocusProvider>
+    </React.StrictMode>
+  </ErrorBoundary>
 );

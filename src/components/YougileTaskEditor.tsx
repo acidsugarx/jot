@@ -10,6 +10,20 @@ import { sanitizeHtml } from '@/lib/sanitize';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { focusEngine } from '@/lib/focus-engine';
 import { useFocusable } from '@/hooks/use-focusable';
+import { useRichTextEditor, ToolbarBtn } from '@/hooks/use-rich-text-editor';
+import {
+  unixMsToDateInput,
+  dateInputToUnixMs,
+  looksLikeHtml,
+  normalizeChatHtml,
+  extractYougileAttachment,
+  isImageAttachmentUrl,
+  fileNameFromAttachmentUrl,
+  getAttachmentName,
+  normalizeStickerMap,
+  formatStickerValue,
+  cloneChecklists,
+} from '@/lib/yougile-editor';
 import type { YougileTask, YougileChecklist } from '@/types/yougile';
 
 // Wrapper that registers each editor field as a focusable node for j/k navigation
@@ -38,23 +52,6 @@ function YougileEditorField({ index, id: idProp, onActivate, onEnter, children }
     >
       {children(isSelected)}
     </div>
-  );
-}
-
-function ToolbarBtn({ icon: Icon, title, onMouseDown }: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  onMouseDown: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onMouseDown={(e) => { e.preventDefault(); onMouseDown(e); }}
-      className="rounded p-1 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-    >
-      <Icon className="h-3 w-3" />
-    </button>
   );
 }
 
@@ -131,147 +128,6 @@ interface YougileTaskEditorInnerProps {
   onNavigateToSubtask: (subtaskId: string) => void;
 }
 
-function unixMsToDateInput(ms: number | null | undefined): string {
-  if (!ms) return '';
-  try {
-    const d = new Date(ms);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  } catch {
-    return '';
-  }
-}
-
-function dateInputToUnixMs(value: string): number | undefined {
-  if (!value) return undefined;
-  try {
-    return new Date(value + 'T00:00:00').getTime();
-  } catch {
-    return undefined;
-  }
-}
-
-function looksLikeHtml(text: string): boolean {
-  return /<\/?[a-z][\s\S]*>/i.test(text);
-}
-
-const CHAT_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|heic|heif|avif)(?:$|[?#])/i;
-
-function resolveYougileFileUrl(rawPath: string): string {
-  const normalized = rawPath
-    .replace(/^\/?root\/#file:/i, '')
-    .replace(/^\/+/, '');
-  return `https://yougile.com/${normalized}`;
-}
-
-function normalizeChatHtml(html: string): string {
-  // First resolve all user-data URLs
-  let result = html.replace(
-    /\b(src|href)="((?:\/?root\/#file:)?\/?user-data\/[^"]+)"/gi,
-    (_match, attr: string, path: string) => `${attr}="${resolveYougileFileUrl(path)}"`
-  );
-  // Convert <a> tags that point to image files into <img> tags
-  result = result.replace(
-    /<a\b[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/gi,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    (_match, href: string, _label: string) => {
-      if (CHAT_IMAGE_EXT_RE.test(href)) {
-        return `<img src="${href}" alt="" style="max-width:100%;max-height:12rem;border-radius:4px;cursor:pointer" />`;
-      }
-      return _match;
-    }
-  );
-  return result;
-}
-
-interface ChatAttachment {
-  url: string;
-  fileName: string;
-}
-
-function fileNameFromAttachmentUrl(url: string): string {
-  const base = url.split('?')[0]?.split('#')[0] ?? url;
-  const parts = base.split('/');
-  const raw = parts[parts.length - 1] || base;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
-function extractYougileAttachment(text: string): ChatAttachment | null {
-  const match = text.match(/\/(?:root\/#file:)?\/?(user-data\/[a-f0-9-]+\/[^\s]+)/i);
-  if (!match?.[1]) return null;
-  const url = resolveYougileFileUrl(match[1]);
-  return {
-    url,
-    fileName: fileNameFromAttachmentUrl(url),
-  };
-}
-
-function isImageAttachmentUrl(url: string): boolean {
-  return CHAT_IMAGE_EXT_RE.test(url);
-}
-
-function getAttachmentName(attachment: File | string): string {
-  if (typeof attachment !== 'string') {
-    return attachment.name;
-  }
-  const parts = attachment.split(/[\\/]/);
-  return parts[parts.length - 1] || attachment;
-}
-
-
-function extractStickerValue(value: unknown): string | undefined {
-  if (typeof value === 'string' && value.trim()) {
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (value && typeof value === 'object') {
-    const candidate = value as Record<string, unknown>;
-    for (const key of ['title', 'name', 'value', 'id']) {
-      const nested = candidate[key];
-      if (typeof nested === 'string' && nested.trim()) {
-        return nested;
-      }
-    }
-  }
-  return undefined;
-}
-
-function normalizeStickerMap(stickers: Record<string, unknown> | undefined): Record<string, string> {
-  if (!stickers) return {};
-
-  return Object.entries(stickers).reduce<Record<string, string>>((acc, [key, value]) => {
-    const parsed = extractStickerValue(value);
-    if (parsed) {
-      acc[key] = parsed;
-    }
-    return acc;
-  }, {});
-}
-
-function formatStickerValue(value: unknown, fallback: string): string {
-  const parsed = extractStickerValue(value);
-  if (parsed) {
-    return parsed;
-  }
-  try {
-    return value && typeof value === 'object' ? JSON.stringify(value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function cloneChecklists(checklists: YougileChecklist[] | undefined): YougileChecklist[] {
-  return checklists ? structuredClone(checklists) : [];
-}
-
 function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigateBack, onNavigateToSubtask }: YougileTaskEditorInnerProps) {
   const {
     updateTask,
@@ -299,12 +155,34 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
   } = useYougileStore();
 
   const [title, setTitle] = useState(task.title);
-  const [descHtml, setDescHtml] = useState(task.description ?? '');
-  const [showLinkInput, setShowLinkInput] = useState(false);
-  const [linkDraft, setLinkDraft] = useState('https://');
-  const descEditorRef = useRef<HTMLDivElement>(null);
-  const linkInputRef = useRef<HTMLInputElement>(null);
-  const pendingLinkRangeRef = useRef<Range | null>(null);
+
+  const {
+    descEditorRef,
+    descHtml,
+    setDescHtml,
+    descSanitizedHtml,
+    setShowLinkInput,
+    setLinkDraft,
+    pendingLinkRangeRef,
+    execFormatCommand,
+    insertCheckbox,
+    openLinkInput,
+    handleDescriptionBlur,
+    handleDescriptionKeyDown,
+    handleSmartPaste,
+    handleContentClick,
+    linkInputJSX,
+  } = useRichTextEditor({
+    onBlur: useCallback((html: string) => {
+      if (html !== (task.description ?? '').trim()) {
+        void updateTask(task.id, { description: html || undefined });
+      }
+    }, [task.id, task.description, updateTask]),
+    onLinkClick: useCallback((href: string) => {
+      void invoke('open_url', { url: href });
+    }, []),
+  });
+
   const [columnId, setColumnId] = useState(task.columnId ?? '');
   const [deadlineValue, setDeadlineValue] = useState(
     unixMsToDateInput(task.deadline?.deadline ?? null)
@@ -556,166 +434,6 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
       setTitle(task.title);
     }
   };
-
-  const handleDescriptionBlur = useCallback(() => {
-    const el = descEditorRef.current;
-    if (!el) return;
-    const newHtml = el.innerHTML.trim();
-    if (newHtml !== (task.description ?? '').trim()) {
-      setDescHtml(newHtml);
-      void updateTask(task.id, { description: newHtml || undefined });
-    }
-  }, [task.id, task.description, updateTask]);
-
-  const execFormatCommand = useCallback((command: string, value?: string) => {
-    descEditorRef.current?.focus();
-    document.execCommand(command, false, value);
-  }, []);
-
-  const insertCheckbox = useCallback(() => {
-    descEditorRef.current?.focus();
-    // Yougile CKEditor 5 compatible checkbox HTML (without-description variant)
-    document.execCommand(
-      'insertHTML',
-      false,
-      '<ul class="todo-list"><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p> </p></li></ul>&nbsp;'
-    );
-  }, []);
-
-  const openLinkInput = useCallback(() => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-
-    pendingLinkRangeRef.current = sel.getRangeAt(0).cloneRange();
-    const selectedText = sel.toString().trim();
-    setLinkDraft(/^https?:\/\//i.test(selectedText) ? selectedText : 'https://');
-    setShowLinkInput(true);
-    requestAnimationFrame(() => linkInputRef.current?.focus());
-  }, []);
-
-  const applyLink = useCallback(() => {
-    const href = linkDraft.trim();
-    if (!href) {
-      setShowLinkInput(false);
-      return;
-    }
-
-    let parsedHref: URL;
-    try {
-      parsedHref = new URL(href);
-    } catch {
-      return;
-    }
-
-    if (!/^https?:$/i.test(parsedHref.protocol)) {
-      return;
-    }
-
-    const selection = window.getSelection();
-    const pendingRange = pendingLinkRangeRef.current;
-    if (selection && pendingRange) {
-      selection.removeAllRanges();
-      selection.addRange(pendingRange);
-    }
-
-    descEditorRef.current?.focus();
-    if (selection?.rangeCount && !selection.isCollapsed) {
-      document.execCommand('createLink', false, parsedHref.toString());
-    } else {
-      document.execCommand(
-        'insertHTML',
-        false,
-        `<a href="${parsedHref.toString()}">${parsedHref.toString()}</a>`,
-      );
-    }
-
-    setShowLinkInput(false);
-    setLinkDraft('https://');
-    pendingLinkRangeRef.current = null;
-  }, [linkDraft]);
-
-  const handleDescriptionKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    const mod = e.ctrlKey || e.metaKey;
-
-    // Ctrl+B bold
-    if (mod && e.key === 'b') { e.preventDefault(); execFormatCommand('bold'); return; }
-    // Ctrl+I italic
-    if (mod && e.key === 'i') { e.preventDefault(); execFormatCommand('italic'); return; }
-    // Ctrl+U underline
-    if (mod && e.key === 'u') { e.preventDefault(); execFormatCommand('underline'); return; }
-    // Ctrl+Shift+S strikethrough
-    if (mod && e.shiftKey && e.key === 'S') { e.preventDefault(); execFormatCommand('strikeThrough'); return; }
-    // Ctrl+K insert link
-    if (mod && e.key === 'k') { e.preventDefault(); openLinkInput(); return; }
-    // Ctrl+Shift+C insert checkbox
-    if (mod && e.shiftKey && e.key === 'C') { e.preventDefault(); insertCheckbox(); return; }
-    // Tab indent
-    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); execFormatCommand('indent'); return; }
-    // Shift+Tab outdent
-    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); execFormatCommand('outdent'); return; }
-
-    // Enter inside a checkbox line → create new checkbox
-    if (e.key === 'Enter' && !e.shiftKey) {
-      // Check for Yougile CKEditor todo-list format (both with/without description variants)
-      const todoItem = (e.target as HTMLElement).closest?.('.todo-list__label, .todo-list__label_without-description');
-      if (todoItem) {
-        e.preventDefault();
-        document.execCommand(
-          'insertHTML', false,
-          '</span></p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
-        );
-        return;
-      }
-      // Also handle when cursor is in the <p> sibling of a checkbox
-      const liParent = (e.target as HTMLElement).closest?.('ul.todo-list > li');
-      if (liParent && liParent.querySelector('input[type="checkbox"]')) {
-        e.preventDefault();
-        document.execCommand(
-          'insertHTML', false,
-          '</p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
-        );
-      }
-    }
-  }, [execFormatCommand, insertCheckbox, openLinkInput]);
-
-  const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
-    // First try HTML paste (preserves formatting from other task descriptions)
-    const html = e.clipboardData?.getData('text/html');
-    if (html) {
-      e.preventDefault();
-      const sanitized = sanitizeHtml(html);
-      document.execCommand('insertHTML', false, sanitized);
-      // Update descHtml immediately so React's next render doesn't overwrite pasted content
-      requestAnimationFrame(() => {
-        const current = descEditorRef.current?.innerHTML ?? '';
-        setDescHtml(current);
-      });
-      return;
-    }
-
-    const text = e.clipboardData?.getData('text/plain');
-    if (!text) return;
-
-    e.preventDefault();
-
-    // Auto-detect URLs in pasted text → wrap in <a> tags
-    const urlRegex = /(https?:\/\/[^\s<]+)/g;
-    const hasUrls = urlRegex.test(text);
-
-    if (hasUrls) {
-      // Reset regex state (lastIndex)
-      const matches = text.match(/(https?:\/\/[^\s<]+)/g) ?? [];
-      let result = text;
-      for (const url of matches) {
-        const escaped = url.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        result = result.replace(url, `<a href="${escaped}">${escaped}</a>`);
-      }
-      document.execCommand('insertHTML', false, result);
-    } else {
-      // Plain text — insert as-is (escapes handled by browser)
-      document.execCommand('insertText', false, text);
-    }
-  }, []);
 
   useEffect(() => {
     const rawDescription = task.description ?? '';
@@ -1034,11 +752,6 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     },
     {}
   ), [stickerDefinitions]);
-  // Sanitized HTML for initial render into contentEditable
-  const descSanitizedHtml = useMemo(
-    () => sanitizeHtml(descHtml),
-    [descHtml]
-  );
 
   // Fetch and resolve subtask IDs to actual task objects
   const [subtaskTasks, setSubtaskTasks] = useState<YougileTask[]>([]);
@@ -1180,81 +893,11 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
                 onBlur={handleDescriptionBlur}
                 onKeyDown={handleDescriptionKeyDown}
                 onPaste={handleSmartPaste}
-                onClick={(e) => {
-                  // Checkbox toggle (Yougile CKEditor format — both variants)
-                  // The checkbox is inside <span contenteditable="false"> so the click
-                  // target might be the wrapper span, not the input itself.
-                  const target = e.target as HTMLElement;
-                  let checkbox: HTMLInputElement | null = null;
-                  if (target instanceof HTMLInputElement && target.type === 'checkbox') {
-                    checkbox = target;
-                  } else {
-                    // Check if clicked on the contenteditable=false wrapper around checkbox
-                    const wrapper = target.closest('span[contenteditable="false"]');
-                    if (wrapper) {
-                      checkbox = wrapper.querySelector('input[type="checkbox"]');
-                    }
-                    if (!checkbox) {
-                      checkbox = target.closest('input[type="checkbox"]');
-                    }
-                  }
-                  if (checkbox) {
-                    e.preventDefault();
-                    checkbox.checked = !checkbox.checked;
-                    if (checkbox.checked) {
-                      checkbox.setAttribute('checked', 'checked');
-                    } else {
-                      checkbox.removeAttribute('checked');
-                    }
-                    // Mark the parent <li> with a data attribute for CSS styling
-                    const li = checkbox.closest('li');
-                    if (li) {
-                      li.dataset.checked = checkbox.checked ? 'true' : 'false';
-                    }
-                    return;
-                  }
-                  // Link → open in browser
-                  const anchor = (e.target as HTMLElement).closest('a');
-                  if (anchor?.href) {
-                    e.preventDefault();
-                    void invoke('open_url', { url: anchor.href });
-                  }
-                }}
+                onClick={handleContentClick}
                 data-placeholder="Add a description…"
                 spellCheck={false}
               />
-              {showLinkInput && (
-                <div className="mt-2 flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
-                  <input
-                    ref={linkInputRef}
-                    type="url"
-                    value={linkDraft}
-                    onChange={(event) => setLinkDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        applyLink();
-                      }
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        setShowLinkInput(false);
-                        setLinkDraft('https://');
-                        pendingLinkRangeRef.current = null;
-                        descEditorRef.current?.focus();
-                      }
-                    }}
-                    placeholder="https://example.com"
-                    className="flex-1 rounded border border-zinc-800 bg-black/20 px-2 py-1 font-mono text-xs text-zinc-200 outline-none placeholder:text-zinc-600"
-                  />
-                  <button
-                    type="button"
-                    onClick={applyLink}
-                    className="rounded border border-zinc-700 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
-                  >
-                    Apply
-                  </button>
-                </div>
-              )}
+              {linkInputJSX}
             </div>
           )}
         </YougileEditorField>

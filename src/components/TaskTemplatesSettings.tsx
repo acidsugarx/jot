@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentType, MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { sanitizeHtml } from '@/lib/sanitize';
 import {
   Bold,
   Check,
@@ -21,9 +21,9 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { sanitizeHtml } from '@/lib/sanitize';
 import { consumeTemplateIntent } from '@/lib/settings-navigation';
 import { YOUGILE_TASK_COLOR_OPTIONS, getYougileTaskColorValue } from '@/lib/yougile';
+import { ToolbarBtn, useRichTextEditor } from '@/hooks/use-rich-text-editor';
 import { useTemplateStore } from '@/store/use-template-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import type { CreateTaskTemplateInput, TaskTemplate, YougileChecklist } from '@/types/yougile';
@@ -84,28 +84,7 @@ function checklistStats(checklists: YougileChecklist[]) {
   return { total, completed };
 }
 
-function ToolbarBtn({ icon: Icon, title, onMouseDown }: {
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  onMouseDown: (event: MouseEvent) => void;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onMouseDown={(event) => {
-        event.preventDefault();
-        onMouseDown(event);
-      }}
-      className="rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
-    >
-      <Icon className="h-3 w-3" />
-    </button>
-  );
-}
-
 export function TaskTemplatesSettings() {
-  const descEditorRef = useRef<HTMLDivElement>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [draft, setDraft] = useState<TemplateDraft>(() => emptyDraft());
@@ -241,17 +220,23 @@ export function TaskTemplatesSettings() {
   const isSaveDisabled = draft.title.trim().length === 0 || isLoading;
   const draftColorValue = getYougileTaskColorValue(draft.color);
 
-  const [descHtml, setDescHtml] = useState(draft.description);
-  const [showLinkInput, setShowLinkInput] = useState(false);
-  const [linkDraft, setLinkDraft] = useState('https://');
-  const linkInputRef = useRef<HTMLInputElement>(null);
-  const pendingLinkRangeRef = useRef<Range | null>(null);
-
-  // Sanitized HTML for contentEditable rendering
-  const descSanitizedHtml = useMemo(
-    () => sanitizeHtml(descHtml) || '<p><br></p>',
-    [descHtml]
-  );
+  const {
+    descEditorRef,
+    setDescHtml,
+    descSanitizedHtml,
+    execFormatCommand,
+    insertCheckbox,
+    openLinkInput,
+    handleDescriptionBlur,
+    handleDescriptionKeyDown,
+    handleSmartPaste,
+    handleContentClick,
+    linkInputJSX,
+  } = useRichTextEditor({
+    onBlur: useCallback((html: string) => {
+      setDraft((current) => ({ ...current, description: html }));
+    }, []),
+  });
 
   // Sync descHtml when draft.description changes externally (template selection, intent)
   useEffect(() => {
@@ -262,151 +247,6 @@ export function TaskTemplatesSettings() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to external draft changes
   }, [draft.description]);
-
-  const handleDescriptionBlur = useCallback(() => {
-    const html = descEditorRef.current?.innerHTML ?? '';
-    setDescHtml(html);
-    setDraft((current) => ({ ...current, description: sanitizeHtml(html) }));
-  }, []);
-
-  const execFormatCommand = useCallback((command: string, value?: string) => {
-    descEditorRef.current?.focus();
-    document.execCommand(command, false, value);
-  }, []);
-
-  const insertCheckbox = useCallback(() => {
-    descEditorRef.current?.focus();
-    // Yougile CKEditor 5 compatible checkbox HTML (without-description variant)
-    document.execCommand(
-      'insertHTML',
-      false,
-      '<ul class="todo-list"><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p> </p></li></ul>&nbsp;'
-    );
-  }, []);
-
-  const openLinkInput = useCallback(() => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    pendingLinkRangeRef.current = sel.getRangeAt(0).cloneRange();
-    const selectedText = sel.toString().trim();
-    setLinkDraft(/^https?:\/\//i.test(selectedText) ? selectedText : 'https://');
-    setShowLinkInput(true);
-    requestAnimationFrame(() => linkInputRef.current?.focus());
-  }, []);
-
-  const applyLink = useCallback(() => {
-    const href = linkDraft.trim();
-    if (!href) {
-      setShowLinkInput(false);
-      return;
-    }
-
-    let parsedHref: URL;
-    try {
-      parsedHref = new URL(href);
-    } catch {
-      return;
-    }
-
-    if (!/^https?:$/i.test(parsedHref.protocol)) {
-      return;
-    }
-
-    const selection = window.getSelection();
-    const pendingRange = pendingLinkRangeRef.current;
-    if (selection && pendingRange) {
-      selection.removeAllRanges();
-      selection.addRange(pendingRange);
-    }
-
-    descEditorRef.current?.focus();
-    if (selection?.rangeCount && !selection.isCollapsed) {
-      document.execCommand('createLink', false, parsedHref.toString());
-    } else {
-      document.execCommand(
-        'insertHTML',
-        false,
-        `<a href="${parsedHref.toString()}">${parsedHref.toString()}</a>`
-      );
-    }
-
-    setShowLinkInput(false);
-    setLinkDraft('https://');
-    pendingLinkRangeRef.current = null;
-  }, [linkDraft]);
-
-  const handleDescriptionKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    const mod = e.ctrlKey || e.metaKey;
-
-    if (mod && e.key === 'b') { e.preventDefault(); execFormatCommand('bold'); return; }
-    if (mod && e.key === 'i') { e.preventDefault(); execFormatCommand('italic'); return; }
-    if (mod && e.key === 'u') { e.preventDefault(); execFormatCommand('underline'); return; }
-    if (mod && e.shiftKey && e.key === 'S') { e.preventDefault(); execFormatCommand('strikeThrough'); return; }
-    if (mod && e.key === 'k') { e.preventDefault(); openLinkInput(); return; }
-    if (mod && e.shiftKey && e.key === 'C') { e.preventDefault(); insertCheckbox(); return; }
-    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); execFormatCommand('indent'); return; }
-    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); execFormatCommand('outdent'); return; }
-
-    // Enter inside a checkbox line → create new checkbox
-    if (e.key === 'Enter' && !e.shiftKey) {
-      // Check for Yougile CKEditor todo-list format (both with/without description variants)
-      const todoItem = (e.target as HTMLElement).closest?.('.todo-list__label, .todo-list__label_without-description');
-      if (todoItem) {
-        e.preventDefault();
-        document.execCommand(
-          'insertHTML', false,
-          '</span></p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
-        );
-        return;
-      }
-      // Also handle when cursor is in the <p> sibling of a checkbox
-      const liParent = (e.target as HTMLElement).closest?.('ul.todo-list > li');
-      if (liParent && liParent.querySelector('input[type="checkbox"]')) {
-        e.preventDefault();
-        document.execCommand(
-          'insertHTML', false,
-          '</p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
-        );
-      }
-    }
-  }, [execFormatCommand, insertCheckbox, openLinkInput]);
-
-  const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
-    // First try HTML paste (preserves formatting from other task descriptions)
-    const html = e.clipboardData?.getData('text/html');
-    if (html) {
-      e.preventDefault();
-      const sanitized = sanitizeHtml(html);
-      document.execCommand('insertHTML', false, sanitized);
-      // Update descHtml immediately so React's next render doesn't overwrite pasted content
-      requestAnimationFrame(() => {
-        const current = descEditorRef.current?.innerHTML ?? '';
-        setDescHtml(current);
-      });
-      return;
-    }
-
-    const text = e.clipboardData?.getData('text/plain');
-    if (!text) return;
-
-    e.preventDefault();
-
-    // Auto-detect URLs in pasted text → wrap in <a> tags
-    const urlRegex = /(https?:\/\/[^\s<]+)/g;
-    const hasUrls = urlRegex.test(text);
-
-    if (hasUrls) {
-      const matches = text.match(/(https?:\/\/[^\s<]+)/g) ?? [];
-      let result = text;
-      for (const url of matches) {
-        const escaped = url.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        result = result.replace(url, `<a href="${escaped}">${escaped}</a>`);
-      }
-      document.execCommand('insertHTML', false, result);
-    } else {
-      document.execCommand('insertText', false, text);
-    }
-  }, []);
 
   const selectTemplate = useCallback((template: TaskTemplate) => {
     setIsCreatingNew(false);
@@ -718,36 +558,7 @@ export function TaskTemplatesSettings() {
               </div>
 
               {/* Link input popover */}
-              {showLinkInput && (
-                <div className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1">
-                  <input
-                    ref={linkInputRef}
-                    type="text"
-                    value={linkDraft}
-                    onChange={(e) => setLinkDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
-                      if (e.key === 'Escape') { setShowLinkInput(false); }
-                    }}
-                    placeholder="https://"
-                    className="h-6 min-w-0 flex-1 bg-transparent text-xs text-zinc-200 outline-none placeholder:text-zinc-600"
-                  />
-                  <button
-                    type="button"
-                    onClick={applyLink}
-                    className="rounded px-1.5 py-0.5 text-xs text-cyan-400 hover:bg-zinc-800"
-                  >
-                    Apply
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowLinkInput(false)}
-                    className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-800"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
+              {linkInputJSX}
 
               <div
                 ref={descEditorRef}
@@ -757,35 +568,7 @@ export function TaskTemplatesSettings() {
                 onBlur={handleDescriptionBlur}
                 onKeyDown={handleDescriptionKeyDown}
                 onPaste={handleSmartPaste}
-                onClick={(e) => {
-                  // Checkbox toggle (Yougile CKEditor format — both variants)
-                  const target = e.target as HTMLElement;
-                  let checkbox: HTMLInputElement | null = null;
-                  if (target instanceof HTMLInputElement && target.type === 'checkbox') {
-                    checkbox = target;
-                  } else {
-                    const wrapper = target.closest('span[contenteditable="false"]');
-                    if (wrapper) {
-                      checkbox = wrapper.querySelector('input[type="checkbox"]');
-                    }
-                    if (!checkbox) {
-                      checkbox = target.closest('input[type="checkbox"]');
-                    }
-                  }
-                  if (checkbox) {
-                    e.preventDefault();
-                    checkbox.checked = !checkbox.checked;
-                    if (checkbox.checked) {
-                      checkbox.setAttribute('checked', 'checked');
-                    } else {
-                      checkbox.removeAttribute('checked');
-                    }
-                    const li = checkbox.closest('li');
-                    if (li) {
-                      li.dataset.checked = checkbox.checked ? 'true' : 'false';
-                    }
-                  }
-                }}
+                onClick={handleContentClick}
                 className="prose-jot prose-jot-yougile prose-jot-editor min-h-[140px] rounded-xl border border-zinc-800 bg-[#111111] px-3 py-2 text-sm text-zinc-200 outline-none"
                 data-placeholder="Add a description…"
                 spellCheck={false}
