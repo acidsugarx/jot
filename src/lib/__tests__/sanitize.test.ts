@@ -62,6 +62,40 @@ describe('sanitizeHtml', () => {
     expect(clean).toContain('data-is-checked="true"');
   });
 
+  it('strips inline color styles that would break dark theme', () => {
+    const clean = sanitizeHtml(
+      '<span style="color: rgb(0, 0, 0); font-weight: bold">text</span>',
+    );
+    expect(clean).not.toContain('color:');
+    expect(clean).toContain('font-weight: bold');
+    expect(clean).toContain('text');
+  });
+
+  it('strips background-color from inline styles', () => {
+    const clean = sanitizeHtml(
+      '<span style="background-color: white; font-style: italic">text</span>',
+    );
+    expect(clean).not.toContain('background-color:');
+    expect(clean).toContain('font-style: italic');
+    expect(clean).toContain('text');
+  });
+
+  it('strips shorthand background property with color value', () => {
+    const clean = sanitizeHtml(
+      '<span style="background: yellow">text</span>',
+    );
+    expect(clean).not.toContain('background:');
+    expect(clean).toContain('text');
+  });
+
+  it('removes style attribute entirely when only color properties remain', () => {
+    const clean = sanitizeHtml(
+      '<span style="color: black; background-color: white">text</span>',
+    );
+    expect(clean).not.toContain('style=');
+    expect(clean).toContain('text');
+  });
+
   it('strips event handler attributes', () => {
     const clean = sanitizeHtml(
       '<div onmouseover="alert(1)" onload="evil()">content</div>',

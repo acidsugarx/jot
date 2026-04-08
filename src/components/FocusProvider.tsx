@@ -10,6 +10,7 @@ import {
 import { resolveNormalKeyActions } from '@/lib/focus-actions';
 import { FocusEngineContext } from '@/components/focus-engine-context';
 import { ModeIndicator } from '@/components/ModeIndicator';
+import { captureKeysBlocked } from '@/App';
 
 interface FocusProviderProps {
   children: ReactNode;
@@ -30,6 +31,8 @@ export function FocusProvider({
     if (!captureKeys) return;
 
     const handler = (event: KeyboardEvent) => {
+      // Skip when capture overlay has a picker open — App.tsx handles those keys
+      if (captureKeysBlocked) return;
       const prevMode = engine.getState().mode;
       const result = dispatchFocusKey(engine, event, resolveNormalKeyActions(actions));
       if (result.stopPropagation) {

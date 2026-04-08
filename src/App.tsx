@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -21,6 +21,7 @@ import {
 import { Command } from 'cmdk';
 import { YougileTaskEditor } from '@/components/YougileTaskEditor';
 import { dispatchFocusKey, focusEngine } from '@/lib/focus-engine';
+import { detectNlpContext } from '@/hooks/use-nlp-suggestions';
 import { resolveNormalKeyActions, useRegisteredNormalKeyActions } from '@/lib/focus-actions';
 import { useTaskStore } from '@/store/use-task-store';
 import { useTemplateStore } from '@/store/use-template-store';
@@ -56,6 +57,12 @@ const EDITOR_HEIGHT = 340;
 function isYougileTask(task: Task | YougileTask): task is YougileTask {
   return 'columnId' in task && (task as YougileTask).columnId !== undefined;
 }
+
+/** Module-level flag to block FocusProvider from dispatching keys when capture overlay
+ *  has a picker open. This is needed because FocusProvider registers a capture-phase
+ *  listener that fires before App.tsx's handler. */
+export let captureKeysBlocked = false;
+export function setCaptureKeysBlocked(v: boolean) { captureKeysBlocked = v; }
 
 // ── Inline Task Editor ────────────────────────────────────────────────────────
 
@@ -348,8 +355,15 @@ function App() {
   const [mode, setMode] = useState<CaptureMode>('insert');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pickerMode, setPickerMode] = useState<PickerMode>('none');
+  const pickerModeRef = useRef<PickerMode>('none');
+  // Keep captureKeysBlocked in sync with picker mode for FocusProvider
+  useLayoutEffect(() => {
+    pickerModeRef.current = pickerMode;
+    captureKeysBlocked = pickerMode !== 'none';
+  }, [pickerMode]);
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [nlpSuggestionIndex, setNlpSuggestionIndex] = useState(0);
   // Confirmation state for destructive actions (x=toggle, d=delete)
   const [pendingConfirm, setPendingConfirm] = useState<{ action: 'toggle' | 'delete'; taskId: string; taskTitle: string } | null>(null);
   const pendingConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -422,6 +436,27 @@ function App() {
       return task.status !== 'done' && !hiddenColumnIds.has(task.status);
     });
   }, [isYougile, visibleYougileTasks, tasks, hiddenColumnIds]);
+
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const task of tasks) {
+      for (const tag of task.tags) tagSet.add(tag);
+    }
+    return Array.from(tagSet).sort();
+  }, [tasks]);
+
+  const nlpState = useMemo(
+    () => mode === 'insert' && query.length > 0
+      ? detectNlpContext(query, query.length, allTags)
+      : null,
+    [mode, query, allTags],
+  );
+
+  const nlpStateKey = nlpState ? `${nlpState.type}:${nlpState.filter}` : '';
+  useEffect(() => {
+    setNlpSuggestionIndex(0);
+  }, [nlpStateKey]);
+
   const createDraftTitle = query.trim() || activeTemplate?.title.trim() || '';
   const hasCreateDraft = createDraftTitle.length > 0;
   const visibleError = templateError ?? (
@@ -726,8 +761,10 @@ function App() {
         contentHeight = EDITOR_HEIGHT;
       }
     } else if (hasCreateDraft) {
-      // "Create task" item
-      contentHeight = GROUP_HEADER_HEIGHT + ACTION_ITEM_HEIGHT;
+      const nlpHeight = nlpState
+        ? GROUP_HEADER_HEIGHT + nlpState.suggestions.length * ITEM_HEIGHT + 24
+        : 0;
+      contentHeight = nlpHeight + GROUP_HEADER_HEIGHT + ACTION_ITEM_HEIGHT;
     } else {
       const taskCount = Math.min(activeTasks.length, MAX_VISIBLE_TASKS);
       const tasksHeight = taskCount > 0 ? GROUP_HEADER_HEIGHT + taskCount * ITEM_HEIGHT : 0;
@@ -757,6 +794,7 @@ function App() {
     editingTask,
     editingYougileTask,
     hasCreateDraft,
+    nlpState,
     visibleError,
     statusMessage,
   ]);
@@ -1235,6 +1273,7 @@ function App() {
               });
               return;
             }
+            // For non-column pickers, x falls through to task toggle
             break;
           case 'Escape':
             e.preventDefault();
@@ -1252,6 +1291,9 @@ function App() {
             if (!e.metaKey && !e.ctrlKey) e.preventDefault();
             return;
         }
+        // Any key that breaks out of the switch (e.g. 'x' in non-column pickers)
+        // must not fall through to the NORMAL mode handler
+        return;
       }
 
       // NORMAL mode (no picker) — handle navigation locally, delegate actions to focus engine
@@ -1317,8 +1359,8 @@ function App() {
       // We subscribe to engine mode changes above to sync captureMode
     };
 
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
   }, [
     editingTask,
     handleAction,
@@ -1470,6 +1512,28 @@ function App() {
                   if (mode !== 'insert') setMode('insert');
                 }}
                 onKeyDown={(e) => {
+                  // NLP suggestion navigation & acceptance
+                  if (nlpState && mode === 'insert') {
+                    if (e.key === 'Tab') {
+                      e.preventDefault();
+                      const suggestion = nlpState.suggestions[nlpSuggestionIndex];
+                      if (suggestion) {
+                        const before = query.slice(0, nlpState.tokenStart);
+                        setQuery(before + suggestion.replacement + ' ');
+                      }
+                      return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setNlpSuggestionIndex((i) => Math.min(nlpState.suggestions.length - 1, i + 1));
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setNlpSuggestionIndex((i) => Math.max(0, i - 1));
+                      return;
+                    }
+                  }
                   // Tab — suppress browser tab behavior
                   if (e.key === 'Tab') {
                     e.preventDefault();
@@ -1792,6 +1856,49 @@ function App() {
               </Command.Group>
             )}
 
+            {pickerMode === 'none' && nlpState && nlpState.suggestions.length > 0 && (
+              <Command.Group
+                heading={
+                  nlpState.type === 'tag'
+                    ? 'Tags'
+                    : nlpState.type === 'priority'
+                      ? 'Priority'
+                      : 'Quick Actions'
+                }
+                className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
+              >
+                {nlpState.suggestions.map((suggestion, idx) => (
+                  <div
+                    key={suggestion.id}
+                    onClick={() => {
+                      const before = query.slice(0, nlpState.tokenStart);
+                      setQuery(before + suggestion.replacement + ' ');
+                      requestAnimationFrame(() => inputRef.current?.focus());
+                    }}
+                    className={`flex h-9 cursor-pointer items-center gap-2.5 px-3 text-sm outline-none transition-colors ${
+                      nlpSuggestionIndex === idx
+                        ? 'bg-zinc-900/80 text-zinc-200'
+                        : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
+                    }`}
+                    onMouseEnter={() => setNlpSuggestionIndex(idx)}
+                  >
+                    <span className={`font-mono text-xs font-medium ${suggestion.accentClass ?? 'text-cyan-400'}`}>
+                      {suggestion.label}
+                    </span>
+                    {suggestion.hint && (
+                      <span className="flex-1 text-right text-[11px] text-zinc-600">
+                        {suggestion.hint}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                <div className="px-3 py-1.5 font-mono text-[10px] text-zinc-700">
+                  <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1">tab</kbd> accept ·{' '}
+                  <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1">↑↓</kbd> navigate
+                </div>
+              </Command.Group>
+            )}
+
             {pickerMode === 'none' && !hasCreateDraft && activeTasks.length > 0 && (
               <Command.Group
                 heading={isYougile ? 'Yougile Tasks' : 'Tasks'}
@@ -1974,6 +2081,14 @@ function App() {
                 <div className="flex items-center gap-2">
                   <span>↵ {hasCreateDraft ? 'create' : 'edit'}</span>
                   <span className="text-zinc-800">·</span>
+                  {nlpState ? (
+                    <>
+                      <span className="text-cyan-500/70">tab accept</span>
+                      <span className="text-zinc-800">·</span>
+                      <span>↑↓ suggestions</span>
+                      <span className="text-zinc-800">·</span>
+                    </>
+                  ) : null}
                   <span>⌘, settings</span>
                   <span className="text-zinc-800">·</span>
                   <span>esc {hasQuery || activeTemplate ? 'clear' : 'navigate'}</span>

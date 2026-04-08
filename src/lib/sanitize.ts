@@ -20,6 +20,26 @@ purify.setConfig({
   ALLOW_DATA_ATTR: true,
 });
 
+/**
+ * Inline styles that would force text/background colors, breaking dark-theme
+ * rendering.  We strip them so the content inherits the app's theme colors.
+ */
+const STRIP_COLOR_RE = /(?:^|;)\s*(?:color|background(?:-color)?)\s*:[^;]*/gi;
+
+function stripColorStyles(html: string): string {
+  // Replace color/background-color declarations inside style="..." attributes
+  return html.replace(
+    /(<[^>]+\sstyle=)("[^"]*"|'[^']*')/gi,
+    (_match, prefix: string, quoted: string) => {
+      const quote = quoted[0];
+      const inner = quoted.slice(1, -1);
+      const cleaned = inner.replace(STRIP_COLOR_RE, '').replace(/;{2,}/g, ';').replace(/^[;\s]+/, '').replace(/[;\s]+$/, '');
+      return cleaned ? `${prefix}${quote}${cleaned}${quote}` : '';
+    },
+  );
+}
+
 export function sanitizeHtml(dirty: string): string {
-  return purify.sanitize(dirty);
+  const clean = purify.sanitize(dirty);
+  return stripColorStyles(clean);
 }
