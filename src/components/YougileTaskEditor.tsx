@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { X, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon, Bold, Italic, Strikethrough, Link, List, ListOrdered, Code } from 'lucide-react';
+import { X, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon, Bold, Italic, Strikethrough, Link, List, ListOrdered, Code, ArrowLeft, Plus, Trash2, ListChecks } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
@@ -62,6 +62,73 @@ export interface YougileTaskEditorProps {
   task: YougileTask;
   onClose: () => void;
   embedded?: boolean;
+}
+
+// Navigation wrapper — manages parent↔subtask drill-down
+export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditorProps) {
+  const [navStack, setNavStack] = useState<YougileTask[]>([]);
+  const [navigatedTask, setNavigatedTask] = useState<YougileTask | null>(null);
+  const { fetchSubtaskTasks, tasks: yougileTasks } = useYougileStore();
+
+  const activeTask = navStack.length > 0 && navigatedTask ? navigatedTask : task;
+  const parentTask = navStack.length > 0 ? navStack[navStack.length - 1] : null;
+
+  const handleNavigateToSubtask = useCallback(async (subtaskId: string) => {
+    // Try to find in store first
+    let subtask = yougileTasks.find((t) => t.id === subtaskId) ?? null;
+    if (!subtask) {
+      const fetched = await fetchSubtaskTasks([subtaskId]);
+      subtask = fetched[0] ?? null;
+    }
+    if (!subtask) return;
+
+    setNavStack((prev) => [...prev, activeTask]);
+    setNavigatedTask(subtask);
+  }, [activeTask, fetchSubtaskTasks, yougileTasks]);
+
+  const handleNavigateBack = useCallback(() => {
+    setNavStack((prev) => {
+      const next = prev.slice(0, -1);
+      // If stack is now empty, clear navigated task so we show the original prop
+      if (next.length === 0) {
+        setNavigatedTask(null);
+      } else {
+        // Set the navigated task to the new top of stack
+        setNavigatedTask(next[next.length - 1]!);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleClose = useCallback(() => {
+    // If we're in a subtask, go back first; only close when at root
+    if (navStack.length > 0) {
+      handleNavigateBack();
+    } else {
+      onClose();
+    }
+  }, [handleNavigateBack, navStack.length, onClose]);
+
+  return (
+    <YougileTaskEditorInner
+      key={activeTask.id}
+      task={activeTask}
+      onClose={handleClose}
+      embedded={embedded}
+      parentTask={parentTask}
+      onNavigateBack={navStack.length > 0 ? handleNavigateBack : undefined}
+      onNavigateToSubtask={handleNavigateToSubtask}
+    />
+  );
+}
+
+interface YougileTaskEditorInnerProps {
+  task: YougileTask;
+  onClose: () => void;
+  embedded?: boolean;
+  parentTask?: YougileTask | null;
+  onNavigateBack?: () => void;
+  onNavigateToSubtask: (subtaskId: string) => void;
 }
 
 function unixMsToDateInput(ms: number | null | undefined): string {
@@ -205,7 +272,7 @@ function cloneChecklists(checklists: YougileChecklist[] | undefined): YougileChe
   return checklists ? structuredClone(checklists) : [];
 }
 
-export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditorProps) {
+function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigateBack, onNavigateToSubtask }: YougileTaskEditorInnerProps) {
   const {
     updateTask,
     moveTask,
@@ -224,6 +291,11 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     sendChatMessage,
     sendChatWithAttachments,
     fetchCompanyUsers,
+    tasks: yougileTasks,
+    fetchSubtaskTasks,
+    createSubtask,
+    removeSubtask,
+    toggleSubtask,
   } = useYougileStore();
 
   const [title, setTitle] = useState(task.title);
@@ -240,6 +312,9 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
   const [checklists, setChecklists] = useState<YougileChecklist[]>(() => cloneChecklists(task.checklists));
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
   const [editingItemText, setEditingItemText] = useState('');
+  const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
+  const [editingSubtaskTitle, setEditingSubtaskTitle] = useState('');
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [color, setColor] = useState(task.color ?? 'task-primary');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [assignedUserIds, setAssignedUserIds] = useState<string[]>(task.assigned);
@@ -379,28 +454,73 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
       const key = `${activePane}:${activeRegion}`;
       const nodeList = nodes.get(key) ?? [];
       const activeNode = nodeList[activeIndex];
-      if (!activeNode?.id.startsWith('yougile-checklist-')) return;
+      if (!activeNode) return;
 
-      const parts = activeNode.id.split('-');
-      const clIdx = parseInt(parts[2] ?? '', 10);
-      if (Number.isNaN(clIdx) || clIdx < 0 || clIdx >= checklists.length) return;
+      // Subtask: 'o' on a subtask item or add-subtask field → focus add-subtask input
+      if (activeNode.id.startsWith('yougile-subtask-')) {
+        setNewSubtaskTitle('');
+        focusEngine.getState().setMode('INSERT');
+        requestAnimationFrame(() => {
+          const input = document.querySelector<HTMLInputElement>('[data-subtask-add-input]');
+          input?.focus();
+        });
+        return;
+      }
 
-      const targetChecklist = checklists[clIdx];
-      if (!targetChecklist) return;
+      // Checklist: 'o' on a checklist item → add new item
+      if (activeNode.id.startsWith('yougile-checklist-')) {
+        const parts = activeNode.id.split('-');
+        const clIdx = parseInt(parts[2] ?? '', 10);
+        if (Number.isNaN(clIdx) || clIdx < 0 || clIdx >= checklists.length) return;
 
-      const newItemIdx = targetChecklist.items.length;
-      const updated = checklists.map((checklist, checklistIndex) => (
-        checklistIndex === clIdx
-          ? { ...checklist, items: [...checklist.items, { title: '', completed: false }] }
-          : checklist
-      ));
-      setChecklists(updated);
-      void updateTask(task.id, { checklists: updated });
+        const targetChecklist = checklists[clIdx];
+        if (!targetChecklist) return;
 
-      const newKey = `${clIdx}:${newItemIdx}`;
-      setEditingItemKey(newKey);
-      setEditingItemText('');
-      focusEngine.getState().setMode('INSERT');
+        const newItemIdx = targetChecklist.items.length;
+        const updated = checklists.map((checklist, checklistIndex) => (
+          checklistIndex === clIdx
+            ? { ...checklist, items: [...checklist.items, { title: '', completed: false }] }
+            : checklist
+        ));
+        setChecklists(updated);
+        void updateTask(task.id, { checklists: updated });
+
+        const newKey = `${clIdx}:${newItemIdx}`;
+        setEditingItemKey(newKey);
+        setEditingItemText('');
+        focusEngine.getState().setMode('INSERT');
+      }
+    },
+    onToggleDone: () => {
+      const { activePane, activeRegion, activeIndex, nodes } = focusEngine.getState();
+      if (!activePane || !activeRegion) return;
+      const key = `${activePane}:${activeRegion}`;
+      const nodeList = nodes.get(key) ?? [];
+      const activeNode = nodeList[activeIndex];
+      if (!activeNode) return;
+
+      // 'x' on a subtask item → toggle completion
+      if (activeNode.id.startsWith('yougile-subtask-item-')) {
+        const subtaskId = activeNode.id.replace('yougile-subtask-item-', '');
+        const subtask = subtaskTasks.find((t) => t.id === subtaskId);
+        if (subtask) {
+          void handleToggleSubtask(subtask);
+        }
+      }
+    },
+    onDelete: () => {
+      const { activePane, activeRegion, activeIndex, nodes } = focusEngine.getState();
+      if (!activePane || !activeRegion) return;
+      const key = `${activePane}:${activeRegion}`;
+      const nodeList = nodes.get(key) ?? [];
+      const activeNode = nodeList[activeIndex];
+      if (!activeNode) return;
+
+      // 'd' on a subtask item → remove from parent
+      if (activeNode.id.startsWith('yougile-subtask-item-')) {
+        const subtaskId = activeNode.id.replace('yougile-subtask-item-', '');
+        void handleRemoveSubtask(subtaskId);
+      }
     },
   });
 
@@ -628,6 +748,48 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     void updateTask(task.id, { checklists: updated });
   };
 
+  const refreshSubtasks = useCallback(() => {
+    void useYougileStore.getState().fetchTasks();
+    const currentSubtaskIds = useYougileStore.getState().tasks.find(
+      (t) => t.id === task.id
+    )?.subtasks;
+    if (currentSubtaskIds && currentSubtaskIds.length > 0) {
+      void fetchSubtaskTasks(currentSubtaskIds).then(setSubtaskTasks);
+    } else {
+      setSubtaskTasks([]);
+    }
+  }, [task.id, fetchSubtaskTasks]);
+
+  const handleAddSubtask = useCallback(async () => {
+    const title = newSubtaskTitle.trim();
+    if (!title) return;
+    const result = await createSubtask(task.id, title);
+    if (result) {
+      setNewSubtaskTitle('');
+      refreshSubtasks();
+    }
+  }, [newSubtaskTitle, task.id, createSubtask, refreshSubtasks]);
+
+  const handleToggleSubtask = useCallback(async (subtask: YougileTask) => {
+    await toggleSubtask(subtask.id, !subtask.completed);
+    refreshSubtasks();
+  }, [toggleSubtask, refreshSubtasks]);
+
+  const handleRemoveSubtask = useCallback(async (subtaskId: string) => {
+    await removeSubtask(task.id, subtaskId);
+    refreshSubtasks();
+  }, [task.id, removeSubtask, refreshSubtasks]);
+
+  const commitSubtaskTitle = useCallback(async (subtaskId: string, text: string) => {
+    const trimmed = text.trim();
+    setEditingSubtaskId(null);
+    setEditingSubtaskTitle('');
+    focusEngine.getState().setMode('NORMAL');
+    if (!trimmed) return;
+    await updateTask(subtaskId, { title: trimmed });
+    refreshSubtasks();
+  }, [updateTask, refreshSubtasks]);
+
   const handleColorChange = useCallback((newColor: string) => {
     setColor(newColor);
     setShowColorPicker(false);
@@ -826,6 +988,39 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     [descHtml]
   );
 
+  // Fetch and resolve subtask IDs to actual task objects
+  const [subtaskTasks, setSubtaskTasks] = useState<YougileTask[]>([]);
+  const subtaskIds = task.subtasks ?? [];
+
+  useEffect(() => {
+    if (subtaskIds.length === 0) {
+      setSubtaskTasks([]);
+      return;
+    }
+    // First try to resolve from already-loaded tasks
+    const resolved = subtaskIds
+      .map((id) => yougileTasks.find((t) => t.id === id))
+      .filter((t): t is YougileTask => t !== undefined);
+    if (resolved.length === subtaskIds.length) {
+      setSubtaskTasks(resolved);
+      return;
+    }
+    // Otherwise fetch missing subtasks from API
+    void fetchSubtaskTasks(subtaskIds).then((fetched) => {
+      setSubtaskTasks(fetched);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch when subtask IDs change
+  }, [subtaskIds]);
+
+  // Index scheme:
+  // 0-6: Title, Description, Column, Completed, Deadline, Color, Assigned
+  // 7..7+N: Stickers
+  // 7+N: Subtask "Add" field
+  // 7+N+1..7+N+S: Subtask items
+  // 7+N+S+1..: Checklist items
+  const subtaskBaseIndex = 7 + stickerDefinitions.length;
+  const checklistBaseIndex = subtaskBaseIndex + 1 + subtaskTasks.length;
+
   const totalChecklistItems = checklists.reduce((sum, cl) => sum + cl.items.length, 0);
   const completedChecklistItems = checklists.reduce(
     (sum, cl) => sum + cl.items.filter((i) => i.completed).length,
@@ -840,14 +1035,29 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
     >
       {/* Header */}
       <div className="shrink-0 flex h-11 items-center justify-between border-b border-zinc-800/40 px-4">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {onNavigateBack && (
+            <button
+              type="button"
+              onClick={onNavigateBack}
+              className="shrink-0 rounded p-1 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+              title={`Back to ${parentTask?.title ?? 'parent'}`}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </button>
+          )}
           <div
-            className="h-2 w-2 rounded-full"
+            className="h-2 w-2 rounded-full shrink-0"
             style={{ backgroundColor: getYougileTaskColorValue(colorOption.value) ?? '#7B869E' }}
           />
-          <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-            Yougile Task
+          <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600 truncate">
+            {parentTask ? 'Subtask' : 'Yougile Task'}
           </span>
+          {parentTask && (
+            <span className="font-mono text-[10px] text-zinc-700 truncate">
+              of {parentTask.title}
+            </span>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -1291,7 +1501,7 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
                     )}
                     <div className="flex flex-col gap-0.5">
                       {cl.items.map((item, itemIdx) => {
-                        const nodeIndex = 7 + stickerDefinitions.length + flatIndex;
+                        const nodeIndex = checklistBaseIndex + flatIndex;
                         const nodeId = `yougile-checklist-${clIdx}-${itemIdx}`;
                         const itemKey = `${clIdx}:${itemIdx}`;
                         const isEditing = editingItemKey === itemKey;
@@ -1361,6 +1571,132 @@ export function YougileTaskEditor({ task, onClose, embedded }: YougileTaskEditor
             </div>
           </div>
         )}
+
+        {/* Subtasks */}
+        <div className="border-b border-zinc-800/30 px-4 py-3">
+          <div className="mb-2 flex items-center gap-1.5">
+            <ListChecks className="h-3 w-3 text-zinc-600" />
+            <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+              Subtasks
+            </span>
+            {subtaskTasks.length > 0 && (
+              <span className="font-mono text-[10px] text-zinc-700">
+                {subtaskTasks.filter((t) => t.completed).length}/{subtaskTasks.length}
+              </span>
+            )}
+          </div>
+
+          {/* Subtask items — each wrapped in YougileEditorField for j/k navigation */}
+          {subtaskTasks.map((subtask, subtaskIdx) => {
+            const nodeIndex = subtaskBaseIndex + 1 + subtaskIdx;
+            const nodeId = `yougile-subtask-item-${subtask.id}`;
+            const isEditingSubtask = editingSubtaskId === subtask.id;
+            return (
+              <YougileEditorField
+                key={nodeId}
+                index={nodeIndex}
+                id={nodeId}
+                onActivate={() => {
+                  setEditingSubtaskId(subtask.id);
+                  setEditingSubtaskTitle(subtask.title);
+                  focusEngine.getState().setMode('INSERT');
+                }}
+                onEnter={() => void onNavigateToSubtask(subtask.id)}
+              >
+                {(isSelected) => (
+                  <div className={`group/sub flex items-center gap-2 rounded px-1 py-0.5 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleSubtask(subtask)}
+                      className="mt-px shrink-0"
+                    >
+                      {subtask.completed ? (
+                        <CheckSquare className="h-3 w-3 text-cyan-400" />
+                      ) : (
+                        <Square className="h-3 w-3 text-zinc-600" />
+                      )}
+                    </button>
+                    {isEditingSubtask ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={editingSubtaskTitle}
+                        onChange={(e) => setEditingSubtaskTitle(e.target.value)}
+                        onBlur={() => void commitSubtaskTitle(subtask.id, editingSubtaskTitle)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void commitSubtaskTitle(subtask.id, editingSubtaskTitle);
+                          }
+                          if (e.key === 'Escape') {
+                            e.preventDefault();
+                            setEditingSubtaskId(null);
+                            setEditingSubtaskTitle('');
+                            focusEngine.getState().setMode('NORMAL');
+                          }
+                        }}
+                        className="flex-1 bg-transparent text-xs leading-relaxed text-zinc-300 outline-none"
+                      />
+                    ) : (
+                      <span
+                        className={`flex-1 text-xs leading-relaxed cursor-pointer ${
+                          subtask.completed ? 'text-zinc-600 line-through' : 'text-zinc-300'
+                        } hover:text-cyan-400 transition-colors`}
+                        onClick={() => void onNavigateToSubtask(subtask.id)}
+                      >
+                        {subtask.title}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveSubtask(subtask.id)}
+                      className="rounded p-0.5 text-zinc-700 opacity-0 transition-opacity hover:text-red-400 group-hover/sub:opacity-100"
+                    >
+                      <Trash2 className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                )}
+              </YougileEditorField>
+            );
+          })}
+
+          {/* Add subtask input — focusable via YougileEditorField */}
+          <YougileEditorField
+            index={subtaskBaseIndex}
+            id="yougile-subtask-add"
+            onActivate={() => {
+              focusEngine.getState().setMode('INSERT');
+              requestAnimationFrame(() => {
+                document.querySelector<HTMLInputElement>('[data-subtask-add-input]')?.focus();
+              });
+            }}
+          >
+            {(isSelected) => (
+              <div className={`flex items-center gap-1.5 px-1 py-0.5 rounded transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                <Plus className="h-3 w-3 text-zinc-700" />
+                <input
+                  type="text"
+                  data-subtask-add-input
+                  value={newSubtaskTitle}
+                  onChange={(e) => setNewSubtaskTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleAddSubtask();
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setNewSubtaskTitle('');
+                      focusEngine.getState().setMode('NORMAL');
+                    }
+                  }}
+                  placeholder="Add subtask..."
+                  className="h-5 flex-1 bg-transparent text-xs text-zinc-400 placeholder:text-zinc-600 outline-none"
+                />
+              </div>
+            )}
+          </YougileEditorField>
+        </div>
 
         {/* Time Tracking */}
         {task.timeTracking && (

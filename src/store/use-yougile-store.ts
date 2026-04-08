@@ -118,6 +118,12 @@ interface YougileState {
   moveTask: (taskId: string, columnId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
+  // Subtask actions
+  createSubtask: (parentTaskId: string, title: string) => Promise<YougileTask | null>;
+  removeSubtask: (parentTaskId: string, subtaskId: string) => Promise<void>;
+  toggleSubtask: (subtaskId: string, completed: boolean) => Promise<void>;
+  fetchSubtaskTasks: (subtaskIds: string[]) => Promise<YougileTask[]>;
+
   // Chat
   chatMessages: YougileChatMessage[];
   chatLoading: boolean;
@@ -618,6 +624,161 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       set({ error: String(e) });
       void get().fetchTasks();
     }
+  },
+
+  // --- Subtasks ---
+
+  createSubtask: async (parentTaskId, title) => {
+    if (!isTauriAvailable()) return null;
+    const { yougileContext, tasks } = get();
+    if (!yougileContext.accountId) return null;
+
+    const parentTask = tasks.find((t) => t.id === parentTaskId);
+    if (!parentTask) return null;
+
+    try {
+      // Create the child task in the same column as the parent
+      const childTask = await invoke<YougileTask>('yougile_create_task', {
+        accountId: yougileContext.accountId,
+        payload: {
+          title,
+          columnId: parentTask.columnId ?? '',
+        },
+      });
+
+      // Update the parent's subtasks array
+      const currentSubtasks = parentTask.subtasks ?? [];
+      const updatedSubtasks = [...currentSubtasks, childTask.id];
+      await invoke<YougileTask>('yougile_update_task', {
+        accountId: yougileContext.accountId,
+        taskId: parentTaskId,
+        payload: { subtasks: updatedSubtasks },
+      });
+
+      // Update local state: add child task + update parent's subtasks
+      set((state) => ({
+        tasks: [
+          childTask,
+          ...state.tasks.map((t) =>
+            t.id === parentTaskId ? { ...t, subtasks: updatedSubtasks } : t
+          ),
+        ],
+      }));
+
+      await emitYougileTasksUpdated(yougileContext.boardId);
+      return childTask;
+    } catch (e) {
+      set({ error: String(e) });
+      return null;
+    }
+  },
+
+  removeSubtask: async (parentTaskId, subtaskId) => {
+    if (!isTauriAvailable()) return;
+    const { yougileContext, tasks } = get();
+    if (!yougileContext.accountId) return;
+
+    const parentTask = tasks.find((t) => t.id === parentTaskId);
+    if (!parentTask) return;
+
+    const updatedSubtasks = (parentTask.subtasks ?? []).filter((id) => id !== subtaskId);
+
+    try {
+      await invoke<YougileTask>('yougile_update_task', {
+        accountId: yougileContext.accountId,
+        taskId: parentTaskId,
+        payload: { subtasks: updatedSubtasks },
+      });
+
+      // Delete the child task
+      await invoke('yougile_delete_task', {
+        accountId: yougileContext.accountId,
+        taskId: subtaskId,
+      });
+
+      set((state) => ({
+        tasks: state.tasks
+          .map((t) =>
+            t.id === parentTaskId ? { ...t, subtasks: updatedSubtasks } : t
+          )
+          .filter((t) => t.id !== subtaskId),
+      }));
+
+      await emitYougileTasksUpdated(yougileContext.boardId);
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  toggleSubtask: async (subtaskId, completed) => {
+    if (!isTauriAvailable()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return;
+
+    // Optimistic update
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.id === subtaskId ? { ...t, completed } : t
+      ),
+    }));
+
+    try {
+      await invoke<YougileTask>('yougile_update_task', {
+        accountId: yougileContext.accountId,
+        taskId: subtaskId,
+        payload: { completed },
+      });
+      await emitYougileTasksUpdated(yougileContext.boardId);
+    } catch (e) {
+      set({ error: String(e) });
+      // Revert on failure
+      set((state) => ({
+        tasks: state.tasks.map((t) =>
+          t.id === subtaskId ? { ...t, completed: !completed } : t
+        ),
+      }));
+    }
+  },
+
+  fetchSubtaskTasks: async (subtaskIds) => {
+    if (!isTauriAvailable() || subtaskIds.length === 0) return [];
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return [];
+
+    const results: YougileTask[] = [];
+    const { tasks: existingTasks } = get();
+
+    for (const id of subtaskIds) {
+      // Check if we already have this task in the store
+      const existing = existingTasks.find((t) => t.id === id);
+      if (existing) {
+        results.push(existing);
+        continue;
+      }
+      try {
+        const task = await invoke<YougileTask>('yougile_get_task', {
+          accountId: yougileContext.accountId,
+          taskId: id,
+        });
+        if (task && !task.deleted) {
+          results.push(task);
+        }
+      } catch {
+        // Skip tasks that can't be fetched (deleted, no access, etc.)
+      }
+    }
+
+    // Add fetched tasks to store so they're available for future lookups
+    if (results.length > 0) {
+      set((state) => {
+        const existingIds = new Set(state.tasks.map((t) => t.id));
+        const toAdd = results.filter((t) => !existingIds.has(t.id));
+        if (toAdd.length === 0) return state;
+        return { tasks: [...state.tasks, ...toAdd] };
+      });
+    }
+
+    return results;
   },
 
   chatMessages: [],

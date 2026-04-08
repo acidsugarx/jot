@@ -515,6 +515,7 @@ pub fn run() {
             yougile::commands::yougile_get_string_stickers,
             yougile::commands::yougile_get_sprint_stickers,
             yougile::commands::yougile_get_tasks,
+            yougile::commands::yougile_get_task,
             yougile::commands::yougile_get_board_tasks,
             yougile::commands::yougile_create_task,
             yougile::commands::yougile_update_task,

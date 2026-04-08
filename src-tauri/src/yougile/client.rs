@@ -87,7 +87,6 @@ impl YougileClient {
             .await
     }
 
-    #[allow(dead_code)]
     pub async fn get_task(&self, task_id: &str) -> Result<YougileTask, String> {
         self.get(&format!("/tasks/{task_id}")).await
     }

@@ -343,6 +343,18 @@ pub async fn yougile_get_tasks(
 }
 
 #[tauri::command]
+pub async fn yougile_get_task(
+    account_id: String,
+    task_id: String,
+    state: State<'_, DatabaseState>,
+) -> Result<YougileTask, String> {
+    require_non_empty(&account_id, "Account ID")?;
+    require_non_empty(&task_id, "Task ID")?;
+    let client = auth::client_for_account(&state, &account_id)?;
+    client.get_task(&task_id).await
+}
+
+#[tauri::command]
 pub async fn yougile_get_board_tasks(
     account_id: String,
     board_id: String,

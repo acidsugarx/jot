@@ -2,7 +2,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
 import { YougileTask } from '@/types/yougile';
-import { FileText, Users } from 'lucide-react';
+import { FileText, Users, ListChecks } from 'lucide-react';
 import { getYougileTaskColorValue, PRIORITY_DOT_CLASS } from '@/lib/yougile';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
@@ -118,7 +118,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
           </span>
         </div>
 
-        {(deadlineStr || task.assigned.length > 0) && (
+        {(deadlineStr || task.assigned.length > 0 || (task.subtasks?.length ?? 0) > 0) && (
           <div className="flex items-center gap-1.5">
             {deadlineStr && (
               <span className="font-mono text-[10px] text-zinc-700">{deadlineStr}</span>
@@ -127,6 +127,12 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
               <span className="flex items-center gap-0.5 font-mono text-[10px] text-zinc-700">
                 <Users className="h-2.5 w-2.5" />
                 {task.assigned.length}
+              </span>
+            )}
+            {(task.subtasks?.length ?? 0) > 0 && (
+              <span className="flex items-center gap-0.5 font-mono text-[10px] text-zinc-700">
+                <ListChecks className="h-2.5 w-2.5" />
+                {task.subtasks!.length}
               </span>
             )}
           </div>
