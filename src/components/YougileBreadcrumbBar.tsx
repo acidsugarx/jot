@@ -46,13 +46,9 @@ function BreadcrumbSegment({
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   const openPicker = useCallback(() => {
-    if (options.length === 0) {
-      focusEngine.getState().setMode('NORMAL');
-      return;
-    }
     onOpen();
     focusEngine.getState().setMode('INSERT');
-  }, [onOpen, options.length]);
+  }, [onOpen]);
 
   const { ref, isSelected } = useFocusable<HTMLButtonElement>({
     pane: 'context',

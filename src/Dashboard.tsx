@@ -37,6 +37,8 @@ import { focusEngine } from '@/lib/focus-engine';
 import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
 import { useFocusEngineStore } from '@/hooks/use-focus-engine';
 import { useFocusable } from '@/hooks/use-focusable';
+import { TaskTemplatesSettings } from '@/components/TaskTemplatesSettings';
+import { consumeTemplateIntent } from '@/lib/settings-navigation';
 
 // Local type definitions (previously from use-vim-bindings)
 export type ViewMode = 'list' | 'kanban' | 'calendar';
@@ -327,11 +329,13 @@ function YougileTaskListRow({
   );
 }
 
-type Tab = 'list' | 'kanban' | 'calendar';
+type Tab = 'list' | 'kanban' | 'calendar' | 'templates';
+
 const tabDefs: { id: Tab; label: string; icon: typeof LayoutList }[] = [
   { id: 'list', label: 'List', icon: LayoutList },
   { id: 'kanban', label: 'Board', icon: Columns },
   { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
+  { id: 'templates', label: 'Templates', icon: FileText },
 ];
 
 // Context menu state
@@ -357,6 +361,9 @@ export default function Dashboard() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [templateIntentNonce, setTemplateIntentNonce] = useState(0);
+  const [pendingConfirm, setPendingConfirm] = useState<{ action: 'toggle' | 'delete'; taskId: string; taskTitle: string } | null>(null);
+  const pendingConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const [quickAddValue, setQuickAddValue] = useState('');
@@ -448,6 +455,15 @@ export default function Dashboard() {
     }
   }, [settings, setYougileEnabled]);
 
+  // Consume template intent from capture overlay ("Save as Template" flow)
+  useEffect(() => {
+    const intent = consumeTemplateIntent();
+    if (intent) {
+      setActiveTab('templates');
+      setTemplateIntentNonce((n) => n + 1);
+    }
+  }, []);
+
   useEffect(() => {
     if (yougileStore.yougileEnabled) {
       void syncYougileState();
@@ -537,18 +553,25 @@ export default function Dashboard() {
       engine.unregisterPane('sidebar');
     }
 
-    if (isYougile) {
-      engine.registerPane('context', { regions: ['org', 'project', 'board'], order: 1 });
-    } else {
-      engine.unregisterPane('context');
-    }
+    // NOTE: context pane is registered in a separate effect below.
 
     return () => {
       engine.unregisterPane('sidebar');
-      engine.unregisterPane('context');
       engine.unregisterPane('task-view');
     };
   }, [activeTab, isYougile, yougileStore.columns.length, columns.length]);
+
+  // Register/unregister context pane separately — only depends on isYougile
+  // so breadcrumb focusable nodes survive task-view region changes.
+  useEffect(() => {
+    const engine = focusEngine.getState();
+    if (isYougile) {
+      engine.registerPane('context', { regions: ['org', 'project', 'board'], order: 1 });
+    }
+    return () => {
+      engine.unregisterPane('context');
+    };
+  }, [isYougile]);
 
   // Register/unregister editor pane when the editor opens/closes.
   // NOTE: Only depend on isEditorOpen so that task selection changes don't
@@ -571,26 +594,64 @@ export default function Dashboard() {
     ? yougileStore.tasks.find((task) => task.id === yougileStore.selectedTaskId)
     : tasks.find((task) => task.id === localSelectedTaskId);
 
+  const clearPendingConfirm = useCallback(() => {
+    if (pendingConfirmTimerRef.current) {
+      clearTimeout(pendingConfirmTimerRef.current);
+      pendingConfirmTimerRef.current = null;
+    }
+    setPendingConfirm(null);
+  }, []);
+
+  const triggerPendingConfirm = useCallback((action: 'toggle' | 'delete', taskId: string, taskTitle: string) => {
+    if (pendingConfirmTimerRef.current) {
+      clearTimeout(pendingConfirmTimerRef.current);
+    }
+    setPendingConfirm({ action, taskId, taskTitle });
+    pendingConfirmTimerRef.current = setTimeout(() => {
+      setPendingConfirm(null);
+      pendingConfirmTimerRef.current = null;
+    }, 3000);
+  }, []);
+
   useRegisteredNormalKeyActions('dashboard:main', {
     onSourceToggle: () => yougileStore.setActiveSource(yougileStore.activeSource === 'local' ? 'yougile' : 'local'),
-    onSwitchView: (view: 'list' | 'kanban' | 'calendar') => setActiveTab(view),
+    onSwitchView: (view: 'list' | 'kanban' | 'calendar' | 'templates') => {
+      if (view === 'templates' && !isYougile) return;
+      setActiveTab(view);
+    },
     onNewItem: () => setIsQuickAddOpen(true),
     onToggleDone: () => {
       if (!selectedTaskForActions) return;
-      if (isYougile) {
-        const task = selectedTaskForActions as YougileTask;
-        void yougileStore.updateTask(task.id, { completed: !task.completed });
+      const taskTitle = isYougile
+        ? (selectedTaskForActions as YougileTask).title ?? ''
+        : (selectedTaskForActions as Task).title ?? '';
+      if (pendingConfirm?.action === 'toggle' && pendingConfirm.taskId === selectedTaskForActions.id) {
+        clearPendingConfirm();
+        if (isYougile) {
+          const task = selectedTaskForActions as YougileTask;
+          void yougileStore.updateTask(task.id, { completed: !task.completed });
+        } else {
+          const task = selectedTaskForActions as Task;
+          void updateTaskStatus({
+            id: task.id,
+            status: task.status === 'done' ? 'todo' : 'done',
+          });
+        }
       } else {
-        const task = selectedTaskForActions as Task;
-        void updateTaskStatus({
-          id: task.id,
-          status: task.status === 'done' ? 'todo' : 'done',
-        });
+        triggerPendingConfirm('toggle', selectedTaskForActions.id, taskTitle);
       }
     },
     onDelete: () => {
       if (!selectedTaskForActions) return;
-      requestDelete(buildDeleteRequest(selectedTaskForActions));
+      const taskTitle = isYougile
+        ? (selectedTaskForActions as YougileTask).title ?? ''
+        : (selectedTaskForActions as Task).title ?? '';
+      if (pendingConfirm?.action === 'delete' && pendingConfirm.taskId === selectedTaskForActions.id) {
+        clearPendingConfirm();
+        requestDelete(buildDeleteRequest(selectedTaskForActions));
+      } else {
+        triggerPendingConfirm('delete', selectedTaskForActions.id, taskTitle);
+      }
     },
     onOpenItem: () => {
       if (!selectedTaskForActions) return;
@@ -934,7 +995,7 @@ export default function Dashboard() {
         className="flex h-11 shrink-0 items-center justify-between border-b border-zinc-800/60 bg-[#161616]/80 px-4 backdrop-blur-md pl-[80px]"
       >
         <div data-tauri-drag-region className="flex items-center gap-1 pointer-events-none">
-          {tabDefs.map((tab) => {
+          {tabDefs.filter((tab) => tab.id !== 'templates' || isYougile).map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
@@ -1166,6 +1227,15 @@ export default function Dashboard() {
               )}
             </div>
           )}
+
+          {/* Templates tab — always mounted when Yougile is enabled to preserve editor state */}
+          {isYougile && (
+            <div
+              className={`mx-auto w-full max-w-3xl py-2 px-4 ${activeTab === 'templates' ? '' : 'hidden'}`}
+            >
+              <TaskTemplatesSettings key={templateIntentNonce} />
+            </div>
+          )}
         </div>
 
         {/* Editor pane — local tasks */}
@@ -1242,6 +1312,19 @@ export default function Dashboard() {
 
       {/* Footer */}
       <div className="flex-shrink-0 border-t border-zinc-800/40 px-4 py-1">
+        {pendingConfirm ? (
+          <div className="flex items-center justify-center gap-2 font-mono text-[10px] text-amber-400">
+            <span className="rounded bg-amber-500/20 px-1 text-amber-300">
+              {pendingConfirm.action === 'toggle' ? 'x' : 'd'}
+            </span>
+            <span>
+              Press <strong>{pendingConfirm.action === 'toggle' ? 'x' : 'd'}</strong> again to confirm {pendingConfirm.action === 'toggle' ? 'toggle' : 'delete'}:
+            </span>
+            <span className="truncate text-zinc-400" style={{ maxWidth: 200 }}>
+              {pendingConfirm.taskTitle}
+            </span>
+          </div>
+        ) : (
         <div className="flex items-center justify-center gap-3 font-mono text-[10px] text-zinc-700">
           <span>j/k navigate</span>
           <span className="text-zinc-800">·</span>
@@ -1264,7 +1347,10 @@ export default function Dashboard() {
           <span>d delete</span>
           <span className="text-zinc-800">·</span>
           <span>/ search</span>
+          <span className="text-zinc-800">·</span>
+          <span>1-3 views{isYougile ? ' · 4 templates' : ''}</span>
         </div>
+        )}
       </div>
 
       {deleteDialog && (

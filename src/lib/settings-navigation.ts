@@ -1,6 +1,6 @@
 import type { YougileChecklist } from '@/types/yougile';
 
-export type SettingsTab = 'general' | 'vault' | 'ui' | 'templates' | 'accounts';
+export type SettingsTab = 'general' | 'vault' | 'ui' | 'accounts';
 
 export interface TemplateNavigationDraft {
   title: string;

@@ -7,14 +7,17 @@ import {
   ChevronRight,
   Code,
   FileText,
+  Indent,
   Italic,
   Link,
   List,
   ListOrdered,
   Loader2,
+  Outdent,
   Plus,
   Square,
   Strikethrough,
+  Underline,
   Trash2,
   X,
 } from 'lucide-react';
@@ -238,6 +241,173 @@ export function TaskTemplatesSettings() {
   const isSaveDisabled = draft.title.trim().length === 0 || isLoading;
   const draftColorValue = getYougileTaskColorValue(draft.color);
 
+  const [descHtml, setDescHtml] = useState(draft.description);
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [linkDraft, setLinkDraft] = useState('https://');
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  const pendingLinkRangeRef = useRef<Range | null>(null);
+
+  // Sanitized HTML for contentEditable rendering
+  const descSanitizedHtml = useMemo(
+    () => sanitizeHtml(descHtml) || '<p><br></p>',
+    [descHtml]
+  );
+
+  // Sync descHtml when draft.description changes externally (template selection, intent)
+  useEffect(() => {
+    const editor = descEditorRef.current;
+    const isFocused = editor?.contains(document.activeElement) ?? false;
+    if (!isFocused) {
+      setDescHtml(draft.description);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to external draft changes
+  }, [draft.description]);
+
+  const handleDescriptionBlur = useCallback(() => {
+    const html = descEditorRef.current?.innerHTML ?? '';
+    setDescHtml(html);
+    setDraft((current) => ({ ...current, description: sanitizeHtml(html) }));
+  }, []);
+
+  const execFormatCommand = useCallback((command: string, value?: string) => {
+    descEditorRef.current?.focus();
+    document.execCommand(command, false, value);
+  }, []);
+
+  const insertCheckbox = useCallback(() => {
+    descEditorRef.current?.focus();
+    // Yougile CKEditor 5 compatible checkbox HTML (without-description variant)
+    document.execCommand(
+      'insertHTML',
+      false,
+      '<ul class="todo-list"><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p> </p></li></ul>&nbsp;'
+    );
+  }, []);
+
+  const openLinkInput = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    pendingLinkRangeRef.current = sel.getRangeAt(0).cloneRange();
+    const selectedText = sel.toString().trim();
+    setLinkDraft(/^https?:\/\//i.test(selectedText) ? selectedText : 'https://');
+    setShowLinkInput(true);
+    requestAnimationFrame(() => linkInputRef.current?.focus());
+  }, []);
+
+  const applyLink = useCallback(() => {
+    const href = linkDraft.trim();
+    if (!href) {
+      setShowLinkInput(false);
+      return;
+    }
+
+    let parsedHref: URL;
+    try {
+      parsedHref = new URL(href);
+    } catch {
+      return;
+    }
+
+    if (!/^https?:$/i.test(parsedHref.protocol)) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const pendingRange = pendingLinkRangeRef.current;
+    if (selection && pendingRange) {
+      selection.removeAllRanges();
+      selection.addRange(pendingRange);
+    }
+
+    descEditorRef.current?.focus();
+    if (selection?.rangeCount && !selection.isCollapsed) {
+      document.execCommand('createLink', false, parsedHref.toString());
+    } else {
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${parsedHref.toString()}">${parsedHref.toString()}</a>`
+      );
+    }
+
+    setShowLinkInput(false);
+    setLinkDraft('https://');
+    pendingLinkRangeRef.current = null;
+  }, [linkDraft]);
+
+  const handleDescriptionKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (mod && e.key === 'b') { e.preventDefault(); execFormatCommand('bold'); return; }
+    if (mod && e.key === 'i') { e.preventDefault(); execFormatCommand('italic'); return; }
+    if (mod && e.key === 'u') { e.preventDefault(); execFormatCommand('underline'); return; }
+    if (mod && e.shiftKey && e.key === 'S') { e.preventDefault(); execFormatCommand('strikeThrough'); return; }
+    if (mod && e.key === 'k') { e.preventDefault(); openLinkInput(); return; }
+    if (mod && e.shiftKey && e.key === 'C') { e.preventDefault(); insertCheckbox(); return; }
+    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); execFormatCommand('indent'); return; }
+    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); execFormatCommand('outdent'); return; }
+
+    // Enter inside a checkbox line → create new checkbox
+    if (e.key === 'Enter' && !e.shiftKey) {
+      // Check for Yougile CKEditor todo-list format (both with/without description variants)
+      const todoItem = (e.target as HTMLElement).closest?.('.todo-list__label, .todo-list__label_without-description');
+      if (todoItem) {
+        e.preventDefault();
+        document.execCommand(
+          'insertHTML', false,
+          '</span></p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
+        );
+        return;
+      }
+      // Also handle when cursor is in the <p> sibling of a checkbox
+      const liParent = (e.target as HTMLElement).closest?.('ul.todo-list > li');
+      if (liParent && liParent.querySelector('input[type="checkbox"]')) {
+        e.preventDefault();
+        document.execCommand(
+          'insertHTML', false,
+          '</p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
+        );
+      }
+    }
+  }, [execFormatCommand, insertCheckbox, openLinkInput]);
+
+  const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    // First try HTML paste (preserves formatting from other task descriptions)
+    const html = e.clipboardData?.getData('text/html');
+    if (html) {
+      e.preventDefault();
+      const sanitized = sanitizeHtml(html);
+      document.execCommand('insertHTML', false, sanitized);
+      // Update descHtml immediately so React's next render doesn't overwrite pasted content
+      requestAnimationFrame(() => {
+        const current = descEditorRef.current?.innerHTML ?? '';
+        setDescHtml(current);
+      });
+      return;
+    }
+
+    const text = e.clipboardData?.getData('text/plain');
+    if (!text) return;
+
+    e.preventDefault();
+
+    // Auto-detect URLs in pasted text → wrap in <a> tags
+    const urlRegex = /(https?:\/\/[^\s<]+)/g;
+    const hasUrls = urlRegex.test(text);
+
+    if (hasUrls) {
+      const matches = text.match(/(https?:\/\/[^\s<]+)/g) ?? [];
+      let result = text;
+      for (const url of matches) {
+        const escaped = url.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        result = result.replace(url, `<a href="${escaped}">${escaped}</a>`);
+      }
+      document.execCommand('insertHTML', false, result);
+    } else {
+      document.execCommand('insertText', false, text);
+    }
+  }, []);
+
   const selectTemplate = useCallback((template: TaskTemplate) => {
     setIsCreatingNew(false);
     setConfirmDelete(false);
@@ -251,26 +421,6 @@ export function TaskTemplatesSettings() {
     setSelectedTemplateId(null);
     setDraft(emptyDraft(columns[0]?.id ?? null));
   }, [columns]);
-
-  const execFormatCommand = useCallback((command: string, value?: string) => {
-    descEditorRef.current?.focus();
-    document.execCommand(command, false, value);
-    const html = descEditorRef.current?.innerHTML ?? '';
-    setDraft((current) => ({ ...current, description: sanitizeHtml(html) }));
-  }, []);
-
-  const insertLink = useCallback(() => {
-    const url = window.prompt('Link URL');
-    if (!url) return;
-    execFormatCommand('createLink', url);
-  }, [execFormatCommand]);
-
-  const insertCheckbox = useCallback(() => {
-    descEditorRef.current?.focus();
-    document.execCommand('insertHTML', false, '<label><input type="checkbox" /> </label>');
-    const html = descEditorRef.current?.innerHTML ?? '';
-    setDraft((current) => ({ ...current, description: sanitizeHtml(html) }));
-  }, []);
 
   const updateChecklist = useCallback(
     (checklistIndex: number, updater: (checklist: YougileChecklist) => YougileChecklist) => {
@@ -551,28 +701,94 @@ export function TaskTemplatesSettings() {
                   Description
                 </span>
                 <div className="flex items-center gap-px rounded-md border border-zinc-800/50 bg-zinc-900/40 px-1.5 py-0.5">
-                  <ToolbarBtn icon={Bold} title="Bold" onMouseDown={() => execFormatCommand('bold')} />
-                  <ToolbarBtn icon={Italic} title="Italic" onMouseDown={() => execFormatCommand('italic')} />
-                  <ToolbarBtn icon={Strikethrough} title="Strikethrough" onMouseDown={() => execFormatCommand('strikeThrough')} />
+                  <ToolbarBtn icon={Bold} title="Bold (Ctrl+B)" onMouseDown={() => execFormatCommand('bold')} />
+                  <ToolbarBtn icon={Italic} title="Italic (Ctrl+I)" onMouseDown={() => execFormatCommand('italic')} />
+                  <ToolbarBtn icon={Underline} title="Underline (Ctrl+U)" onMouseDown={() => execFormatCommand('underline')} />
+                  <ToolbarBtn icon={Strikethrough} title="Strikethrough (Ctrl+Shift+S)" onMouseDown={() => execFormatCommand('strikeThrough')} />
                   <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
-                  <ToolbarBtn icon={Link} title="Link" onMouseDown={() => insertLink()} />
+                  <ToolbarBtn icon={Link} title="Link (Ctrl+K)" onMouseDown={() => openLinkInput()} />
                   <ToolbarBtn icon={List} title="Bullet list" onMouseDown={() => execFormatCommand('insertUnorderedList')} />
                   <ToolbarBtn icon={ListOrdered} title="Numbered list" onMouseDown={() => execFormatCommand('insertOrderedList')} />
+                  <ToolbarBtn icon={Outdent} title="Outdent (Shift+Tab)" onMouseDown={() => execFormatCommand('outdent')} />
+                  <ToolbarBtn icon={Indent} title="Indent (Tab)" onMouseDown={() => execFormatCommand('indent')} />
+                  <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
                   <ToolbarBtn icon={Code} title="Code block" onMouseDown={() => execFormatCommand('formatBlock', 'pre')} />
-                  <ToolbarBtn icon={CheckSquare} title="Checkbox" onMouseDown={() => insertCheckbox()} />
+                  <ToolbarBtn icon={CheckSquare} title="Checkbox (Ctrl+Shift+C)" onMouseDown={() => insertCheckbox()} />
                 </div>
               </div>
+
+              {/* Link input popover */}
+              {showLinkInput && (
+                <div className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1">
+                  <input
+                    ref={linkInputRef}
+                    type="text"
+                    value={linkDraft}
+                    onChange={(e) => setLinkDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
+                      if (e.key === 'Escape') { setShowLinkInput(false); }
+                    }}
+                    placeholder="https://"
+                    className="h-6 min-w-0 flex-1 bg-transparent text-xs text-zinc-200 outline-none placeholder:text-zinc-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyLink}
+                    className="rounded px-1.5 py-0.5 text-xs text-cyan-400 hover:bg-zinc-800"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowLinkInput(false)}
+                    className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
 
               <div
                 ref={descEditorRef}
                 contentEditable
                 suppressContentEditableWarning
-                onInput={(event) => setDraft((current) => ({
-                  ...current,
-                  description: sanitizeHtml(event.currentTarget.innerHTML),
-                }))}
+                dangerouslySetInnerHTML={{ __html: descSanitizedHtml }}
+                onBlur={handleDescriptionBlur}
+                onKeyDown={handleDescriptionKeyDown}
+                onPaste={handleSmartPaste}
+                onClick={(e) => {
+                  // Checkbox toggle (Yougile CKEditor format — both variants)
+                  const target = e.target as HTMLElement;
+                  let checkbox: HTMLInputElement | null = null;
+                  if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+                    checkbox = target;
+                  } else {
+                    const wrapper = target.closest('span[contenteditable="false"]');
+                    if (wrapper) {
+                      checkbox = wrapper.querySelector('input[type="checkbox"]');
+                    }
+                    if (!checkbox) {
+                      checkbox = target.closest('input[type="checkbox"]');
+                    }
+                  }
+                  if (checkbox) {
+                    e.preventDefault();
+                    checkbox.checked = !checkbox.checked;
+                    if (checkbox.checked) {
+                      checkbox.setAttribute('checked', 'checked');
+                    } else {
+                      checkbox.removeAttribute('checked');
+                    }
+                    const li = checkbox.closest('li');
+                    if (li) {
+                      li.dataset.checked = checkbox.checked ? 'true' : 'false';
+                    }
+                  }
+                }}
                 className="prose-jot prose-jot-yougile prose-jot-editor min-h-[140px] rounded-xl border border-zinc-800 bg-[#111111] px-3 py-2 text-sm text-zinc-200 outline-none"
-                dangerouslySetInnerHTML={{ __html: sanitizeHtml(draft.description) || '<p><br></p>' }}
+                data-placeholder="Add a description…"
+                spellCheck={false}
               />
             </section>
 

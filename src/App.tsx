@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
-import { emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowUpDown,
@@ -36,16 +35,14 @@ import {
   settingsShortcutLabel,
 } from '@/lib/shortcuts';
 import {
-  persistSettingsTab,
   persistTemplateIntent,
-  SETTINGS_NAVIGATION_EVENT,
   type TemplateNavigationDraft,
 } from '@/lib/settings-navigation';
-import type { Task, TaskPriority, TaskStatus } from '@/types';
-import type { YougileTask } from '@/types/yougile';
+import type { KanbanColumn, Task, TaskPriority, TaskStatus } from '@/types';
+import type { YougileColumn, YougileTask } from '@/types/yougile';
 
 type CaptureMode = 'insert' | 'normal';
-type PickerMode = 'none' | 'org' | 'project' | 'board' | 'template';
+type PickerMode = 'none' | 'org' | 'project' | 'board' | 'template' | 'columns';
 
 const ITEM_HEIGHT = 36;
 const GROUP_HEADER_HEIGHT = 28;
@@ -351,7 +348,11 @@ function App() {
   const [mode, setMode] = useState<CaptureMode>('insert');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pickerMode, setPickerMode] = useState<PickerMode>('none');
+  const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  // Confirmation state for destructive actions (x=toggle, d=delete)
+  const [pendingConfirm, setPendingConfirm] = useState<{ action: 'toggle' | 'delete'; taskId: string; taskTitle: string } | null>(null);
+  const pendingConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDialogOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listViewportRef = useRef<HTMLDivElement>(null);
@@ -360,6 +361,7 @@ function App() {
 
   const {
     tasks,
+    columns,
     settings,
     error: localError,
     fetchTasks,
@@ -416,10 +418,10 @@ function App() {
   const activeTasks = useMemo(() => {
     const list = isYougile ? visibleYougileTasks : tasks;
     return list.filter((task) => {
-      if (isYougileTask(task)) return !task.completed;
-      return task.status !== 'done';
+      if (isYougileTask(task)) return !task.completed && !hiddenColumnIds.has(task.columnId ?? '');
+      return task.status !== 'done' && !hiddenColumnIds.has(task.status);
     });
-  }, [isYougile, visibleYougileTasks, tasks]);
+  }, [isYougile, visibleYougileTasks, tasks, hiddenColumnIds]);
   const createDraftTitle = query.trim() || activeTemplate?.title.trim() || '';
   const hasCreateDraft = createDraftTitle.length > 0;
   const visibleError = templateError ?? (
@@ -543,8 +545,22 @@ function App() {
       );
     }
 
+    const allColumns = isYougile ? yougileColumns : columns;
+    const hasHiddenColumns = hiddenColumnIds.size > 0;
+    const visibleColumnCount = allColumns.length - hiddenColumnIds.size;
+
+    items.push({
+      id: '__filter-columns',
+      label: hasHiddenColumns
+        ? `Columns (${visibleColumnCount}/${allColumns.length})`
+        : 'Filter Columns…',
+      Icon: ArrowUpDown,
+      iconWrapClass: hasHiddenColumns ? 'bg-cyan-500/10' : 'bg-zinc-800',
+      iconClass: hasHiddenColumns ? 'text-cyan-400' : 'text-zinc-400',
+    });
+
     return items;
-  }, [isYougile, yougileEnabled]);
+  }, [isYougile, yougileEnabled, hiddenColumnIds, yougileColumns, columns]);
 
   const normalModeItems = useMemo(() => {
     if (hasCreateDraft) {
@@ -567,8 +583,12 @@ function App() {
         { id: '__manage-templates' },
       ];
     }
+    if (pickerMode === 'columns') {
+      const allColumns = isYougile ? yougileColumns : columns;
+      return allColumns.map((col) => ({ id: col.id }));
+    }
     return [];
-  }, [pickerMode, accounts, projects, boards, templates]);
+  }, [pickerMode, accounts, projects, boards, templates, isYougile, yougileColumns, columns]);
 
   // Reset selection when picker mode or its items change
   useEffect(() => {
@@ -829,28 +849,14 @@ function App() {
   }, [activeTemplate, createDraftTitle]);
 
   const openTemplatesSettings = useCallback(async (draft?: TemplateNavigationDraft) => {
-    persistSettingsTab('templates');
     if (draft) {
       persistTemplateIntent({
         mode: 'new',
         draft,
       });
     }
-    await invoke('open_settings_window');
-    if (isTauriAvailable()) {
-      await emit(SETTINGS_NAVIGATION_EVENT, {
-        tab: 'templates',
-        ...(draft
-          ? {
-              templateIntent: {
-                mode: 'new' as const,
-                draft,
-              },
-            }
-          : {}),
-      });
-    }
     await invoke('hide_window');
+    await invoke('open_dashboard_window');
   }, []);
 
   const handleCreateTask = useCallback(async () => {
@@ -1031,6 +1037,9 @@ function App() {
         }
         setPickerMode('project');
         return;
+      case '__filter-columns':
+        setPickerMode('columns');
+        return;
       default:
         return;
     }
@@ -1047,6 +1056,23 @@ function App() {
     templates.length,
     yougileContext.accountId,
   ]);
+
+  const clearPendingConfirm = useCallback(() => {
+    setPendingConfirm(null);
+    if (pendingConfirmTimerRef.current) {
+      clearTimeout(pendingConfirmTimerRef.current);
+      pendingConfirmTimerRef.current = null;
+    }
+  }, []);
+
+  const triggerPendingConfirm = useCallback((action: 'toggle' | 'delete', taskId: string, taskTitle: string) => {
+    if (pendingConfirmTimerRef.current) clearTimeout(pendingConfirmTimerRef.current);
+    setPendingConfirm({ action, taskId, taskTitle });
+    pendingConfirmTimerRef.current = setTimeout(() => {
+      setPendingConfirm(null);
+      pendingConfirmTimerRef.current = null;
+    }, 3000);
+  }, []);
 
   useRegisteredNormalKeyActions('app:capture', {
     onEscape: () => {
@@ -1069,13 +1095,28 @@ function App() {
       const item = normalModeItems[selectedIndex];
       if (item && !item.id.startsWith('__')) {
         const task = activeTasks.find((t) => t.id === item.id);
-        if (task) void handleToggleStatus(task);
+        if (task) {
+          // Require double-press to confirm
+          if (pendingConfirm?.action === 'toggle' && pendingConfirm.taskId === task.id) {
+            clearPendingConfirm();
+            void handleToggleStatus(task);
+          } else {
+            triggerPendingConfirm('toggle', task.id, task.title ?? (isYougileTask(task) ? '' : task.title));
+          }
+        }
       }
     },
     onDelete: () => {
       const item = normalModeItems[selectedIndex];
       if (item && !item.id.startsWith('__')) {
-        void handleDeleteTask(item.id);
+        // Require double-press to confirm
+        if (pendingConfirm?.action === 'delete' && pendingConfirm.taskId === item.id) {
+          clearPendingConfirm();
+          void handleDeleteTask(item.id);
+        } else {
+          const task = activeTasks.find((t) => t.id === item.id);
+          triggerPendingConfirm('delete', item.id, task ? (task.title ?? (isYougileTask(task) ? '' : task.title)) : '');
+        }
       }
     },
     onOpenItem: () => {
@@ -1107,7 +1148,8 @@ function App() {
           e.preventDefault();
           // Picker back-navigation in INSERT mode
           if (pickerMode !== 'none') {
-            if (pickerMode === 'board') setPickerMode('project');
+            if (pickerMode === 'columns') setPickerMode('none');
+            else if (pickerMode === 'board') setPickerMode('project');
             else if (pickerMode === 'project') setPickerMode('org');
             else setPickerMode('none');
             return;
@@ -1137,54 +1179,9 @@ function App() {
         return;
       }
 
-      // NORMAL mode (no picker) — handle navigation locally, delegate actions to focus engine
-      switch (e.key) {
-        case 'j':
-        case 'ArrowDown':
-          e.preventDefault();
-          setSelectedIndex((i) => Math.min(i + 1, normalModeItems.length - 1));
-          return;
-        case 'k':
-        case 'ArrowUp':
-          e.preventDefault();
-          setSelectedIndex((i) => Math.max(i - 1, 0));
-          return;
-        case 'g':
-          e.preventDefault();
-          setSelectedIndex(0);
-          return;
-        case 'G':
-          e.preventDefault();
-          setSelectedIndex(normalModeItems.length - 1);
-          return;
-        case 'i':
-          e.preventDefault();
-          setMode('insert');
-          requestAnimationFrame(() => inputRef.current?.focus());
-          return;
-        case 'Enter':
-        case 'e': {
-          e.preventDefault();
-          const item = normalModeItems[selectedIndex];
-          if (!item) return;
-          if (item.id === '__create') {
-            void handleCreateTask();
-          } else if (item.id.startsWith('__')) {
-            void handleAction(item.id);
-          } else {
-            setEditingTaskId(item.id);
-          }
-          return;
-        }
-        case 'Escape':
-          e.preventDefault();
-          void invoke('hide_window');
-          return;
-      }
-
-      // Delegate remaining action keys (x/d/n/o/m/r/?/space/1/2/3) to focus engine
+      // NORMAL mode — picker takes priority over main navigation
       if (pickerMode !== 'none') {
-        // Handle picker navigation locally (same as before)
+        // Handle picker navigation locally
         switch (e.key) {
           case 'j':
           case 'ArrowDown':
@@ -1215,12 +1212,34 @@ function App() {
             else if (pickerMode === 'template') {
               if (pick.id === '__manage-templates') void handleAction('__manage-templates');
               else handleSelectTemplate(pick.id);
+            } else if (pickerMode === 'columns') {
+              setHiddenColumnIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(pick.id)) next.delete(pick.id);
+                else next.add(pick.id);
+                return next;
+              });
             }
             return;
           }
+          case 'x':
+            if (pickerMode === 'columns') {
+              e.preventDefault();
+              const pick = pickerItems[selectedIndex];
+              if (!pick) return;
+              setHiddenColumnIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(pick.id)) next.delete(pick.id);
+                else next.add(pick.id);
+                return next;
+              });
+              return;
+            }
+            break;
           case 'Escape':
             e.preventDefault();
-            if (pickerMode === 'board') setPickerMode('project');
+            if (pickerMode === 'columns') setPickerMode('none');
+            else if (pickerMode === 'board') setPickerMode('project');
             else if (pickerMode === 'project') setPickerMode('org');
             else setPickerMode('none');
             return;
@@ -1235,7 +1254,61 @@ function App() {
         }
       }
 
-      // Normal mode (no picker) — let focus engine dispatch
+      // NORMAL mode (no picker) — handle navigation locally, delegate actions to focus engine
+      switch (e.key) {
+        case 'j':
+        case 'ArrowDown':
+          e.preventDefault();
+          clearPendingConfirm();
+          setSelectedIndex((i) => Math.min(i + 1, normalModeItems.length - 1));
+          return;
+        case 'k':
+        case 'ArrowUp':
+          e.preventDefault();
+          clearPendingConfirm();
+          setSelectedIndex((i) => Math.max(i - 1, 0));
+          return;
+        case 'g':
+          e.preventDefault();
+          clearPendingConfirm();
+          setSelectedIndex(0);
+          return;
+        case 'G':
+          e.preventDefault();
+          clearPendingConfirm();
+          setSelectedIndex(normalModeItems.length - 1);
+          return;
+        case 'i':
+          e.preventDefault();
+          setMode('insert');
+          requestAnimationFrame(() => inputRef.current?.focus());
+          return;
+        case 'Enter':
+        case 'e': {
+          e.preventDefault();
+          const item = normalModeItems[selectedIndex];
+          if (!item) return;
+          if (item.id === '__create') {
+            void handleCreateTask();
+          } else if (item.id.startsWith('__')) {
+            void handleAction(item.id);
+          } else {
+            setEditingTaskId(item.id);
+          }
+          return;
+        }
+        case 'Escape':
+          e.preventDefault();
+          void invoke('hide_window');
+          return;
+        case 'c':
+          e.preventDefault();
+          setPickerMode('columns');
+          setSelectedIndex(0);
+          return;
+      }
+
+      // Delegate remaining action keys (x/d/n/o/m/r/?/space/1/2/3) to focus engine
       const result = dispatchFocusKey(focusEngine, e, resolveNormalKeyActions());
       if (result.handled) {
         if (result.stopPropagation) e.stopPropagation();
@@ -1256,6 +1329,7 @@ function App() {
     handleSelectTemplate,
     activeTemplate,
     hasQuery,
+    hiddenColumnIds,
     mode,
     normalModeItems,
     pickerItems,
@@ -1667,6 +1741,57 @@ function App() {
               </Command.Group>
             )}
 
+            {pickerMode === 'columns' && (
+              <Command.Group
+                heading="Toggle Columns"
+                className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
+              >
+                {(isYougile ? yougileColumns : columns).map((col, idx) => {
+                  const colName = isYougile ? (col as YougileColumn).title : (col as KanbanColumn).name;
+                  const isHidden = hiddenColumnIds.has(col.id);
+                  return (
+                    <Command.Item
+                      key={col.id}
+                      value={`column-${col.id}`}
+                      data-capture-index={idx}
+                      onSelect={() => {
+                        setHiddenColumnIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(col.id)) next.delete(col.id);
+                          else next.add(col.id);
+                          return next;
+                        });
+                      }}
+                      className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
+                        mode === 'normal' && selectedIndex === idx
+                          ? 'bg-zinc-900/80'
+                          : 'data-[selected=true]:bg-zinc-900/80'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border transition-colors ${
+                          isHidden
+                            ? 'border-zinc-700'
+                            : 'border-cyan-500/40 bg-cyan-500/20'
+                        }`}>
+                          {!isHidden && <Check className="h-2.5 w-2.5 text-cyan-400" strokeWidth={3} />}
+                        </div>
+                        <span className={isHidden ? 'text-zinc-500 line-through' : 'text-zinc-200'}>
+                          {colName}
+                        </span>
+                      </div>
+                      <span className="font-mono text-[10px] text-zinc-600">
+                        {isHidden ? 'hidden' : 'visible'}
+                      </span>
+                    </Command.Item>
+                  );
+                })}
+                <div className="px-3 py-2 text-[10px] text-zinc-600">
+                  Press <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 font-mono">x</kbd> or <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 font-mono">↵</kbd> to toggle · <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1 font-mono">esc</kbd> to close
+                </div>
+              </Command.Group>
+            )}
+
             {pickerMode === 'none' && !hasCreateDraft && activeTasks.length > 0 && (
               <Command.Group
                 heading={isYougile ? 'Yougile Tasks' : 'Tasks'}
@@ -1858,6 +1983,20 @@ function App() {
                   <span>navigate</span>
                 </div>
               </>
+            ) : pendingConfirm ? (
+              <>
+                <div className="flex items-center gap-2 text-amber-400">
+                  <span className="rounded bg-amber-500/20 px-1 font-mono text-amber-300">
+                    {pendingConfirm.action === 'toggle' ? 'x' : 'd'}
+                  </span>
+                  <span>
+                    Press <strong>{pendingConfirm.action === 'toggle' ? 'x' : 'd'}</strong> again to confirm {pendingConfirm.action === 'toggle' ? 'toggle' : 'delete'}:
+                  </span>
+                  <span className="truncate text-zinc-400" style={{ maxWidth: 200 }}>
+                    {pendingConfirm.taskTitle}
+                  </span>
+                </div>
+              </>
             ) : (
               <>
                 <div className="flex items-center gap-2">
@@ -1872,7 +2011,11 @@ function App() {
                   <span className="text-zinc-800">·</span>
                   <span>esc dismiss</span>
                 </div>
-                <span>d delete</span>
+                <div className="flex items-center gap-2">
+                  <span>c columns</span>
+                  <span className="text-zinc-800">·</span>
+                  <span>d delete</span>
+                </div>
               </>
             )}
           </div>

@@ -223,17 +223,14 @@ describe('App', () => {
     });
   });
 
-  it('opens the templates settings tab from the New Template action', async () => {
+  it('opens the dashboard templates tab from the New Template action', async () => {
     render(<App />);
 
     fireEvent.click(screen.getByText('New Template…'));
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('open_settings_window');
       expect(mockInvoke).toHaveBeenCalledWith('hide_window');
-      expect(mockEmit).toHaveBeenCalledWith('settings-navigation', {
-        tab: 'templates',
-      });
+      expect(mockInvoke).toHaveBeenCalledWith('open_dashboard_window');
     });
   });
 
@@ -247,18 +244,10 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Save As Template…'));
 
     await waitFor(() => {
-      expect(mockEmit).toHaveBeenCalledWith('settings-navigation', {
-        tab: 'templates',
-        templateIntent: {
-          mode: 'new',
-          draft: expect.objectContaining({
-            title: 'Incident Review',
-          }),
-        },
-      });
+      expect(mockInvoke).toHaveBeenCalledWith('hide_window');
+      expect(mockInvoke).toHaveBeenCalledWith('open_dashboard_window');
     });
 
-    expect(window.localStorage.getItem('jot:settings:tab')).toBe('templates');
     expect(JSON.parse(window.localStorage.getItem('jot:settings:template-intent') ?? '{}')).toEqual(
       expect.objectContaining({
         mode: 'new',
@@ -276,9 +265,8 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Manage Templates…'));
 
     await waitFor(() => {
-      expect(mockEmit).toHaveBeenCalledWith('settings-navigation', {
-        tab: 'templates',
-      });
+      expect(mockInvoke).toHaveBeenCalledWith('hide_window');
+      expect(mockInvoke).toHaveBeenCalledWith('open_dashboard_window');
     });
   });
 });

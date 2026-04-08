@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { FolderOpen, Keyboard, Database, Palette, Users, FileText } from 'lucide-react';
+import { FolderOpen, Keyboard, Database, Palette, Users } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -7,33 +7,29 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTaskStore } from '@/store/use-task-store';
 import { useYougileStore } from '@/store/use-yougile-store';
 import { AccountsSettings } from '@/components/AccountsSettings';
-import { TaskTemplatesSettings } from '@/components/TaskTemplatesSettings';
 import { focusEngine, dispatchFocusKey } from '@/lib/focus-engine';
 import { resolveNormalKeyActions, useRegisteredNormalKeyActions } from '@/lib/focus-actions';
 import { isTauriAvailable } from '@/lib/tauri';
 import {
   consumeStoredSettingsTab,
-  persistTemplateIntent,
   SETTINGS_NAVIGATION_EVENT,
   type SettingsNavigationPayload,
 } from '@/lib/settings-navigation';
 import type { AppSettings } from '@/types';
 
-type Tab = 'general' | 'vault' | 'ui' | 'templates' | 'accounts';
+type Tab = 'general' | 'vault' | 'ui' | 'accounts';
 
-const baseTabIds: Tab[] = ['general', 'vault', 'ui'];
+const baseTabIds: Tab[] = ['general', 'vault', 'ui', 'accounts'];
 
 const tabDefs: { id: Tab; label: string; icon: typeof Keyboard }[] = [
   { id: 'general', label: 'General', icon: Keyboard },
   { id: 'vault', label: 'Vault', icon: Database },
   { id: 'ui', label: 'Appearance', icon: Palette },
-  { id: 'templates', label: 'Templates', icon: FileText },
   { id: 'accounts', label: 'Accounts', icon: Users },
 ];
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => consumeStoredSettingsTab() ?? 'general');
-  const [templateIntentNonce, setTemplateIntentNonce] = useState(0);
   const [vaultDirInput, setVaultDirInput] = useState('');
   const isDialogOpenRef = useRef(false);
   const tabIdsRef = useRef<Tab[]>(baseTabIds);
@@ -43,7 +39,7 @@ export default function Settings() {
 
   // Derive visible tabs based on yougileEnabled
   const tabIds: Tab[] = yougileStore.yougileEnabled
-    ? [...baseTabIds, 'templates', 'accounts']
+    ? [...baseTabIds]
     : baseTabIds;
   const tabs = tabDefs.filter((t) => tabIds.includes(t.id));
   tabIdsRef.current = tabIds;
@@ -74,10 +70,6 @@ export default function Settings() {
     const unlisten = listen<SettingsNavigationPayload>(SETTINGS_NAVIGATION_EVENT, (event) => {
       const nextTab = event.payload.tab;
       setActiveTab(nextTab);
-      if (event.payload.templateIntent) {
-        persistTemplateIntent(event.payload.templateIntent);
-        setTemplateIntentNonce((value) => value + 1);
-      }
     }).catch(() => {});
 
     return () => {
@@ -386,10 +378,6 @@ export default function Settings() {
                 Theme applies to all windows instantly.
               </p>
             </div>
-          )}
-
-          {activeTab === 'templates' && (
-            <TaskTemplatesSettings key={templateIntentNonce} />
           )}
 
           {activeTab === 'accounts' && (

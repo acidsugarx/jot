@@ -240,6 +240,7 @@
 .prose-jot-yougile strong, .prose-jot-yougile b { font-weight: 600; color: #e4e4e7; }
 .prose-jot-yougile em, .prose-jot-yougile i { font-style: italic; }
 .prose-jot-yougile s, .prose-jot-yougile strike, .prose-jot-yougile del { text-decoration: line-through; color: #71717a; }
+.prose-jot-yougile u { text-decoration: underline; text-underline-offset: 2px; }
 
 /* Links */
 .prose-jot-yougile a {
@@ -425,6 +426,105 @@
 .prose-jot-yougile span[style*="background"] {
   border-radius: 0.125rem;
   padding: 0 0.125rem;
+}
+
+/* ── Yougile CKEditor 5 compatibility ───────────────────────────────────────── */
+
+/* CKEditor todo-list (Yougile checkbox lists) */
+.prose-jot-yougile ul.todo-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.25rem 0;
+}
+.prose-jot-yougile ul.todo-list > li {
+  padding-left: 0;
+  margin: 0.0625rem 0;
+  list-style: none;
+}
+/* With-description variant: text inside todo-list__label__description span */
+.prose-jot-yougile .todo-list__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+/* Without-description variant: text in sibling <p> after the label span */
+.prose-jot-yougile .todo-list__label_without-description {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
+}
+.prose-jot-yougile .todo-list__label_without-description + p {
+  display: inline;
+  margin: 0;
+}
+/* <p> inside <li> (CKEditor puts paragraphs in list items) */
+.prose-jot-yougile li > p {
+  margin: 0;
+  display: inline;
+}
+.prose-jot-yougile .todo-list__label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid #52525b;
+  border-radius: 3px;
+  background: transparent;
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+  top: -1px;
+  cursor: default;
+  flex-shrink: 0;
+}
+.prose-jot-yougile .todo-list__label input[type="checkbox"]:checked {
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+.prose-jot-yougile .todo-list__label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid #0c0c0c;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.prose-jot-yougile .todo-list__label__description {
+  flex: 1;
+  min-width: 0;
+}
+
+/* CKEditor list bogus paragraph wrapper */
+.prose-jot-yougile .ck-list-bogus-paragraph {
+  display: inline;
+}
+
+/* Nested todo-lists (inside <li>, not inside label) */
+.prose-jot-yougile ul.todo-list ul.todo-list {
+  margin-left: 1.25rem;
+  margin-top: 0.0625rem;
+  padding-left: 0;
+}
+/* Nested <ul>/<ol> inside todo-list <li> */
+.prose-jot-yougile ul.todo-list > li > ul,
+.prose-jot-yougile ul.todo-list > li > ol {
+  margin-left: 1.25rem;
+  margin-top: 0.0625rem;
+}
+
+/* Light theme overrides for CKEditor structures */
+[data-theme="light"] .prose-jot-yougile .todo-list__label input[type="checkbox"] {
+  border-color: #a1a1aa;
+}
+[data-theme="light"] .prose-jot-yougile .todo-list__label input[type="checkbox"]:checked {
+  background: #0891b2;
+  border-color: #0891b2;
+}
+[data-theme="light"] .prose-jot-yougile .todo-list__label input[type="checkbox"]:checked::after {
+  border-color: #fff;
 }
 
 /* ── Yougile rich description — light theme ──────────────────────────────── */

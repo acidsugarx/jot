@@ -27,7 +27,7 @@ export interface NormalKeyActions {
   onRefresh?: () => void;
   onToggleHelp?: () => void;
   onSourceToggle?: () => void;
-  onSwitchView?: (view: 'list' | 'kanban' | 'calendar') => void;
+  onSwitchView?: (view: 'list' | 'kanban' | 'calendar' | 'templates') => void;
   onEscape?: () => void;
 }
 
@@ -70,7 +70,7 @@ export interface FocusState {
   prevPane: () => void;
   switchPaneDirectional: (direction: PaneDirection) => void;
 
-  activateSelection: () => void;
+  activateSelection: () => boolean;
   drillUp: () => void;
   resetMode: () => void;
 }
@@ -358,7 +358,12 @@ export function createFocusEngine() {
     activateSelection: () => {
       const state = get();
       const list = getActiveList(state);
-      list[state.activeIndex]?.onActivate?.();
+      const node = list[state.activeIndex];
+      if (node?.onActivate) {
+        node.onActivate();
+        return true;
+      }
+      return false;
     },
 
     drillUp: () => {
@@ -535,11 +540,17 @@ export function dispatchFocusKey(
       event.preventDefault();
       // activateSelection fires the node's onActivate callback, which
       // focuses the underlying input and sets INSERT mode for editor fields.
-      state.activateSelection();
-      // Fallback: if no active node existed (activateSelection was a no-op),
-      // still enter INSERT mode so standalone mode toggle works (e.g. capture bar).
-      if (engine.getState().mode === 'NORMAL') {
-        engine.getState().setMode('INSERT');
+      // Returns true if a node handled activation.
+      const activated = state.activateSelection();
+      // Fallback: only enter INSERT mode if no node was activated AND
+      // the pane has no registered nodes at all (standalone mode toggle).
+      // This prevents accidental INSERT mode when navigating breadcrumb bar
+      // or other panes where nodes exist but didn't handle activation.
+      if (!activated && engine.getState().mode === 'NORMAL') {
+        const list = getActiveList(engine.getState());
+        if (list.length === 0) {
+          engine.getState().setMode('INSERT');
+        }
       }
       return { handled: true };
     }
@@ -581,6 +592,9 @@ export function dispatchFocusKey(
       return { handled: true };
     case '3':
       actions.onSwitchView?.('calendar');
+      return { handled: true };
+    case '4':
+      actions.onSwitchView?.('templates');
       return { handled: true };
     default:
       return { handled: false };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { X, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon, Bold, Italic, Strikethrough, Link, List, ListOrdered, Code, ArrowLeft, Plus, Trash2, ListChecks } from 'lucide-react';
+import { X, Calendar, Clock, CheckSquare, Square, Users, ChevronDown, MessageCircle, Send, Loader2, ZoomIn, Paperclip, Image as ImageIcon, Bold, Italic, Strikethrough, Link, List, ListOrdered, Code, ArrowLeft, Plus, Trash2, ListChecks, Underline, Indent, Outdent } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
@@ -315,6 +315,8 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
   const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
   const [editingSubtaskTitle, setEditingSubtaskTitle] = useState('');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [pendingSubtaskConfirm, setPendingSubtaskConfirm] = useState<{ action: 'toggle' | 'delete'; subtaskId: string } | null>(null);
+  const pendingSubtaskTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [color, setColor] = useState(task.color ?? 'task-primary');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [assignedUserIds, setAssignedUserIds] = useState<string[]>(task.assigned);
@@ -499,12 +501,23 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
       const activeNode = nodeList[activeIndex];
       if (!activeNode) return;
 
-      // 'x' on a subtask item → toggle completion
+      // 'x' on a subtask item → toggle completion (double-press to confirm)
       if (activeNode.id.startsWith('yougile-subtask-item-')) {
         const subtaskId = activeNode.id.replace('yougile-subtask-item-', '');
         const subtask = subtaskTasks.find((t) => t.id === subtaskId);
         if (subtask) {
-          void handleToggleSubtask(subtask);
+          if (pendingSubtaskConfirm?.action === 'toggle' && pendingSubtaskConfirm.subtaskId === subtaskId) {
+            if (pendingSubtaskTimerRef.current) clearTimeout(pendingSubtaskTimerRef.current);
+            setPendingSubtaskConfirm(null);
+            void handleToggleSubtask(subtask);
+          } else {
+            if (pendingSubtaskTimerRef.current) clearTimeout(pendingSubtaskTimerRef.current);
+            setPendingSubtaskConfirm({ action: 'toggle', subtaskId });
+            pendingSubtaskTimerRef.current = setTimeout(() => {
+              setPendingSubtaskConfirm(null);
+              pendingSubtaskTimerRef.current = null;
+            }, 3000);
+          }
         }
       }
     },
@@ -516,10 +529,21 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
       const activeNode = nodeList[activeIndex];
       if (!activeNode) return;
 
-      // 'd' on a subtask item → remove from parent
+      // 'd' on a subtask item → remove from parent (double-press to confirm)
       if (activeNode.id.startsWith('yougile-subtask-item-')) {
         const subtaskId = activeNode.id.replace('yougile-subtask-item-', '');
-        void handleRemoveSubtask(subtaskId);
+        if (pendingSubtaskConfirm?.action === 'delete' && pendingSubtaskConfirm.subtaskId === subtaskId) {
+          if (pendingSubtaskTimerRef.current) clearTimeout(pendingSubtaskTimerRef.current);
+          setPendingSubtaskConfirm(null);
+          void handleRemoveSubtask(subtaskId);
+        } else {
+          if (pendingSubtaskTimerRef.current) clearTimeout(pendingSubtaskTimerRef.current);
+          setPendingSubtaskConfirm({ action: 'delete', subtaskId });
+          pendingSubtaskTimerRef.current = setTimeout(() => {
+            setPendingSubtaskConfirm(null);
+            pendingSubtaskTimerRef.current = null;
+          }, 3000);
+        }
       }
     },
   });
@@ -550,10 +574,11 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
 
   const insertCheckbox = useCallback(() => {
     descEditorRef.current?.focus();
+    // Yougile CKEditor 5 compatible checkbox HTML (without-description variant)
     document.execCommand(
       'insertHTML',
       false,
-      '<label><input type="checkbox" /> </label>&nbsp;'
+      '<ul class="todo-list"><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p> </p></li></ul>&nbsp;'
     );
   }, []);
 
@@ -616,6 +641,8 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     if (mod && e.key === 'b') { e.preventDefault(); execFormatCommand('bold'); return; }
     // Ctrl+I italic
     if (mod && e.key === 'i') { e.preventDefault(); execFormatCommand('italic'); return; }
+    // Ctrl+U underline
+    if (mod && e.key === 'u') { e.preventDefault(); execFormatCommand('underline'); return; }
     // Ctrl+Shift+S strikethrough
     if (mod && e.shiftKey && e.key === 'S') { e.preventDefault(); execFormatCommand('strikeThrough'); return; }
     // Ctrl+K insert link
@@ -629,18 +656,43 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
 
     // Enter inside a checkbox line → create new checkbox
     if (e.key === 'Enter' && !e.shiftKey) {
-      const parent = (e.target as HTMLElement).closest?.('label');
-      if (parent?.querySelector('input[type="checkbox"]')) {
+      // Check for Yougile CKEditor todo-list format (both with/without description variants)
+      const todoItem = (e.target as HTMLElement).closest?.('.todo-list__label, .todo-list__label_without-description');
+      if (todoItem) {
         e.preventDefault();
         document.execCommand(
           'insertHTML', false,
-          '</p><p><label><input type="checkbox" /> </label>&nbsp;'
+          '</span></p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
+        );
+        return;
+      }
+      // Also handle when cursor is in the <p> sibling of a checkbox
+      const liParent = (e.target as HTMLElement).closest?.('ul.todo-list > li');
+      if (liParent && liParent.querySelector('input[type="checkbox"]')) {
+        e.preventDefault();
+        document.execCommand(
+          'insertHTML', false,
+          '</p></li><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p>'
         );
       }
     }
   }, [execFormatCommand, insertCheckbox, openLinkInput]);
 
   const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    // First try HTML paste (preserves formatting from other task descriptions)
+    const html = e.clipboardData?.getData('text/html');
+    if (html) {
+      e.preventDefault();
+      const sanitized = sanitizeHtml(html);
+      document.execCommand('insertHTML', false, sanitized);
+      // Update descHtml immediately so React's next render doesn't overwrite pasted content
+      requestAnimationFrame(() => {
+        const current = descEditorRef.current?.innerHTML ?? '';
+        setDescHtml(current);
+      });
+      return;
+    }
+
     const text = e.clipboardData?.getData('text/plain');
     if (!text) return;
 
@@ -1106,11 +1158,15 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
                 <div className="flex items-center gap-px rounded-md border border-zinc-800/50 bg-zinc-900/40 px-1.5 py-0.5">
                   <ToolbarBtn icon={Bold} title="Bold (Ctrl+B)" onMouseDown={() => execFormatCommand('bold')} />
                   <ToolbarBtn icon={Italic} title="Italic (Ctrl+I)" onMouseDown={() => execFormatCommand('italic')} />
+                  <ToolbarBtn icon={Underline} title="Underline (Ctrl+U)" onMouseDown={() => execFormatCommand('underline')} />
                   <ToolbarBtn icon={Strikethrough} title="Strikethrough (Ctrl+Shift+S)" onMouseDown={() => execFormatCommand('strikeThrough')} />
                   <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
                   <ToolbarBtn icon={Link} title="Link (Ctrl+K)" onMouseDown={() => openLinkInput()} />
                   <ToolbarBtn icon={List} title="Bullet list" onMouseDown={() => execFormatCommand('insertUnorderedList')} />
                   <ToolbarBtn icon={ListOrdered} title="Numbered list" onMouseDown={() => execFormatCommand('insertOrderedList')} />
+                  <ToolbarBtn icon={Outdent} title="Outdent (Shift+Tab)" onMouseDown={() => execFormatCommand('outdent')} />
+                  <ToolbarBtn icon={Indent} title="Indent (Tab)" onMouseDown={() => execFormatCommand('indent')} />
+                  <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
                   <ToolbarBtn icon={Code} title="Code (Ctrl+Shift+`)" onMouseDown={() => execFormatCommand('formatBlock', 'pre')} />
                   <ToolbarBtn icon={CheckSquare} title="Checkbox (Ctrl+Shift+C)" onMouseDown={() => insertCheckbox()} />
                 </div>
@@ -1125,12 +1181,36 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
                 onKeyDown={handleDescriptionKeyDown}
                 onPaste={handleSmartPaste}
                 onClick={(e) => {
-                  // Checkbox toggle
-                  const checkbox = (e.target as HTMLElement).closest('input[type="checkbox"]');
-                  if (checkbox instanceof HTMLInputElement) {
+                  // Checkbox toggle (Yougile CKEditor format — both variants)
+                  // The checkbox is inside <span contenteditable="false"> so the click
+                  // target might be the wrapper span, not the input itself.
+                  const target = e.target as HTMLElement;
+                  let checkbox: HTMLInputElement | null = null;
+                  if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+                    checkbox = target;
+                  } else {
+                    // Check if clicked on the contenteditable=false wrapper around checkbox
+                    const wrapper = target.closest('span[contenteditable="false"]');
+                    if (wrapper) {
+                      checkbox = wrapper.querySelector('input[type="checkbox"]');
+                    }
+                    if (!checkbox) {
+                      checkbox = target.closest('input[type="checkbox"]');
+                    }
+                  }
+                  if (checkbox) {
                     e.preventDefault();
                     checkbox.checked = !checkbox.checked;
-                    checkbox.toggleAttribute('checked');
+                    if (checkbox.checked) {
+                      checkbox.setAttribute('checked', 'checked');
+                    } else {
+                      checkbox.removeAttribute('checked');
+                    }
+                    // Mark the parent <li> with a data attribute for CSS styling
+                    const li = checkbox.closest('li');
+                    if (li) {
+                      li.dataset.checked = checkbox.checked ? 'true' : 'false';
+                    }
                     return;
                   }
                   // Link → open in browser
@@ -1604,7 +1684,16 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
                 onEnter={() => void onNavigateToSubtask(subtask.id)}
               >
                 {(isSelected) => (
-                  <div className={`group/sub flex items-center gap-2 rounded px-1 py-0.5 transition-shadow duration-150 ${isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''}`}>
+                  <div className={`group/sub flex items-center gap-2 rounded px-1 py-0.5 transition-shadow duration-150 ${
+                    pendingSubtaskConfirm?.subtaskId === subtask.id
+                      ? 'ring-1 ring-inset ring-amber-500/40 bg-amber-500/5'
+                      : isSelected ? 'ring-1 ring-inset ring-cyan-500/20' : ''
+                  }`}>
+                    {pendingSubtaskConfirm?.subtaskId === subtask.id && (
+                      <span className="text-[9px] font-mono text-amber-400 shrink-0">
+                        {pendingSubtaskConfirm.action === 'toggle' ? 'x?' : 'd?'}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => void handleToggleSubtask(subtask)}
