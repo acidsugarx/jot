@@ -2,169 +2,137 @@
 
 # jot
 
-Capture thoughts before they escape.
+**Capture thoughts before they escape.**
 
-Keyboard-first task manager for people who think in keystrokes.
+The keyboard-first task manager for people who think in keystrokes.
 
 [![CI](https://github.com/acidsugarx/jot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/acidsugarx/jot/actions/workflows/ci.yml)
 [![Release](https://github.com/acidsugarx/jot/actions/workflows/release.yml/badge.svg)](https://github.com/acidsugarx/jot/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 
+[Download for macOS](https://github.com/acidsugarx/jot/releases) · [Build from source](#install) · [Report a bug](https://github.com/acidsugarx/jot/issues)
+
 </div>
 
 ---
 
-`Opt+Space` → type a thought → done.
+<p align="center">
+  <img src="docs/assets/capture-demo.png" alt="jot capture bar" width="640" />
+</p>
 
-No windows to open, no buttons to click. jot lives in your menu bar and shows up when you need it — even over fullscreen apps.
-
-```
-Meeting with Sarah friday #work !high @zettel
-```
-
-Tags, priority, due date, and a linked note — all from one line. No forms, no clicks.
-
-## Why jot?
-
-**You're in a meeting.** Someone says "we need to follow up on the API migration." You hit `Opt+Space`, type the task, and you're back to paying attention. Two seconds, zero context switch.
-
-**You're coding.** You're in the zone and remember a bug. `Opt+Space`, type it, back to coding. Your flow never breaks.
-
-**You're in fullscreen.** Doesn't matter. jot renders as a native macOS overlay — it appears over everything.
+<p align="center">
+  <code>Opt+Space</code> → type a thought → <code>Enter</code> → done.
+</p>
 
 ---
 
-## Features
+## Your brain sends tasks faster than your mouse can keep up
 
-### Instant Capture
-
-Press `Opt+Space` and start typing. jot's capture bar appears as a native overlay on top of any application, including fullscreen windows. Type your task, press `Enter`, and it disappears. The entire interaction takes under two seconds.
-
-The input bar doubles as a command palette — navigate tasks with `j`/`k`, open the editor with `e`, toggle done with `x`, or switch into command mode with `:` to trigger actions.
-
-### Natural Language Parsing
-
-jot parses structured syntax inline as you type, with live syntax highlighting:
+jot lives in your menu bar and shows up when you need it — even over fullscreen apps. No windows to find, no buttons to click. Just type.
 
 ```
-Write architecture review tomorrow at 10am #work !high @zettel
+Follow up with Sarah about the API migration friday #work !high
 ```
 
-| Syntax | Effect |
-|--------|--------|
-| `#tag` | One or more tags |
-| `!high` | Priority (`low`, `medium`, `high`, `urgent`) |
-| `tomorrow`, `friday`, `next week` | Due date (natural language) |
-| `@zettel` | Create a linked markdown note in your vault |
+That's it. Tag, priority, and due date — parsed from a single line. No forms, no modals, no context switch.
 
-NLP suggestions appear as you type — recognized tags, priorities, dates, and the zettel flag are highlighted in real-time.
+### Built for flow state
 
-### Dashboard
+You're in a meeting. Someone mentions a deadline. `Opt+Space`, type it, back to the conversation. Two seconds.
 
-Press `Cmd+Shift+Space` to open the full dashboard with three views:
+You're deep in code and remember a bug. `Opt+Space`, capture it, back to the editor. Your flow never breaks.
 
-- **List view** — Dense, scannable task rows with inline status, priority, tags, and due dates
-- **Kanban board** — Drag-and-drop columns powered by `@dnd-kit`, customizable column names and order
-- **Calendar view** — Date-based task layout for deadline-aware planning
+You're in fullscreen mode. Doesn't matter — jot renders as a native overlay on top of everything.
 
-A sidebar provides quick filters: inbox, today, tag-based, and status-based. A source switcher toggles between local tasks and Yougile boards with `Tab`.
+---
 
-### Vim-First Navigation
+## What it does
 
-Every surface is keyboard-driven. The focus engine provides three modes:
+### One-line task capture with live parsing
 
-| Mode | Purpose | Keys |
-|------|---------|------|
-| **NORMAL** | Navigate and act | `j`/`k` move, `x` toggle, `e` edit, `d` delete, `s` cycle status, `m` move column |
-| **INSERT** | Type text | Automatic in input fields |
-| **COMMAND** | Search and pick | `/` search, `:` actions |
+Type naturally. jot understands:
 
-The mode indicator shows the current state. Escape always returns to NORMAL or closes the current context.
+| You type | What happens |
+|----------|-------------|
+| `#work` | Tagged as work |
+| `!high` | High priority |
+| `tomorrow`, `friday`, `next week` | Due date set |
+| `@zettel` | Linked note created in your vault |
 
-### Rich-Text Task Editor
+Syntax highlights appear as you type — you see exactly what jot understood before you press Enter.
 
-Both local and Yougile tasks open in a slide-in editor pane with full keyboard navigation:
+### A real editor, not a toy
 
-- **Title** — Auto-resizing, saves on blur
-- **Description** — Rich-text editor (contentEditable) with formatting toolbar: bold, italic, strikethrough, links, ordered/unordered lists, code blocks, checkboxes
-- **Keyboard shortcuts** — `Ctrl+B` bold, `Ctrl+I` italic, `Ctrl+K` link, smart URL paste
-- **Status, Priority, Due Date** — Inline selectors, auto-save on change
+Press `e` on any task and get a full editor pane:
+
+- **Rich-text descriptions** — Bold, italic, strikethrough, links, lists, code blocks, checkboxes. With keyboard shortcuts (`Ctrl+B`, `Ctrl+I`, `Ctrl+K`)
+- **Checklists** — Nested items you can add, toggle, and reorder
+- **Status, priority, due date** — Inline selectors, auto-save on every change
 - **Tags** — Type to add, backspace to remove
-- **Checklists** — Nested checklist items with add/toggle/edit/delete
-- **Subtasks** — Yougile subtask management with inline creation
-- **Color labels** — Per-task color coding
-- **Assignees** — Multi-user assignment for Yougile tasks
-- **Stickers** — Sprint and string sticker support
-- **Chat** — Thread-based task chat with file attachments
-- **Time tracking** — Stopwatch display with elapsed time
+- **Color labels** — Visual coding for quick scanning
+- **Subtasks, assignees, chat, time tracking** — Full project management when connected to Yougile
 
-Every field in the editor is a focusable node — `j`/`k` steps between fields, `Enter` activates, `i` enters edit mode.
+Every field is keyboard-navigable. `j`/`k` between fields, `Enter` to activate, `i` to edit. Your hands never leave the keyboard.
 
-### Yougile Integration
+### Three ways to see your work
 
-Connect your [Yougile](https://yougile.com) workspace for team task management:
+`Cmd+Shift+Space` opens the dashboard:
 
-- **Multi-account** — Add multiple Yougile organizations and switch between them
-- **Hierarchy navigation** — Browse organizations → projects → boards → columns with breadcrumb navigation
-- **Full task sync** — Create, edit, and manage Yougile tasks directly from jot
-- **Real-time updates** — 30-second polling keeps tasks in sync when the window is visible
-- **Rich descriptions** — Full CKEditor 5 compatibility for viewing and editing Yougile descriptions
-- **File uploads** — Attach files to tasks via drag-and-drop or paste
-- **Board columns** — Map Yougile columns to jot's kanban view
+- **List view** — Dense, scannable rows. The default for a reason.
+- **Kanban board** — Drag-and-drop columns. Add, rename, reorder.
+- **Calendar view** — See what's due when.
 
-### Obsidian Bridge
+A sidebar gives you instant filters: inbox, today, by tag, by status. Press `Tab` to switch between local tasks and your Yougile boards.
 
-Add `@zettel` to any task and jot generates a timestamped markdown note in your configured vault:
+### Vim everywhere
 
-```
-202604081400-write-architecture-review.md
-```
+jot was designed for people who live in the terminal. Three modes, one philosophy: your keyboard does everything.
 
-The note includes YAML frontmatter, an H1 title, and a back-link. Click the note icon on any task to open it in Obsidian or your configured editor. The vault path is configurable in Settings.
+| Key | What it does |
+|-----|-------------|
+| `j` / `k` | Move up and down |
+| `x` | Toggle done |
+| `e` | Edit |
+| `d` | Delete (press twice to confirm) |
+| `s` | Cycle status |
+| `m` | Move to next column |
+| `:` | Command mode |
+| `Esc` | Always goes back |
 
-### Task Templates
+The mode indicator tells you where you are. Escape always gets you out. It's predictable and it's fast.
 
-Create reusable task templates with pre-filled fields:
+### Connects to your tools
 
-- Title, description, status, priority, tags, and due date
-- Templates appear in the capture bar — select one to pre-fill a new task
-- Manage templates from Settings or the capture bar's "Manage Templates" action
-- Rich-text description editor for template content
+**Obsidian** — Add `@zettel` to any task and jot creates a timestamped markdown note in your vault with YAML frontmatter and a back-link. Click the note icon to open it.
 
-### Kanban Board
+**Yougile** — Full two-way sync with your [Yougile](https://yougile.com) workspace. Multiple accounts, project/board navigation, real-time polling, file uploads, task chat. Manage team tasks without leaving jot.
 
-Customize your workflow with flexible columns:
+### Task templates
 
-- Default columns: Todo, In Progress, Done
-- Add, rename, reorder, and delete columns
-- Drag-and-drop tasks between columns via `@dnd-kit`
-- Column protection — can't delete a column that has tasks
-- Hidden column filter in the capture bar to show/hide columns per session
+Create reusable templates with pre-filled title, description, status, priority, and tags. Select one from the capture bar to pre-fill a new task. Build your own workflow.
 
-### Dark & Light Themes
+### Respects your system
 
-jot matches your system appearance. The dark theme uses a brutalist zinc-950 palette with cyan accents. The light theme provides clean, high-contrast visibility with proper overrides for every surface — selection indicators, editor rings, prose rendering, and interactive states.
+Dark mode with a brutalist zinc palette and cyan accents. Light mode with clean contrast and proper visibility everywhere. jot follows your system setting — no toggles needed.
 
-### Local-First Architecture
+### Your data, your machine
 
-Your tasks live in SQLite on your machine. No account required, no cloud dependency, no network latency. All data is stored in the OS-native application data directory. Yougile sync is optional and additive.
+Local SQLite database. No account required. No cloud. No network latency. Yougile sync is optional and additive — your local tasks are always yours.
 
 ---
 
 ## Install
 
-### Homebrew (macOS)
+### macOS (Homebrew)
 
 ```bash
 brew tap acidsugarx/tap
 brew install --cask jot
-
-xattr -d com.apple.quarantine /Applications/jot.app
 ```
 
-### Download
+### macOS / Linux (Download)
 
-Grab the latest installer from [Releases](https://github.com/acidsugarx/jot/releases):
+Grab the latest release from [github.com/acidsugarx/jot/releases](https://github.com/acidsugarx/jot/releases):
 
 - **macOS** — `.dmg` (Apple Silicon)
 - **Linux** — `.AppImage`
@@ -178,9 +146,11 @@ npm install
 npm run tauri build
 ```
 
+Requires Node.js 20+, Rust 1.77.2+, and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
 ---
 
-## Keyboard Shortcuts
+## Keyboard shortcuts
 
 ### Global
 
@@ -189,46 +159,33 @@ npm run tauri build
 | `Opt+Space` | Open capture bar |
 | `Cmd+Shift+Space` | Open dashboard |
 
-### Capture Bar
+### Capture bar
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Create task / confirm |
-| `Esc` | Dismiss / clear / close editor |
-| `j` / `k` | Navigate tasks and actions |
-| `e` | Edit selected task |
+| `Enter` | Create task |
+| `Esc` | Dismiss |
+| `j` / `k` | Navigate |
+| `e` | Edit task |
 | `x` | Toggle done |
-| `d` | Delete task (press twice to confirm) |
+| `d` | Delete |
 | `s` | Cycle status |
-| `m` | Move to next column |
-| `:` | Enter command mode |
-| `/` | Focus search |
+| `m` | Move column |
+| `:` | Command mode |
 
 ### Dashboard
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Navigate task list |
-| `h` / `l` | Navigate between panes |
-| `e` | Open editor for selected task |
+| `j` / `k` | Navigate tasks |
+| `h` / `l` | Switch panes |
+| `e` | Edit |
 | `x` | Toggle done |
-| `d` | Delete task (press twice to confirm) |
-| `s` | Cycle status |
-| `m` | Move to next column |
-| `Tab` | Switch between local and Yougile sources |
-| `/` | Focus search |
-| `Esc` | Close editor / return to list |
+| `Tab` | Switch source |
+| `/` | Search |
+| `Esc` | Close editor |
 
-### Task Editor
-
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Move between fields |
-| `Enter` | Activate field / open dropdown |
-| `i` | Enter edit mode on text fields |
-| `Esc` | Return to field navigation |
-
-### Rich-Text Description
+### Rich-text editor
 
 | Shortcut | Action |
 |----------|--------|
@@ -236,129 +193,7 @@ npm run tauri build
 | `Ctrl+I` | Italic |
 | `Ctrl+K` | Insert link |
 | `Ctrl+Shift+S` | Strikethrough |
-| `Ctrl+Shift+C` | Insert checkbox |
-
----
-
-## Architecture
-
-jot is built on a multi-window Tauri v2 architecture with a Rust backend and React frontend:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  macOS NSPanel (Opt+Space)                          │
-│  Capture overlay — always-on-top, transparent       │
-│  React root → App.tsx                               │
-├─────────────────────────────────────────────────────┤
-│  Standard Window (Cmd+Shift+Space)                  │
-│  Dashboard — list/kanban/calendar views             │
-│  React root → Dashboard.tsx                         │
-├─────────────────────────────────────────────────────┤
-│  Settings Window                                    │
-│  Configuration — accounts, vault, appearance        │
-│  React root → Settings.tsx                          │
-└─────────────────────────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-┌─────────────────┐  ┌───────────────┐
-│  Rust Backend    │  │  Yougile API  │
-│  SQLite (local)  │  │  REST (sync)  │
-│  NLP Parser      │  │               │
-│  Zettel Bridge   │  │               │
-└─────────────────┘  └───────────────┘
-```
-
-### Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Backend | Rust, Tauri v2 |
-| Database | SQLite via rusqlite |
-| Frontend | React 18, TypeScript, Vite |
-| Styling | Tailwind CSS |
-| State | Zustand (with shallow selectors) |
-| Drag & Drop | @dnd-kit |
-| Command Palette | cmdk |
-| Icons | Lucide React |
-| Sanitization | DOMPurify |
-| API Client | reqwest (Rust) |
-
-### Project Structure
-
-```
-src/                      # Frontend (React + TypeScript)
-├── components/           # UI components
-│   ├── YougileTaskEditor.tsx   # Rich task editor
-│   ├── TaskEditorPane.tsx      # Local task editor
-│   ├── KanbanBoard.tsx         # Drag-and-drop kanban
-│   ├── CalendarView.tsx        # Calendar date view
-│   ├── ErrorBoundary.tsx       # Crash recovery
-│   └── ...
-├── hooks/                # React hooks
-│   ├── use-rich-text-editor.tsx  # Shared editor logic
-│   ├── use-focus-engine.ts       # Focus engine hooks
-│   └── use-focusable.ts          # Focusable item registration
-├── lib/                  # Utilities
-│   ├── focus-engine.ts          # Vim-mode navigation store
-│   ├── sanitize.ts              # DOMPurify wrapper
-│   ├── formatting.ts            # Date/text formatting
-│   └── yougile-editor.ts        # Editor helper functions
-├── store/                # Zustand state
-│   ├── use-task-store.ts        # Local tasks (SQLite)
-│   └── use-yougile-store.ts     # Yougile tasks (API)
-└── types/                # TypeScript types
-
-src-tauri/src/            # Backend (Rust)
-├── lib.rs                # Tauri commands, windows, shortcuts
-├── db/                   # Database layer (modular)
-│   ├── mod.rs                  # Commands + DatabaseState
-│   ├── migrations.rs           # Schema migrations
-│   ├── tasks.rs                # Task CRUD
-│   ├── columns.rs              # Kanban columns
-│   ├── templates.rs            # Task templates
-│   ├── checklists.rs           # Checklist items
-│   ├── tags.rs                 # Tags
-│   ├── settings.rs             # App settings
-│   ├── notes.rs                # Zettel note generation
-│   ├── yougile_accounts.rs     # Yougile auth
-│   └── utils.rs                # Query builders
-├── models.rs             # Data types
-├── parser.rs             # NLP parser
-└── yougile/              # Yougile API client
-    ├── auth.rs
-    ├── client.rs
-    ├── commands.rs
-    └── models.rs
-```
-
----
-
-## Development
-
-**Prerequisites:** Node.js 20+, Rust 1.77.2+, [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-
-```bash
-# Install dependencies
-npm install
-
-# Start dev server (frontend hot-reload + Rust recompile)
-npm run tauri dev
-
-# Run all checks
-make ci        # fmt + clippy + typecheck + lint + test + build
-
-# Individual commands
-npm run dev           # Frontend only
-npm run typecheck     # TypeScript check
-npm run lint          # ESLint
-npm run test -- --run # Vitest
-cd src-tauri && cargo test   # Rust tests
-cd src-tauri && cargo clippy # Rust linter
-
-# Build for production
-npm run tauri build
-make package          # OS-specific bundle
-```
+| `Ctrl+Shift+C` | Checkbox |
 
 ---
 
@@ -366,9 +201,7 @@ make package          # OS-specific bundle
 
 Bug reports and pull requests are welcome at [acidsugarx/jot](https://github.com/acidsugarx/jot).
 
-Please run `make ci` before submitting — it catches formatting, linting, type, and test issues across both Rust and TypeScript.
-
----
+Run `make ci` before submitting — it checks formatting, types, lint, and tests across both Rust and TypeScript.
 
 ## License
 
