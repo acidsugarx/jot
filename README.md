@@ -17,7 +17,7 @@ The keyboard-first task manager for people who think in keystrokes.
 ---
 
 <p align="center">
-  <img src="docs/assets/capture-demo.png" alt="jot capture bar" width="640" />
+  <img src="attachments/quick-capture.png" alt="jot quick capture overlay" width="640" />
 </p>
 
 <p align="center">
@@ -78,9 +78,17 @@ Every field is keyboard-navigable. `j`/`k` between fields, `Enter` to activate, 
 
 `Cmd+Shift+Space` opens the dashboard:
 
+<p align="center">
+  <img src="attachments/dashboard-list.png" alt="dashboard list view" width="640" />
+</p>
+
 - **List view** — Dense, scannable rows. The default for a reason.
 - **Kanban board** — Drag-and-drop columns. Add, rename, reorder.
 - **Calendar view** — See what's due when.
+
+<p align="center">
+  <img src="attachments/dashboard-board.png" alt="dashboard kanban board view" width="640" />
+</p>
 
 A sidebar gives you instant filters: inbox, today, by tag, by status. Press `Tab` to switch between local tasks and your Yougile boards.
 
