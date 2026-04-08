@@ -85,6 +85,13 @@ fn build_patch_query(table: &str, sets: &[&str]) -> String {
     format!("UPDATE {table} SET {} WHERE id = ?", sets.join(", "))
 }
 
+fn require_non_empty_id(id: &str, label: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err(format!("{label} ID cannot be empty."));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn store_yougile_api_key(account_id: &str, api_key: &str) -> Result<(), String> {
     let keyring = TEST_YOUGILE_KEYRING.get_or_init(|| Mutex::new(HashMap::new()));
@@ -591,6 +598,7 @@ pub fn update_task(db: State<'_, DatabaseState>, input: UpdateTaskInput) -> Resu
 
 #[tauri::command]
 pub fn delete_task(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Task")?;
     let connection = db
         .connection
         .lock()
@@ -843,6 +851,7 @@ pub fn update_column(
 
 #[tauri::command]
 pub fn delete_column(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Column")?;
     let connection = db
         .connection
         .lock()
@@ -940,6 +949,7 @@ pub fn update_task_template(
 
 #[tauri::command]
 pub fn delete_task_template(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Template")?;
     let connection = db
         .connection
         .lock()
@@ -955,6 +965,7 @@ pub fn get_checklists(
     db: State<'_, DatabaseState>,
     task_id: String,
 ) -> Result<Vec<Checklist>, String> {
+    require_non_empty_id(&task_id, "Task")?;
     let connection = db
         .connection
         .lock()
@@ -969,6 +980,7 @@ pub fn create_checklist(
     task_id: String,
     title: String,
 ) -> Result<Checklist, String> {
+    require_non_empty_id(&task_id, "Task")?;
     let connection = db
         .connection
         .lock()
@@ -983,6 +995,7 @@ pub fn add_checklist_item(
     checklist_id: String,
     text: String,
 ) -> Result<ChecklistItem, String> {
+    require_non_empty_id(&checklist_id, "Checklist")?;
     let connection = db
         .connection
         .lock()
@@ -998,6 +1011,7 @@ pub fn update_checklist_item(
     text: Option<String>,
     completed: Option<bool>,
 ) -> Result<(), String> {
+    require_non_empty_id(&id, "Checklist item")?;
     let connection = db
         .connection
         .lock()
@@ -1008,6 +1022,7 @@ pub fn update_checklist_item(
 
 #[tauri::command]
 pub fn delete_checklist(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Checklist")?;
     let connection = db
         .connection
         .lock()
@@ -1018,6 +1033,7 @@ pub fn delete_checklist(db: State<'_, DatabaseState>, id: String) -> Result<(), 
 
 #[tauri::command]
 pub fn delete_checklist_item(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Checklist item")?;
     let connection = db
         .connection
         .lock()
@@ -1059,6 +1075,7 @@ pub fn update_tag(
     name: Option<String>,
     color: Option<String>,
 ) -> Result<(), String> {
+    require_non_empty_id(&id, "Tag")?;
     let connection = db
         .connection
         .lock()
@@ -1069,6 +1086,7 @@ pub fn update_tag(
 
 #[tauri::command]
 pub fn delete_tag(db: State<'_, DatabaseState>, id: String) -> Result<(), String> {
+    require_non_empty_id(&id, "Tag")?;
     let connection = db
         .connection
         .lock()
@@ -1079,6 +1097,7 @@ pub fn delete_tag(db: State<'_, DatabaseState>, id: String) -> Result<(), String
 
 #[tauri::command]
 pub fn get_task_tags(db: State<'_, DatabaseState>, task_id: String) -> Result<Vec<Tag>, String> {
+    require_non_empty_id(&task_id, "Task")?;
     let connection = db
         .connection
         .lock()
@@ -1093,6 +1112,7 @@ pub fn set_task_tags(
     task_id: String,
     tag_ids: Vec<String>,
 ) -> Result<(), String> {
+    require_non_empty_id(&task_id, "Task")?;
     let connection = db
         .connection
         .lock()
