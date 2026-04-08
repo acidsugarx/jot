@@ -34,7 +34,7 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
   const isYougileCard = isYougile(task);
 
   // Focus engine integration
-  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable({
+  const { ref: focusRef, isSelected: isFocusSelected, focus } = useFocusable({
     pane: 'task-view',
     region: `column-${columnIndex}`,
     index: taskIndex,
@@ -91,8 +91,11 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
         style={style}
         {...attributes}
         {...listeners}
-        onClick={() => selectYougileTask(task.id)}
-        onDoubleClick={() => setIsEditorOpen(true)}
+        onClick={() => focus()}
+        onDoubleClick={() => {
+          focus();
+          setIsEditorOpen(true);
+        }}
         className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
           isOverlay
             ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'
@@ -141,6 +144,11 @@ export function KanbanTaskCard({ task, isOverlay, columnIndex, taskIndex }: Task
       style={style}
       {...attributes}
       {...listeners}
+      onClick={() => focus()}
+      onDoubleClick={() => {
+        focus();
+        setIsEditorOpen(true);
+      }}
       className={`relative flex cursor-grab flex-col gap-1 rounded px-2.5 py-2 transition-colors active:cursor-grabbing ${
         isOverlay
           ? 'rotate-1 scale-[1.02] border border-cyan-500/40 bg-[#1e1e22] shadow-xl cursor-grabbing'

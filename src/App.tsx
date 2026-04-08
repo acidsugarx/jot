@@ -354,6 +354,7 @@ function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const isDialogOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listViewportRef = useRef<HTMLDivElement>(null);
   const suppressNextBlurHideRef = useRef(false);
   const preserveModeOnNextFocusRef = useRef(false);
 
@@ -1293,10 +1294,38 @@ function App() {
   useEffect(() => {
     if (mode !== 'normal') return;
     requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-capture-index="${selectedIndex}"]`);
-      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const el = listViewportRef.current?.querySelector<HTMLElement>(
+        `[data-capture-index="${selectedIndex}"]`
+      );
+      el?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
     });
   }, [selectedIndex, mode]);
+
+  const syncSelectionToViewport = useCallback(() => {
+    if (mode !== 'normal') return;
+    const viewport = listViewportRef.current;
+    if (!viewport) return;
+
+    const items = Array.from(
+      viewport.querySelectorAll<HTMLElement>('[data-capture-index]')
+    );
+    if (items.length === 0) return;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const next = items.find((item) => {
+      const rect = item.getBoundingClientRect();
+      return rect.bottom > viewportRect.top + 2 && rect.top < viewportRect.bottom - 2;
+    });
+    if (!next) return;
+
+    const rawIndex = next.dataset.captureIndex;
+    if (!rawIndex) return;
+    const nextIndex = Number.parseInt(rawIndex, 10);
+    if (!Number.isFinite(nextIndex)) return;
+    if (nextIndex !== selectedIndex) {
+      setSelectedIndex(nextIndex);
+    }
+  }, [mode, selectedIndex]);
 
   // ── Editing mode ────────────────────────────────────────────────────────────
 
@@ -1336,7 +1365,7 @@ function App() {
     <div className="flex h-screen w-screen items-center justify-center bg-transparent">
       <Command
         shouldFilter={false}
-        className="flex w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/95 shadow-[0_0_60px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+        className="flex h-full max-h-full w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/95 shadow-[0_0_60px_rgba(0,0,0,0.6)] backdrop-blur-xl"
       >
         {/* Input Area */}
         <div className="flex-shrink-0 border-b border-zinc-800/60 px-4 py-3">
@@ -1469,13 +1498,10 @@ function App() {
 
         {/* Scrollable List */}
         <div
-          className="hide-scrollbar min-h-0 flex-1 overflow-y-auto"
-          style={{
-            maxHeight:
-              MAX_VISIBLE_TASKS * ITEM_HEIGHT +
-              GROUP_HEADER_HEIGHT * 2 +
-              actionItems.length * ACTION_ITEM_HEIGHT +
-              8,
+          ref={listViewportRef}
+          className="hide-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          onWheelCapture={() => {
+            requestAnimationFrame(syncSelectionToViewport);
           }}
         >
           <Command.List className="py-1">
@@ -1497,6 +1523,7 @@ function App() {
                   <Command.Item
                     key={account.id}
                     value={`org-${account.id}`}
+                    data-capture-index={idx}
                     onSelect={() => void handleSelectAccount(account.id)}
                     className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
@@ -1525,6 +1552,7 @@ function App() {
                   <Command.Item
                     key={project.id}
                     value={`project-${project.id}`}
+                    data-capture-index={idx}
                     onSelect={() => void handleSelectProject(project.id)}
                     className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
@@ -1548,6 +1576,7 @@ function App() {
                   <Command.Item
                     key={board.id}
                     value={`board-${board.id}`}
+                    data-capture-index={idx}
                     onSelect={() => void handleSelectBoard(board.id)}
                     className={`flex h-9 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === idx
@@ -1584,6 +1613,7 @@ function App() {
                     <Command.Item
                       key={template.id}
                       value={`template-${template.id}`}
+                      data-capture-index={idx}
                       onSelect={() => handleSelectTemplate(template.id)}
                       className={`flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm text-zinc-300 outline-none transition-colors ${
                         mode === 'normal' && selectedIndex === idx
@@ -1614,6 +1644,7 @@ function App() {
                 {pickerMode === 'template' && (
                   <Command.Item
                     value="manage-templates"
+                    data-capture-index={templates.length}
                     onSelect={() => void handleAction('__manage-templates')}
                     className={`flex h-10 cursor-pointer items-center justify-between px-3 text-sm text-zinc-300 outline-none transition-colors ${
                       mode === 'normal' && selectedIndex === templates.length

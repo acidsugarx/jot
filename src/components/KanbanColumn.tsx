@@ -70,10 +70,10 @@ export function KanbanColumn({ column, columnIndex, tasks, readOnly }: ColumnPro
     <div
       ref={setNodeRef}
       style={style}
-      className="flex w-[260px] shrink-0 flex-col self-start rounded-md border border-zinc-800/40 bg-[#141414]"
+      className="flex h-full min-h-0 w-[260px] shrink-0 flex-col rounded-md border border-zinc-800/40 bg-[#141414]"
     >
       {/* Header */}
-      <div className="group/header flex h-8 items-center gap-1 border-b border-zinc-800/30 px-2">
+      <div className="group/header flex h-8 shrink-0 items-center gap-1 border-b border-zinc-800/30 px-2">
         {/* Drag handle — hidden in read-only (Yougile) mode */}
         {!readOnly && (
           <button
@@ -127,7 +127,7 @@ export function KanbanColumn({ column, columnIndex, tasks, readOnly }: ColumnPro
       </div>
 
       {/* Cards */}
-      <div className="flex flex-col gap-px overflow-y-auto p-1">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1">
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
           {tasks.map((task, taskIdx) => (
             <KanbanTaskCard key={task.id} task={task} columnIndex={columnIndex} taskIndex={taskIdx} />

@@ -92,7 +92,7 @@ function LocalTaskListRow({
   onOpenNote,
   getNextStatus,
 }: LocalTaskListRowProps) {
-  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable<HTMLDivElement>({
+  const { ref: focusRef, isSelected: isFocusSelected, focus } = useFocusable<HTMLDivElement>({
     pane: 'task-view',
     region: 'list',
     index: flatIndex,
@@ -111,8 +111,11 @@ function LocalTaskListRow({
     <div
       ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
       data-task-selected={highlighted ? 'true' : undefined}
-      onClick={() => onSelect(t.id)}
-      onDoubleClick={onDoubleClick}
+      onClick={() => focus()}
+      onDoubleClick={() => {
+        focus();
+        onDoubleClick();
+      }}
       onContextMenu={(e) => onContextMenu(e, t.id)}
       className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
         highlighted
@@ -230,7 +233,7 @@ function YougileTaskListRow({
   onDelete,
   onToggleCompleted,
 }: YougileTaskListRowProps) {
-  const { ref: focusRef, isSelected: isFocusSelected } = useFocusable<HTMLDivElement>({
+  const { ref: focusRef, isSelected: isFocusSelected, focus } = useFocusable<HTMLDivElement>({
     pane: 'task-view',
     region: 'list',
     index: flatIndex,
@@ -252,8 +255,11 @@ function YougileTaskListRow({
     <div
       ref={(node) => { (focusRef as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
       data-task-selected={highlighted ? 'true' : undefined}
-      onClick={() => onSelect(task.id)}
-      onDoubleClick={onDoubleClick}
+      onClick={() => focus()}
+      onDoubleClick={() => {
+        focus();
+        onDoubleClick();
+      }}
       className={`group flex h-9 cursor-pointer items-center gap-2.5 border-l-2 px-4 transition-colors ${
         highlighted
           ? 'border-l-cyan-500 bg-cyan-500/[0.03]'
@@ -1122,7 +1128,7 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'kanban' && (
-            <div className="h-full w-full">
+            <div className="h-full min-h-0 w-full">
               {isYougile && yougileStore.isLoading && yougileStore.tasks.length === 0 && (
                 <div className="flex gap-4 p-4">
                   {[1, 2, 3].map((i) => (
