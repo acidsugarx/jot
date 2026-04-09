@@ -168,6 +168,7 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     insertCheckbox,
     openLinkInput,
     handleDescriptionBlur,
+    handleDescriptionFocus,
     handleDescriptionKeyDown,
     handleSmartPaste,
     handleContentClick,
@@ -180,6 +181,9 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     }, [task.id, task.description, updateTask]),
     onLinkClick: useCallback((href: string) => {
       void invoke('open_url', { url: href });
+    }, []),
+    onFocus: useCallback(() => {
+      focusEngine.getState().setMode('INSERT');
     }, []),
   });
 
@@ -891,6 +895,7 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
                 className="prose-jot prose-jot-yougile prose-jot-editor min-h-[2.5rem] cursor-text outline-none"
                 dangerouslySetInnerHTML={{ __html: descSanitizedHtml || '<p><br></p>' }}
                 onBlur={handleDescriptionBlur}
+                onFocus={handleDescriptionFocus}
                 onKeyDown={handleDescriptionKeyDown}
                 onPaste={handleSmartPaste}
                 onClick={handleContentClick}

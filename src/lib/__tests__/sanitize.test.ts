@@ -62,37 +62,31 @@ describe('sanitizeHtml', () => {
     expect(clean).toContain('data-is-checked="true"');
   });
 
-  it('strips inline color styles that would break dark theme', () => {
+  it('preserves inline color styles (Yougile uses them intentionally)', () => {
     const clean = sanitizeHtml(
-      '<span style="color: rgb(0, 0, 0); font-weight: bold">text</span>',
+      '<span style="color: #6BC125; background-color: #A9D4D4">text</span>',
     );
-    expect(clean).not.toContain('color:');
-    expect(clean).toContain('font-weight: bold');
+    expect(clean).toContain('color:');
+    expect(clean).toContain('background-color:');
     expect(clean).toContain('text');
   });
 
-  it('strips background-color from inline styles', () => {
+  it('preserves background-color in inline styles', () => {
     const clean = sanitizeHtml(
-      '<span style="background-color: white; font-style: italic">text</span>',
+      '<span style="background-color: #A9D4D4; font-style: italic">text</span>',
     );
-    expect(clean).not.toContain('background-color:');
+    expect(clean).toContain('background-color:');
     expect(clean).toContain('font-style: italic');
     expect(clean).toContain('text');
   });
 
-  it('strips shorthand background property with color value', () => {
-    const clean = sanitizeHtml(
-      '<span style="background: yellow">text</span>',
-    );
-    expect(clean).not.toContain('background:');
-    expect(clean).toContain('text');
-  });
-
-  it('removes style attribute entirely when only color properties remain', () => {
+  it('preserves color property in inline styles', () => {
     const clean = sanitizeHtml(
       '<span style="color: black; background-color: white">text</span>',
     );
-    expect(clean).not.toContain('style=');
+    expect(clean).toContain('style=');
+    expect(clean).toContain('color:');
+    expect(clean).toContain('background-color:');
     expect(clean).toContain('text');
   });
 
@@ -103,5 +97,52 @@ describe('sanitizeHtml', () => {
     expect(clean).not.toContain('onmouseover');
     expect(clean).not.toContain('onload');
     expect(clean).toContain('content');
+  });
+
+  it('strips font-family and mso- styles but preserves color', () => {
+    const clean = sanitizeHtml(
+      '<span style="font-family: Arial; color: #6BC125; mso-bidi-font-weight: normal">text</span>',
+    );
+    expect(clean).not.toContain('font-family');
+    expect(clean).not.toContain('mso-');
+    expect(clean).toContain('color:');
+    expect(clean).toContain('text');
+  });
+
+  it('handles CKEditor todo-list HTML (span variant)', () => {
+    const html = '<ul class="todo-list"><li><span class="todo-list__label todo-list__label_without-description"><span contenteditable="false"><input type="checkbox" tabindex="-1"></span></span><p> </p></li></ul>';
+    const clean = sanitizeHtml(html);
+    expect(clean).toContain('todo-list');
+    expect(clean).toContain('contenteditable="false"');
+    expect(clean).toContain('type="checkbox"');
+  });
+
+  it('handles Yougile API todo-list HTML (label variant)', () => {
+    const html = '<ul class="todo-list"><li><label class="todo-list__label todo-list__label_without-description"><input type="checkbox" disabled="disabled"></label><p> </p></li></ul>';
+    const clean = sanitizeHtml(html);
+    expect(clean).toContain('todo-list');
+    expect(clean).toContain('disabled="disabled"');
+    expect(clean).toContain('type="checkbox"');
+  });
+
+  it('preserves CKEditor data attributes', () => {
+    const clean = sanitizeHtml(
+      '<li data-list-item-id="abc123"><p>text</p></li>',
+    );
+    expect(clean).toContain('data-list-item-id="abc123"');
+  });
+
+  it('preserves text-align in inline styles', () => {
+    const clean = sanitizeHtml(
+      '<p style="text-align: justify;">text</p>',
+    );
+    expect(clean).toContain('text-align');
+  });
+
+  it('preserves CSS custom properties (--ck-*)', () => {
+    const clean = sanitizeHtml(
+      '<li class="ck-list-marker-color" style="--ck-content-list-marker-color: #6BC125;"><p>text</p></li>',
+    );
+    expect(clean).toContain('--ck-content-list-marker-color');
   });
 });

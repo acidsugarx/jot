@@ -451,19 +451,21 @@
 }
 /* With-description variant: text inside todo-list__label__description span */
 .prose-jot-yougile .todo-list__label {
-  display: flex;
-  align-items: baseline;
-  gap: 0;
-}
-/* Without-description variant: text in sibling <p> after the label span */
-.prose-jot-yougile .todo-list__label_without-description {
   display: inline-flex;
   align-items: baseline;
   vertical-align: baseline;
+  gap: 0;
 }
+/* Without-description variant: text in sibling <p> after the label */
 .prose-jot-yougile .todo-list__label_without-description + p {
   display: inline;
   margin: 0;
+}
+/* <label> variant (from Yougile API) — same treatment as <span> */
+.prose-jot-yougile label.todo-list__label {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
 }
 /* <p> inside <li> (CKEditor puts paragraphs in list items) */
 .prose-jot-yougile li > p {
@@ -508,6 +510,14 @@
 /* CKEditor list bogus paragraph wrapper */
 .prose-jot-yougile .ck-list-bogus-paragraph {
   display: inline;
+}
+
+/* CKEditor list marker color (colored bullet/number) */
+.prose-jot-yougile .ck-list-marker-color {
+  /* CSS custom property is set inline by CKEditor; use it for list marker */
+}
+.prose-jot-yougile li.ck-list-marker-color::marker {
+  color: var(--ck-content-list-marker-color, inherit);
 }
 
 /* Nested todo-lists (inside <li>, not inside label) */
@@ -576,6 +586,14 @@
   box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.1);
 }
 
+/* Ensure block elements inside editor have proper spacing */
+.prose-jot-editor p {
+  min-height: 1em;
+}
+.prose-jot-editor div {
+  min-height: 1em;
+}
+
 /* Placeholder when empty */
 .prose-jot-editor:empty::before {
   content: attr(data-placeholder);
@@ -587,6 +605,11 @@
 /* Checkboxes inside editor are interactive */
 .prose-jot-editor input[type="checkbox"] {
   pointer-events: auto;
+}
+/* Label wrapping checkbox (Yougile API variant) is also clickable */
+.prose-jot-editor label.todo-list__label {
+  pointer-events: auto;
+  cursor: default;
 }
 
 /* Toolbar hover feedback */

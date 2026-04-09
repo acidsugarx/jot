@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent } from 'react';
 import { sanitizeHtml } from '@/lib/sanitize';
 
 // ── Shared ToolbarBtn ────────────────────────────────────────────────────────
@@ -27,6 +27,8 @@ export interface UseRichTextEditorOptions {
   onBlur: (html: string) => void;
   /** Optional: called when a link is clicked inside the editor (for opening in browser) */
   onLinkClick?: (href: string) => void;
+  /** Optional: called when the editor gains focus — useful for transitioning focus engine to INSERT mode */
+  onFocus?: () => void;
 }
 
 // ── Hook return type ─────────────────────────────────────────────────────────
@@ -48,6 +50,7 @@ export interface UseRichTextEditorReturn {
   applyLink: () => void;
   cancelLinkInput: () => void;
   handleDescriptionBlur: () => void;
+  handleDescriptionFocus: () => void;
   handleDescriptionKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   handleSmartPaste: (e: React.ClipboardEvent<HTMLDivElement>) => void;
   handleContentClick: (e: React.MouseEvent<HTMLDivElement>) => void;
@@ -65,7 +68,7 @@ const NEW_CHECKBOX_LINE =
 // ── Hook implementation ──────────────────────────────────────────────────────
 
 export function useRichTextEditor(options: UseRichTextEditorOptions): UseRichTextEditorReturn {
-  const { onBlur, onLinkClick } = options;
+  const { onBlur, onLinkClick, onFocus } = options;
 
   const descEditorRef = useRef<HTMLDivElement | null>(null);
   const [descHtml, setDescHtml] = useState('');
@@ -79,21 +82,73 @@ export function useRichTextEditor(options: UseRichTextEditorOptions): UseRichTex
     [descHtml]
   );
 
+  // Ensure Enter key creates <p> tags (not <div>) for consistent list/editing behavior
+  if (typeof document !== 'undefined') {
+    try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* ignore */ }
+  }
+
+  // Strip disabled from checkboxes when editor loads new content — Yougile API
+  // returns disabled="disabled" on checkboxes which prevents click events.
+  // Our editor needs them interactive.
+  const enableCheckboxes = useCallback(() => {
+    const editor = descEditorRef.current;
+    if (!editor) return;
+    editor.querySelectorAll('input[type="checkbox"][disabled]').forEach((cb) => {
+      cb.removeAttribute('disabled');
+    });
+  }, []);
+
+  // Enable checkboxes whenever the editor content changes
+  useEffect(() => {
+    // Run after render so the DOM is updated
+    const id = requestAnimationFrame(() => enableCheckboxes());
+    return () => cancelAnimationFrame(id);
+  }, [descSanitizedHtml, enableCheckboxes]);
+
   const handleDescriptionBlur = useCallback(() => {
     const html = descEditorRef.current?.innerHTML ?? '';
     setDescHtml(html);
     onBlur(html);
   }, [onBlur]);
 
+  const handleDescriptionFocus = useCallback(() => {
+    onFocus?.();
+  }, [onFocus]);
+
   const execFormatCommand = useCallback((command: string, value?: string) => {
     descEditorRef.current?.focus();
     document.execCommand(command, false, value);
   }, []);
 
-  const insertCheckbox = useCallback(() => {
-    descEditorRef.current?.focus();
-    document.execCommand('insertHTML', false, CHECKBOX_HTML);
+  /** Insert HTML robustly — uses execCommand first, falls back to Range API */
+  const insertHtmlAtCursor = useCallback((html: string) => {
+    const editor = descEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    // Try execCommand first (handles undo stack)
+    const ok = document.execCommand('insertHTML', false, html);
+    if (!ok) {
+      // Fallback: direct DOM manipulation via Range
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const frag = range.createContextualFragment(html);
+        const lastNode = frag.lastChild;
+        range.insertNode(frag);
+        if (lastNode) {
+          range.setStartAfter(lastNode);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+    }
   }, []);
+
+  const insertCheckbox = useCallback(() => {
+    insertHtmlAtCursor(CHECKBOX_HTML);
+  }, [insertHtmlAtCursor]);
 
   const openLinkInput = useCallback(() => {
     const sel = window.getSelection();
@@ -165,21 +220,45 @@ export function useRichTextEditor(options: UseRichTextEditorOptions): UseRichTex
     if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); execFormatCommand('indent'); return; }
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); execFormatCommand('outdent'); return; }
 
-    // Enter inside a checkbox line → create new checkbox
+    // Enter in a checkbox/todo line → insert new checkbox
     if (e.key === 'Enter' && !e.shiftKey) {
-      const todoItem = (e.target as HTMLElement).closest?.('.todo-list__label, .todo-list__label_without-description');
+      const target = e.target as HTMLElement;
+      // CKEditor todo-list style
+      const todoItem = target.closest?.('.todo-list__label, .todo-list__label_without-description');
       if (todoItem) {
         e.preventDefault();
-        document.execCommand('insertHTML', false, NEW_CHECKBOX_LINE);
+        insertHtmlAtCursor(NEW_CHECKBOX_LINE);
         return;
       }
-      const liParent = (e.target as HTMLElement).closest?.('ul.todo-list > li');
+      const liParent = target.closest?.('ul.todo-list > li');
       if (liParent && liParent.querySelector('input[type="checkbox"]')) {
         e.preventDefault();
-        document.execCommand('insertHTML', false, NEW_CHECKBOX_LINE);
+        insertHtmlAtCursor(NEW_CHECKBOX_LINE);
+        return;
       }
+      // Simple checkbox list: <li><input type="checkbox">...</li>
+      const simpleLi = target.closest?.('li');
+      if (simpleLi && simpleLi.querySelector(':scope > input[type="checkbox"]')) {
+        e.preventDefault();
+        insertHtmlAtCursor(NEW_CHECKBOX_LINE);
+        return;
+      }
+      // Empty checkbox list item — break out of the list
+      if (simpleLi) {
+        const list = simpleLi.parentElement;
+        if (list && (list.tagName === 'UL' || list.tagName === 'OL')) {
+          const textContent = simpleLi.textContent?.trim() ?? '';
+          if (!textContent || textContent === '\u00A0') {
+            e.preventDefault();
+            // Move cursor out of the list
+            insertHtmlAtCursor('</li></ul><p><br></p>');
+            return;
+          }
+        }
+      }
+      // Default Enter: let the browser handle it (inserts <br>, <div>, or <p>)
     }
-  }, [execFormatCommand, insertCheckbox, openLinkInput]);
+  }, [execFormatCommand, insertCheckbox, openLinkInput, insertHtmlAtCursor]);
 
   const handleSmartPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const html = e.clipboardData?.getData('text/html');
@@ -218,19 +297,40 @@ export function useRichTextEditor(options: UseRichTextEditorOptions): UseRichTex
   const handleContentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     let checkbox: HTMLInputElement | null = null;
+
+    // Direct click on the input itself
     if (target instanceof HTMLInputElement && target.type === 'checkbox') {
       checkbox = target;
     } else {
+      // CKEditor live: <span contenteditable="false"> wrapping the input
       const wrapper = target.closest('span[contenteditable="false"]');
       if (wrapper) {
         checkbox = wrapper.querySelector('input[type="checkbox"]');
       }
+      // CKEditor live: <span class="todo-list__label"> parent (with-description variant)
+      if (!checkbox) {
+        const labelSpan = target.closest('span.todo-list__label');
+        if (labelSpan) {
+          checkbox = labelSpan.querySelector('input[type="checkbox"]');
+        }
+      }
+      // Yougile API: <label class="todo-list__label"> wrapping the input
+      if (!checkbox) {
+        const labelEl = target.closest('label.todo-list__label');
+        if (labelEl) {
+          checkbox = labelEl.querySelector('input[type="checkbox"]');
+        }
+      }
+      // Fallback: any checkbox nearby
       if (!checkbox) {
         checkbox = target.closest('input[type="checkbox"]');
       }
     }
     if (checkbox) {
+      // preventDefault stops the native checkbox toggle;
+      // stopPropagation stops the <label> from re-toggling it
       e.preventDefault();
+      e.stopPropagation();
       checkbox.checked = !checkbox.checked;
       if (checkbox.checked) {
         checkbox.setAttribute('checked', 'checked');
@@ -302,6 +402,7 @@ export function useRichTextEditor(options: UseRichTextEditorOptions): UseRichTex
     applyLink,
     cancelLinkInput,
     handleDescriptionBlur,
+    handleDescriptionFocus,
     handleDescriptionKeyDown,
     handleSmartPaste,
     handleContentClick,

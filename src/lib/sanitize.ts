@@ -21,19 +21,20 @@ purify.setConfig({
 });
 
 /**
- * Inline styles that would force text/background colors, breaking dark-theme
- * rendering.  We strip them so the content inherits the app's theme colors.
+ * Inline styles that come from external paste (e.g. Google Docs, Word) that
+ * force specific fonts, line-heights, etc. We strip those but KEEP color and
+ * background-color since Yougile uses them intentionally in task descriptions.
+ * We also keep CSS custom properties (--ck-*) used by CKEditor 5.
  */
-const STRIP_COLOR_RE = /(?:^|;)\s*(?:color|background(?:-color)?)\s*:[^;]*/gi;
+const STRIP_STYLE_RE = /(?:^|;)\s*(?:font-family|mso-[a-z-]+|line-height|letter-spacing|white-space)\s*:[^;]*/gi;
 
-function stripColorStyles(html: string): string {
-  // Replace color/background-color declarations inside style="..." attributes
+function stripUnwantedStyles(html: string): string {
   return html.replace(
     /(<[^>]+\sstyle=)("[^"]*"|'[^']*')/gi,
     (_match, prefix: string, quoted: string) => {
       const quote = quoted[0];
       const inner = quoted.slice(1, -1);
-      const cleaned = inner.replace(STRIP_COLOR_RE, '').replace(/;{2,}/g, ';').replace(/^[;\s]+/, '').replace(/[;\s]+$/, '');
+      const cleaned = inner.replace(STRIP_STYLE_RE, '').replace(/;{2,}/g, ';').replace(/^[;\s]+/, '').replace(/[;\s]+$/, '');
       return cleaned ? `${prefix}${quote}${cleaned}${quote}` : '';
     },
   );
@@ -41,5 +42,5 @@ function stripColorStyles(html: string): string {
 
 export function sanitizeHtml(dirty: string): string {
   const clean = purify.sanitize(dirty);
-  return stripColorStyles(clean);
+  return stripUnwantedStyles(clean);
 }

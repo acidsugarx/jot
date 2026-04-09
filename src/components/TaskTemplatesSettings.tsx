@@ -25,6 +25,7 @@ import { consumeTemplateIntent } from '@/lib/settings-navigation';
 import { YOUGILE_TASK_COLOR_OPTIONS, getYougileTaskColorValue } from '@/lib/yougile';
 import { ToolbarBtn, useRichTextEditor } from '@/hooks/use-rich-text-editor';
 import { useTemplateStore } from '@/store/use-template-store';
+import { focusEngine } from '@/lib/focus-engine';
 import { useYougileStore } from '@/store/use-yougile-store';
 import type { CreateTaskTemplateInput, TaskTemplate, YougileChecklist } from '@/types/yougile';
 
@@ -228,6 +229,7 @@ export function TaskTemplatesSettings() {
     insertCheckbox,
     openLinkInput,
     handleDescriptionBlur,
+    handleDescriptionFocus,
     handleDescriptionKeyDown,
     handleSmartPaste,
     handleContentClick,
@@ -235,6 +237,9 @@ export function TaskTemplatesSettings() {
   } = useRichTextEditor({
     onBlur: useCallback((html: string) => {
       setDraft((current) => ({ ...current, description: html }));
+    }, []),
+    onFocus: useCallback(() => {
+      focusEngine.getState().setMode('INSERT');
     }, []),
   });
 
@@ -566,6 +571,7 @@ export function TaskTemplatesSettings() {
                 suppressContentEditableWarning
                 dangerouslySetInnerHTML={{ __html: descSanitizedHtml }}
                 onBlur={handleDescriptionBlur}
+                onFocus={handleDescriptionFocus}
                 onKeyDown={handleDescriptionKeyDown}
                 onPaste={handleSmartPaste}
                 onClick={handleContentClick}
