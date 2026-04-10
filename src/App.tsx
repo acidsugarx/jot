@@ -1436,9 +1436,41 @@ function App() {
           setPickerMode('columns');
           setSelectedIndex(0);
           return;
+        case 'x':
+          e.preventDefault();
+          {
+            const item = normalModeItems[selectedIndex];
+            if (item && !item.id.startsWith('__')) {
+              const task = activeTasks.find((t) => t.id === item.id);
+              if (task) {
+                if (pendingConfirm?.action === 'toggle' && pendingConfirm.taskId === task.id) {
+                  clearPendingConfirm();
+                  void handleToggleStatus(task);
+                } else {
+                  triggerPendingConfirm('toggle', task.id, task.title ?? (isYougileTask(task) ? '' : task.title));
+                }
+              }
+            }
+          }
+          return;
+        case 'd':
+          e.preventDefault();
+          {
+            const item = normalModeItems[selectedIndex];
+            if (item && !item.id.startsWith('__')) {
+              if (pendingConfirm?.action === 'delete' && pendingConfirm.taskId === item.id) {
+                clearPendingConfirm();
+                void handleDeleteTask(item.id);
+              } else {
+                const task = activeTasks.find((t) => t.id === item.id);
+                triggerPendingConfirm('delete', item.id, task ? (task.title ?? (isYougileTask(task) ? '' : task.title)) : '');
+              }
+            }
+          }
+          return;
       }
 
-      // Delegate remaining action keys (x/d/n/o/m/r/?/space/1/2/3) to focus engine
+      // Delegate remaining action keys (n/o/m/r/?/space/1/2/3) to focus engine
       const result = dispatchFocusKey(focusEngine, e, resolveNormalKeyActions());
       if (result.handled) {
         if (result.stopPropagation) e.stopPropagation();
@@ -1450,21 +1482,27 @@ function App() {
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
   }, [
+    activeTasks,
+    clearPendingConfirm,
     editingTask,
     handleAction,
     handleCreateTask,
+    handleDeleteTask,
     handleSelectAccount,
     handleSelectBoard,
     handleSelectProject,
     handleSelectTemplate,
+    handleToggleStatus,
     activeTemplate,
     hasQuery,
     hiddenColumnIds,
     mode,
     normalModeItems,
+    pendingConfirm,
     pickerItems,
     pickerMode,
     selectedIndex,
+    triggerPendingConfirm,
   ]);
 
   const sourceBadgeLabel = useMemo(() => {
