@@ -649,6 +649,7 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
           taskId={task.id}
           show={showChat}
           onClose={() => setShowChat(false)}
+          onPreviewImage={setPreviewImage}
         />
       )}
 

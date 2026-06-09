@@ -38,6 +38,9 @@ export function looksLikeHtml(text: string): boolean {
 const CHAT_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|heic|heif|avif)(?:$|[?#])/i;
 
 function resolveYougileFileUrl(rawPath: string): string {
+  // Already a full URL — return as-is
+  if (/^https?:\/\//i.test(rawPath)) return rawPath;
+  // Relative path under user-data: strip leading root/#file: prefix, then prepend host
   const normalized = rawPath
     .replace(/^\/?root\/#file:/i, '')
     .replace(/^\/+/, '');
@@ -50,10 +53,16 @@ export function normalizeChatHtml(html: string): string {
     /\b(src|href)="((?:\/?root\/#file:)?\/?user-data\/[^"]+)"/gi,
     (_match, attr: string, path: string) => `${attr}="${resolveYougileFileUrl(path)}"`
   );
-  // Convert <a> tags that point to image files into <img> tags
+  // Convert <a> tags wrapping images: unwrap so inner <img> survives
+  // Yougile sends: <a href="...full.png"><img src="...preview.png"></a>
+  // We want: just <img src="...preview.png">
+  result = result.replace(
+    /<a\b[^>]*href="([^"]+)"[^>]*>((?:\s*<img[^>]*>\s*)+)<\/a>/gi,
+    (_match, _href: string, innerContent: string) => innerContent
+  );
+  // Also handle plain <a> links to image files (no inner <img>)
   result = result.replace(
     /<a\b[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/gi,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     (_match, href: string, _label: string) => {
       if (CHAT_IMAGE_EXT_RE.test(href)) {
         return `<img src="${href}" alt="" style="max-width:100%;max-height:12rem;border-radius:4px;cursor:pointer" />`;

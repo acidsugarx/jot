@@ -17,6 +17,7 @@ import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plug
 import { useYougileStore } from '@/store/use-yougile-store';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { useRegisteredNormalKeyActions } from '@/lib/focus-actions';
+import { ImagePreviewOverlay } from '@/components/editors';
 import {
   looksLikeHtml,
   normalizeChatHtml,
@@ -157,9 +158,10 @@ interface ChatPanelProps {
   taskId: string;
   show: boolean;
   onClose: () => void;
+  onPreviewImage?: (url: string) => void;
 }
 
-export function ChatPanel({ taskId, show, onClose }: ChatPanelProps) {
+export function ChatPanel({ taskId, show, onClose, onPreviewImage: onPreviewImageExternal }: ChatPanelProps) {
   const {
     chatMessages,
     chatLoading,
@@ -172,6 +174,7 @@ export function ChatPanel({ taskId, show, onClose }: ChatPanelProps) {
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<Array<File | string>>([]);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -220,6 +223,14 @@ export function ChatPanel({ taskId, show, onClose }: ChatPanelProps) {
       requestAnimationFrame(() => chatInputRef.current?.focus());
     }
   }, [chatInput, pendingFiles, sendChatMessage, sendChatWithAttachments, fetchChatMessages, taskId]);
+
+  const handlePreviewImage = useCallback((url: string) => {
+    if (onPreviewImageExternal) {
+      onPreviewImageExternal(url);
+    } else {
+      setPreviewImage(url);
+    }
+  }, [onPreviewImageExternal]);
 
   const handleDownloadFile = useCallback(async (url: string, fileName: string) => {
     try {
@@ -271,6 +282,13 @@ export function ChatPanel({ taskId, show, onClose }: ChatPanelProps) {
 
   return (
     <div className="flex min-h-0 flex-col border-t border-zinc-800/40">
+      {/* Local image preview (fallback when no external onPreviewImage) */}
+      {previewImage && !onPreviewImageExternal && (
+        <ImagePreviewOverlay
+          src={previewImage}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
       {/* Messages list */}
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {chatLoading && chatMessages.length === 0 ? (
@@ -288,7 +306,7 @@ export function ChatPanel({ taskId, show, onClose }: ChatPanelProps) {
                 key={msg.id}
                 msg={msg}
                 onDownload={handleDownloadFile}
-                onPreviewImage={() => {}}
+                onPreviewImage={handlePreviewImage}
               />
             ))}
             <div ref={chatEndRef} />
