@@ -44,7 +44,14 @@ function resolveYougileFileUrl(rawPath: string): string {
   const normalized = rawPath
     .replace(/^\/?root\/#file:/i, '')
     .replace(/^\/+/, '');
-  return `https://yougile.com/${normalized}`;
+  const url = `https://yougile.com/${normalized}`;
+  // Decode percent-encoded characters (e.g. %3F → ?, %5B → [, %5D → ])
+  // so downstream isImageAttachmentUrl and img src get clean URLs
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
 }
 
 export function normalizeChatHtml(html: string): string {
