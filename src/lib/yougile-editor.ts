@@ -147,6 +147,56 @@ export function formatStickerValue(value: unknown, fallback: string): string {
   }
 }
 
+// ── Linkify helpers ───────────────────────────────────────────────────────
+
+const URL_RE = /https?:\/\/[^\s<>'"`{}()\[\]\\]+/gi;
+
+/**
+ * Convert URLs and image URLs in plain text into clickable <a>/<img> markup.
+ * Image URLs become inline <img> tags; other URLs become <a> tags that open
+ * in the system browser (via IPC).
+ */
+export function linkifyText(text: string): string {
+  if (looksLikeHtml(text)) return text;
+
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    // Text before this URL
+    if (match.index > lastIndex) {
+      result += escapeHtml(text.slice(lastIndex, match.index));
+    }
+
+    const url = match[0];
+    if (CHAT_IMAGE_EXT_RE.test(url)) {
+      // Image URL → <img> tag (clickable for preview)
+      result += `<img src="${escapeHtml(url)}" alt="" style="max-width:100%;max-height:12rem;border-radius:4px;cursor:pointer;display:block;margin:4px 0" />`;
+    } else {
+      // Regular URL → clickable <a>
+      result += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="text-cyan-400 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-300">${escapeHtml(url)}</a>`;
+    }
+
+    lastIndex = match.index + url.length;
+  }
+
+  // Remaining text after last URL
+  if (lastIndex < text.length) {
+    result += escapeHtml(text.slice(lastIndex));
+  }
+
+  return result || escapeHtml(text);
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // ── Checklist helpers ──────────────────────────────────────────────────────
 
 export function cloneChecklists(checklists: YougileChecklist[] | undefined): YougileChecklist[] {

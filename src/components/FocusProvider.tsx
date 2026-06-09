@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useCallback } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 
 import {
@@ -19,6 +19,12 @@ interface FocusProviderProps {
   showIndicator?: boolean;
   captureKeys?: boolean;
 }
+/** Return true when the target is an editable field (input, textarea, contenteditable). */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
 
 export function FocusProvider({
   children,
@@ -27,6 +33,27 @@ export function FocusProvider({
   showIndicator = true,
   captureKeys = false,
 }: FocusProviderProps) {
+  // Auto-switch to INSERT when mouse clicks into an editable field.
+  // This makes the editor feel natural for mouse users: click → type immediately.
+  const handleMouseDown = useCallback((event: MouseEvent) => {
+    if (!captureKeys) return;
+    const engineState = engine.getState();
+    if (isEditableTarget(event.target)) {
+      // Click in editable → ensure we're in INSERT so mode indicator is honest
+      // and Escape works correctly (INSERT→NORMAL, not close editor)
+      if (engineState.mode !== 'INSERT') {
+        engineState.setMode('INSERT');
+      }
+    }
+  }, [captureKeys, engine]);
+
+  useEffect(() => {
+    if (!captureKeys) return;
+
+    window.addEventListener('mousedown', handleMouseDown, true);
+    return () => window.removeEventListener('mousedown', handleMouseDown, true);
+  }, [captureKeys, handleMouseDown]);
+
   useEffect(() => {
     if (!captureKeys) return;
 

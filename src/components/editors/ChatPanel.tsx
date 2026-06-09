@@ -24,6 +24,7 @@ import {
   isImageAttachmentUrl,
   fileNameFromAttachmentUrl,
   getAttachmentName,
+  linkifyText,
 } from '@/lib/yougile-editor';
 import type { YougileChatMessage } from '@/types/yougile';
 
@@ -66,6 +67,7 @@ function ChatMessage({ msg, onDownload, onPreviewImage }: ChatMessageProps) {
     : -1;
   const fileLeadText = fileMarkerIndex > 0 ? msg.text.slice(0, fileMarkerIndex).trim() : '';
   const isImage = attachment ? isImageAttachmentUrl(attachment.url) : false;
+  const linkified = !hasHtml && !attachment ? linkifyText(msg.text) : null;
 
   return (
     <div className="group">
@@ -126,6 +128,20 @@ function ChatMessage({ msg, onDownload, onPreviewImage }: ChatMessageProps) {
             </button>
           )}
         </div>
+      ) : linkified ? (
+        <div
+          className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-zinc-400"
+          onClick={(e) => {
+            const img = (e.target as HTMLElement).closest('img');
+            if (img?.src) { onPreviewImage(img.src); return; }
+            const anchor = (e.target as HTMLElement).closest('a');
+            if (anchor?.href) {
+              e.preventDefault();
+              void invoke('open_url', { url: anchor.href });
+            }
+          }}
+          dangerouslySetInnerHTML={{ __html: linkified }}
+        />
       ) : (
         <div className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">
           {msg.text}

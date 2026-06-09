@@ -58,6 +58,23 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
     }
   }, [isSelected]);
 
+  // Sync focus engine when mouse clicks this element.
+  // Without this, clicking a focusable element leaves the engine's activeIndex
+  // at its previous position — subsequent j/k navigation starts from the wrong place.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || options.disabled) return;
+
+    const onMouseDown = () => {
+      const opts = optionsRef.current;
+      if (opts.disabled) return;
+      engine.getState().focusNode(opts.pane, opts.region, opts.index);
+    };
+
+    el.addEventListener('mousedown', onMouseDown);
+    return () => el.removeEventListener('mousedown', onMouseDown);
+  }, [engine, options.disabled, options.id, options.index, options.pane, options.region]);
+
   useEffect(() => {
     if (options.disabled) return;
 
