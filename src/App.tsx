@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { setCaptureKeysBlocked } from '@/lib/capture-keys';
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -62,8 +63,7 @@ function isYougileTask(task: Task | YougileTask): task is YougileTask {
 /** Module-level flag to block FocusProvider from dispatching keys when capture overlay
  *  has a picker open. This is needed because FocusProvider registers a capture-phase
  *  listener that fires before App.tsx's handler. */
-export let captureKeysBlocked = false;
-export function setCaptureKeysBlocked(v: boolean) { captureKeysBlocked = v; }
+
 
 // ── Inline Task Editor ────────────────────────────────────────────────────────
 
@@ -393,7 +393,7 @@ function App() {
   // Keep captureKeysBlocked in sync with picker mode for FocusProvider
   useLayoutEffect(() => {
     pickerModeRef.current = pickerMode;
-    captureKeysBlocked = pickerMode !== 'none';
+    setCaptureKeysBlocked(pickerMode !== 'none');
   }, [pickerMode]);
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(() => {
     try {

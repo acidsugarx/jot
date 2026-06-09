@@ -10,7 +10,7 @@ import {
 import { resolveNormalKeyActions } from '@/lib/focus-actions';
 import { FocusEngineContext } from '@/components/focus-engine-context';
 import { ModeIndicator } from '@/components/ModeIndicator';
-import { captureKeysBlocked } from '@/App';
+import { captureKeysBlocked } from '@/lib/capture-keys';
 
 interface FocusProviderProps {
   children: ReactNode;
