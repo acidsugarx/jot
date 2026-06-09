@@ -117,6 +117,10 @@ jobs:
           printf '  homepage "https://github.com/acidsugarx/jot"\n\n' >> Casks/jot.rb
           printf '  depends_on macos: ">= :ventura"\n\n' >> Casks/jot.rb
           printf '  app "jot.app"\n\n' >> Casks/jot.rb
+          printf '  caveats <<~EOS\n' >> Casks/jot.rb
+          printf '    First launch: right-click the app and select Open, or run:\n' >> Casks/jot.rb
+          printf '    sudo xattr -rd com.apple.quarantine /Applications/Jot.app\n' >> Casks/jot.rb
+          printf '  EOS\n' >> Casks/jot.rb
           printf '  zap trash: [\n' >> Casks/jot.rb
           printf '    "~/Library/Application Support/com.jot.app",\n' >> Casks/jot.rb
           printf '    "~/Library/Caches/com.jot.app",\n' >> Casks/jot.rb
