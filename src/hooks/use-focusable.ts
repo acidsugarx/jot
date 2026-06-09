@@ -31,11 +31,11 @@ export function useFocusable<T extends HTMLElement = HTMLElement>(
   // Without this, inline arrow functions (e.g. onSelect={() => select(id)})
   // change identity every render, causing the effect to re-register all nodes
   // on every render — which resets activeIndex via unregister/register churn.
-  const onSelectRef = useRef(options.onSelect);
+  const onSelectRef = useRef<typeof options.onSelect>(undefined);
   onSelectRef.current = options.onSelect;
-  const onActivateRef = useRef(options.onActivate);
+  const onActivateRef = useRef<typeof options.onActivate>(undefined);
   onActivateRef.current = options.onActivate;
-  const onEnterRef = useRef(options.onEnter);
+  const onEnterRef = useRef<typeof options.onEnter>(undefined);
   onEnterRef.current = options.onEnter;
 
   // Also keep structural options in refs so the `focus` helper always reads

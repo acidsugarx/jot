@@ -737,12 +737,16 @@ function App() {
   }, [settings, setYougileEnabled]);
 
   useEffect(() => {
+    if (yougileEnabled) {
+      void fetchTemplates();
+    }
+  }, [fetchTemplates, yougileEnabled]);
+
+  useEffect(() => {
     if (!yougileEnabled) {
       setSelectedTemplateId(null);
-      return;
     }
-    void fetchTemplates();
-  }, [fetchTemplates, yougileEnabled]);
+  }, [yougileEnabled]);
 
   useEffect(() => {
     if (selectedTemplateId && !templates.some((template) => template.id === selectedTemplateId)) {
