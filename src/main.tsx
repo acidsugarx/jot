@@ -27,12 +27,10 @@ if ('__TAURI_INTERNALS__' in window) {
   if (label !== 'settings') {
     void useYougileStore.getState().hydrateSyncState();
     const unlistenSync = useYougileStore.getState().listenForSyncUpdates();
-    const unlistenTasks = useYougileStore.getState().listenForTaskUpdates();
 
     if (import.meta.hot) {
       import.meta.hot.dispose(() => {
         unlistenSync();
-        unlistenTasks();
       });
     }
   }

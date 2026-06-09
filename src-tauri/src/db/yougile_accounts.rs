@@ -198,78 +198,6 @@ fn resolve_yougile_api_key(
     Ok(legacy_api_key.to_string())
 }
 
-fn recover_yougile_api_key_from_related_accounts(
-    connection: &Connection,
-    missing_account: &StoredYougileAccount,
-) -> Result<Option<String>, String> {
-    let mut stmt = connection
-        .prepare(
-            "SELECT id, email, company_id, company_name, api_key, created_at
-             FROM yougile_accounts
-             WHERE LOWER(email) = LOWER(?1) AND company_id = ?2 AND id != ?3
-             ORDER BY created_at DESC",
-        )
-        .map_err(|error| db_error("prepare related Yougile account lookup", error))?;
-
-    let candidates = stmt
-        .query_map(
-            params![
-                &missing_account.email,
-                &missing_account.company_id,
-                &missing_account.id
-            ],
-            |row| {
-                Ok(StoredYougileAccount {
-                    id: row.get(0)?,
-                    email: row.get(1)?,
-                    company_id: row.get(2)?,
-                    company_name: row.get(3)?,
-                    legacy_api_key: row.get(4)?,
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|error| db_error("query related Yougile accounts", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| db_error("read related Yougile accounts", error))?;
-
-    for candidate in candidates {
-        let recovered_key =
-            match resolve_yougile_api_key(connection, &candidate.id, &candidate.legacy_api_key) {
-                Ok(key) => key,
-                Err(_) => continue,
-            };
-
-        if missing_account.legacy_api_key.trim().is_empty() {
-            if let Err(error) = connection.execute(
-                "UPDATE yougile_accounts SET api_key = ?1 WHERE id = ?2",
-                params![recovered_key, &missing_account.id],
-            ) {
-                log::warn!(
-                    "Failed to backfill recovered API key into SQLite for account '{}': {error}",
-                    missing_account.id
-                );
-            }
-        }
-
-        if let Err(error) = store_yougile_api_key(&missing_account.id, &recovered_key) {
-            log::warn!(
-                "Failed to backfill recovered API key into keychain for account '{}': {error}",
-                missing_account.id
-            );
-        }
-
-        log::warn!(
-            "Recovered missing Yougile API key for account '{}' from related account '{}'",
-            missing_account.id,
-            candidate.id
-        );
-        return Ok(Some(recovered_key));
-    }
-
-    Ok(None)
-}
-
 pub fn get_yougile_accounts_impl(
     db: &super::DatabaseState,
 ) -> Result<Vec<crate::yougile::models::YougileAccount>, String> {
@@ -390,13 +318,5 @@ pub fn get_yougile_account_api_key_impl(
         .lock()
         .map_err(|error| db_error("lock SQLite connection", error))?;
     let account = get_stored_yougile_account(&conn, account_id)?;
-    match resolve_yougile_api_key(&conn, &account.id, &account.legacy_api_key) {
-        Ok(api_key) => Ok(api_key),
-        Err(primary_error) => {
-            if let Some(api_key) = recover_yougile_api_key_from_related_accounts(&conn, &account)? {
-                return Ok(api_key);
-            }
-            Err(primary_error)
-        }
-    }
+    resolve_yougile_api_key(&conn, &account.id, &account.legacy_api_key)
 }

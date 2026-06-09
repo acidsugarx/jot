@@ -9,6 +9,7 @@ Keep it updated as commands, configs, and architectural boundaries evolve.
 ## Repository Reality
 
 - Source of truth: `PRD.md`
+- Active plans: `plans/yougile-rearchitecture.md` — re-architecture of Yougile integration into a provider-based architecture
 - Remote `origin` → `git@github.com:acidsugarx/jot.git`
 - GitHub Actions CI (`.github/workflows/ci.yml`) runs on PR + push to `main`; release workflow (`.github/workflows/release.yml`) on `v*` tags
 - Worktree at `.worktrees/focus-engine/` for parallel development; test configs exclude `.worktrees/**`
@@ -58,7 +59,7 @@ All five PRD phases are implemented. Future work extends and polishes:
 2. **Database** — SQLite init, tasks/columns/tags/checklists tables, Rust CRUD
 3. **NLP + Zettel** — Raw-input parser for tags/priority/dates, `@zettel` note generation
 4. **Multi-window UI** — Capture overlay, dashboard, settings, Zustand stores, CmdK capture
-5. **Dashboard + Vim** — List/kanban/calendar/templates views, focus engine, Yougile integration
+5. **Dashboard + Vim** — List/kanban/calendar/templates views, focus engine, Yougile integration (legacy — see `plans/yougile-rearchitecture.md` for re-architecture plan)
 
 ## Commands
 
@@ -138,9 +139,14 @@ All three windows are wrapped in `<FocusProvider>`. The `main` and `dashboard` w
 
 ```
 src-tauri/src/
-├── lib.rs              # Tauri setup: window management, tray, global shortcuts, command registration (38 commands)
+├── lib.rs              # Tauri setup: window management, tray, global shortcuts, command registration (38+ commands)
 ├── models.rs           # Data types: Task, KanbanColumn, AppSettings, Checklist, Tag, YougileSyncState, etc.
 ├── parser.rs           # NLP parser: #tag, !priority, @zettel, date/time extraction
+├── provider/           # Provider-based task abstraction (NEW — see plans/yougile-rearchitecture.md)
+│   ├── mod.rs          # TaskProvider trait, UnifiedTask type, ProviderError, TaskEngine
+│   ├── local.rs        # DbBoundLocalProvider — wraps existing db::tasks via DatabaseState
+│   ├── yougile.rs      # DbBoundYougileProvider — wraps yougile::client via DatabaseState + account
+│   └── sync.rs         # SyncManager — tokio::spawn background polling, emits events via Tauri
 ├── db/                 # Database layer (modular)
 │   ├── mod.rs          # DatabaseState, init_database, all #[tauri::command] functions, test module
 │   ├── migrations.rs   # Schema migrations, seeding, foreign key constraints
@@ -153,7 +159,7 @@ src-tauri/src/
 │   ├── notes.rs        # Zettel note generation (vault directory, file creation)
 │   ├── yougile_accounts.rs  # Yougile account management with keyring integration
 │   └── utils.rs        # Shared query builders, normalizers, timestamps
-└── yougile/            # Yougile REST API client
+└── yougile/            # Yougile REST API client (legacy — being wrapped by provider)
     ├── auth.rs         # Auth credential handling (multi-account)
     ├── client.rs       # HTTP client with auth headers
     ├── commands.rs     # Tauri commands wrapping API calls
@@ -200,9 +206,9 @@ Keyboard-driven navigation across all surfaces:
 | `src/hooks/use-focus-engine.ts` | React hooks to read engine state |
 | `src/hooks/use-focusable.ts` | Hook for registering focusable items/panes |
 
-### Dual Task System
+### Dual Task System (LEGACY — TO BE REPLACED)
 
-The app handles two task sources with a unified UI:
+The app currently handles two task sources with a unified UI. This is **legacy architecture** being migrated to a unified Task type + provider pattern (see `plans/yougile-rearchitecture.md`).
 
 - **Local tasks** (`Task` type in `src/types.ts`) — SQLite, supports status/priority/tags/dueDate/linkedNotePath
 - **Yougile tasks** (`YougileTask` type in `src/types/yougile.ts`) — Yougile API, supports columnId/completed/deadline/assigned/color
@@ -215,6 +221,8 @@ function isYougileTask(task: Task | YougileTask): task is YougileTask {
 }
 ```
 
+**Target state:** single unified `Task` type with `task.provider === 'local' | 'yougile'`.
+
 ### Key Frontend Components
 
 | Component | File | Purpose |
@@ -222,7 +230,7 @@ function isYougileTask(task: Task | YougileTask): task is YougileTask {
 | **App** | `src/App.tsx` | Capture bar: insert/normal modes, vim navigation, picker for org/project/board/template/columns, inline task editor |
 | **Dashboard** | `src/Dashboard.tsx` | List/kanban/calendar/templates tabs, sidebar filters, context menus, quick-add bar, delete dialog |
 | **Settings** | `src/Settings.tsx` | Tabbed settings (General, Vault, Appearance, Accounts) with h/l tab switching |
-| **YougileTaskEditor** | `src/components/YougileTaskEditor.tsx` | Rich editor: contentEditable description, formatting toolbar, keyboard shortcuts, checklists, subtasks, color, assignees, chat, attachments, stickers, time tracking. `embedded` prop for capture overlay |
+| **YougileTaskEditor** | `src/components/YougileTaskEditor.tsx` | Rich editor: contentEditable description, formatting toolbar, keyboard shortcuts, checklists, subtasks, color, assignees, chat, attachments, stickers, time tracking. `embedded` prop for capture overlay. ⚠️ 1843 строки — рефакторинг запланирован в `plans/yougile-rearchitecture.md` |
 | **TaskEditorPane** | `src/components/TaskEditorPane.tsx` | Slide-in editor for local tasks |
 | **KanbanBoard** | `src/components/KanbanBoard.tsx` | Drag-and-drop kanban via @dnd-kit |
 | **KanbanTaskCard** | `src/components/KanbanTaskCard.tsx` | Individual kanban card with drag handle |
@@ -438,13 +446,23 @@ Destructive actions (delete) require double-press: first `d` sets `pendingConfir
 
 `.worktrees/focus-engine/` used for parallel development. Test configs exclude `.worktrees/**`.
 
+## Active Plans
+
+| Plan | File | Status | Started |
+|------|------|--------|---------|
+| Yougile Re-architecture | `plans/yougile-rearchitecture.md` | Phase 6 ✅ (keyring recovery + chat выпилены) | 2026-06-04 |
+
+Active plans contain a phased migration strategy with checklists. Future agents should check the current phase and continue from there.
+
 ## Agent Workflow
 
 - Read `PRD.md` before making architectural changes
+- Read `plans/*.md` for any active plans that may affect the work
 - Check whether requested work belongs to the current phase
 - Prefer real commands from this file over aspirational placeholders
 - Prefer conventional file names and standard scripts when bootstrapping
 - Update this file when scripts, test targets, or project layout change
+- Update relevant `plans/*.md` when completing phases
 - Run `make ci` before declaring work complete to catch regressions
 
 ## Rule File Status
