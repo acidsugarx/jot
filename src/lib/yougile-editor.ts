@@ -70,7 +70,7 @@ export function normalizeChatHtml(html: string): string {
   // Also handle plain <a> links to image files (no inner <img>)
   result = result.replace(
     /<a\b[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/gi,
-    (_match, href: string, _label: string) => {
+    (_match, href: string) => {
       if (CHAT_IMAGE_EXT_RE.test(href)) {
         return `<img src="${href}" alt="" style="max-width:100%;max-height:12rem;border-radius:4px;cursor:pointer" />`;
       }
@@ -165,7 +165,7 @@ export function formatStickerValue(value: unknown, fallback: string): string {
 
 // ── Linkify helpers ───────────────────────────────────────────────────────
 
-const URL_RE = /https?:\/\/[^\s<>'"`{}()\[\]\\]+/gi;
+const URL_RE = /https?:\/\/[^\s<>'"`{}()[\]\\]+/gi;
 
 /**
  * Convert URLs and image URLs in plain text into clickable <a>/<img> markup.

@@ -1,10 +1,10 @@
-use async_trait::async_trait;
+use super::{
+    normalize_local_status, CreateUnifiedTask, ProviderError, TaskFilter, TaskProvider,
+    UnifiedTask, UpdateUnifiedTask,
+};
 use crate::db::{tasks, DatabaseState};
 use crate::models::{self, Task, TaskPriority};
-use super::{
-    CreateUnifiedTask, ProviderError, TaskFilter, TaskProvider, UnifiedTask,
-    UpdateUnifiedTask, normalize_local_status,
-};
+use async_trait::async_trait;
 
 pub struct LocalProvider;
 
@@ -194,8 +194,9 @@ impl<'a> TaskProvider for DbBoundLocalProvider<'a> {
     ) -> Result<Vec<UnifiedTask>, ProviderError> {
         self.db
             .with_connection(|conn: &rusqlite::Connection| {
-                tasks::list_tasks(conn)
-                    .map(|task_list: Vec<models::Task>| task_list.iter().map(task_to_unified).collect())
+                tasks::list_tasks(conn).map(|task_list: Vec<models::Task>| {
+                    task_list.iter().map(task_to_unified).collect()
+                })
             })
             .map_err(|e| ProviderError::new(e, "local", "LIST_FAILED"))
     }
@@ -253,11 +254,9 @@ impl<'a> TaskProvider for DbBoundLocalProvider<'a> {
                             .map(|v| v.tags.clone())
                             .unwrap_or_default()
                     }),
-                    due_date: model.due_date.or_else(|| {
-                        parsed_input
-                            .as_ref()
-                            .and_then(|v| v.due_date.clone())
-                    }),
+                    due_date: model
+                        .due_date
+                        .or_else(|| parsed_input.as_ref().and_then(|v| v.due_date.clone())),
                     linked_note_path: None,
                     created_at: crate::db::utils::timestamp(),
                     updated_at: crate::db::utils::timestamp(),
@@ -280,10 +279,7 @@ impl<'a> TaskProvider for DbBoundLocalProvider<'a> {
     ) -> Result<UnifiedTask, ProviderError> {
         let model = update_to_model(id, &input);
         self.db
-            .with_connection(|conn| {
-                tasks::patch_task(conn, &model)
-                    .map(|t| task_to_unified(&t))
-            })
+            .with_connection(|conn| tasks::patch_task(conn, &model).map(|t| task_to_unified(&t)))
             .map_err(|e| ProviderError::new(e, "local", "UPDATE_FAILED"))
     }
 

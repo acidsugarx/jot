@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::collections::HashMap;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -132,12 +132,7 @@ impl SyncManager {
         }
     }
 
-    async fn poll_yougile(
-        app: &AppHandle,
-        account_id: &str,
-        board_id: &str,
-        provider_id: &str,
-    ) {
+    async fn poll_yougile(app: &AppHandle, account_id: &str, board_id: &str, provider_id: &str) {
         let db = app.state::<DatabaseState>();
         let client = match yougile::auth::client_for_account(&db, account_id) {
             Ok(c) => c,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod local;
 pub mod sync;
 pub mod yougile;
@@ -19,7 +21,11 @@ pub struct ProviderError {
 }
 
 impl ProviderError {
-    pub fn new(message: impl Into<String>, provider: impl Into<String>, code: impl Into<String>) -> Self {
+    pub fn new(
+        message: impl Into<String>,
+        provider: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
         Self {
             message: message.into(),
             provider: provider.into(),
@@ -163,7 +169,10 @@ impl TaskEngine {
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn TaskProvider> {
-        self.providers.iter().find(|p| p.id() == id).map(|p| p.as_ref())
+        self.providers
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|p| p.as_ref())
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {

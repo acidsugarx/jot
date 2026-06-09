@@ -93,7 +93,7 @@ export function TaskEditorPane() {
         engine.setMode('NORMAL');
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: focus on open
+   
   }, []);
 
   const loadExtras = useCallback(async () => {

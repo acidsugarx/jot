@@ -24,8 +24,11 @@ use crate::db::{
     update_settings, update_tag, update_task, update_task_status, update_task_template,
     update_theme, update_yougile_enabled, update_yougile_sync_state, DatabaseState,
 };
-use crate::provider::{DbBoundLocalProvider, DbBoundYougileProvider, ProviderInfo, TaskProvider, UnifiedTask, YougileProviderContext};
 use crate::provider::sync::SyncManager;
+use crate::provider::{
+    DbBoundLocalProvider, DbBoundYougileProvider, ProviderInfo, TaskProvider, UnifiedTask,
+    YougileProviderContext,
+};
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
     tauri::Error::from(std::io::Error::other(message.into()))
@@ -445,26 +448,20 @@ async fn task_provider_list_tasks(
     match provider_id.as_str() {
         "local" => {
             let provider = DbBoundLocalProvider::new(db.inner());
-            provider
-                .list_tasks(None)
-                .await
-                .map_err(|e| e.message)
+            provider.list_tasks(None).await.map_err(|e| e.message)
         }
         "yougile" => {
             let sync_state = crate::db::get_yougile_sync_state_impl(&db)?;
-            let account_id = sync_state
-                .account_id
-                .ok_or_else(|| "No Yougile account selected. Add an account in Settings first.".to_string())?;
+            let account_id = sync_state.account_id.ok_or_else(|| {
+                "No Yougile account selected. Add an account in Settings first.".to_string()
+            })?;
             let ctx = YougileProviderContext {
                 db: db.inner(),
                 account_id,
                 board_id: sync_state.board_id,
             };
             let provider = DbBoundYougileProvider::new(ctx);
-            provider
-                .list_tasks(None)
-                .await
-                .map_err(|e| e.message)
+            provider.list_tasks(None).await.map_err(|e| e.message)
         }
         _ => Err(format!("Unknown provider: {provider_id}")),
     }
@@ -745,4 +742,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

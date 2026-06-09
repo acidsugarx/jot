@@ -1,12 +1,12 @@
-use async_trait::async_trait;
+use super::{
+    yougile_status_to_unified, CreateUnifiedTask, ProviderError, TaskFilter, TaskProvider,
+    UnifiedTask, UpdateUnifiedTask,
+};
 use crate::db::DatabaseState;
 use crate::yougile::auth;
 use crate::yougile::client::YougileClient;
 use crate::yougile::models::YougileTask;
-use super::{
-    CreateUnifiedTask, ProviderError, TaskFilter, TaskProvider, UnifiedTask,
-    UpdateUnifiedTask, yougile_status_to_unified,
-};
+use async_trait::async_trait;
 
 /// Context needed by the Yougile provider for each operation.
 pub struct YougileProviderContext<'a> {
@@ -37,17 +37,13 @@ impl<'a> DbBoundYougileProvider<'a> {
 fn yougile_to_unified(task: &YougileTask) -> UnifiedTask {
     let status = yougile_status_to_unified(task.completed, task.archived);
 
-    let deadline_ts = task
-        .deadline
-        .as_ref()
-        .and_then(|d| d.deadline);
+    let deadline_ts = task.deadline.as_ref().and_then(|d| d.deadline);
 
     let due_date = deadline_ts.and_then(|ts| {
         // Convert millisecond timestamp to ISO date string
         let secs = ts / 1000;
         let nanos = ((ts % 1000) * 1_000_000) as u32;
-        chrono::DateTime::from_timestamp(secs, nanos)
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
+        chrono::DateTime::from_timestamp(secs, nanos).map(|dt| dt.format("%Y-%m-%d").to_string())
     });
 
     // Extract assignee emails (free-form) or IDs
@@ -55,11 +51,7 @@ fn yougile_to_unified(task: &YougileTask) -> UnifiedTask {
         .assigned
         .iter()
         .map(|a| format!("@{}", a))
-        .chain(
-            task.subtasks
-                .iter()
-                .map(|s| format!("subtask:{}", s)),
-        )
+        .chain(task.subtasks.iter().map(|s| format!("subtask:{}", s)))
         .collect();
 
     UnifiedTask {
@@ -77,8 +69,7 @@ fn yougile_to_unified(task: &YougileTask) -> UnifiedTask {
             .and_then(|ts| {
                 let secs = ts / 1000;
                 let nanos = ((ts % 1000) * 1_000_000) as u32;
-                chrono::DateTime::from_timestamp(secs, nanos)
-                    .map(|dt| dt.to_rfc3339())
+                chrono::DateTime::from_timestamp(secs, nanos).map(|dt| dt.to_rfc3339())
             })
             .unwrap_or_default(),
         updated_at: task
@@ -86,8 +77,7 @@ fn yougile_to_unified(task: &YougileTask) -> UnifiedTask {
             .and_then(|ts| {
                 let secs = ts / 1000;
                 let nanos = ((ts % 1000) * 1_000_000) as u32;
-                chrono::DateTime::from_timestamp(secs, nanos)
-                    .map(|dt| dt.to_rfc3339())
+                chrono::DateTime::from_timestamp(secs, nanos).map(|dt| dt.to_rfc3339())
             })
             .unwrap_or_default(),
         column_id: task.column_id.clone(),
@@ -206,11 +196,13 @@ impl<'a> TaskProvider for DbBoundYougileProvider<'a> {
     ) -> Result<UnifiedTask, ProviderError> {
         let client = self.client()?;
 
-        let mut payload = crate::yougile::models::UpdateYougileTask::default();
-        payload.title = input.title;
-        payload.description = input.description;
-        payload.color = input.color;
-        payload.column_id = input.column_id;
+        let mut payload = crate::yougile::models::UpdateYougileTask {
+            title: input.title,
+            description: input.description,
+            color: input.color,
+            column_id: input.column_id,
+            ..Default::default()
+        };
 
         if let Some(status) = &input.status {
             match status.as_str() {
@@ -243,16 +235,18 @@ impl<'a> TaskProvider for DbBoundYougileProvider<'a> {
         });
         if deadline.is_some() || input.due_date.is_some() {
             payload.deadline = deadline.or_else(|| {
-                input.due_date.map(|_| crate::yougile::models::YougileDeadline {
-                    deadline: None,
-                    start_date: None,
-                    with_time: None,
-                    history: Vec::new(),
-                    blocked_points: Vec::new(),
-                    links: Vec::new(),
-                    deleted: Some(true),
-                    empty: None,
-                })
+                input
+                    .due_date
+                    .map(|_| crate::yougile::models::YougileDeadline {
+                        deadline: None,
+                        start_date: None,
+                        with_time: None,
+                        history: Vec::new(),
+                        blocked_points: Vec::new(),
+                        links: Vec::new(),
+                        deleted: Some(true),
+                        empty: None,
+                    })
             });
         }
 
@@ -288,7 +282,7 @@ impl<'a> TaskProvider for DbBoundYougileProvider<'a> {
         // Return count of non-deleted tasks as sync result
         let active: Vec<_> = tasks.iter().filter(|t| !t.deleted).collect();
         Ok(crate::provider::SyncResult {
-            tasks_added: 0,  // would need a diff against local cache
+            tasks_added: 0, // would need a diff against local cache
             tasks_updated: 0,
             tasks_removed: tasks.len() - active.len(),
         })
