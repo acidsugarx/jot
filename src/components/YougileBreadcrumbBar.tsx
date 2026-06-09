@@ -42,15 +42,15 @@ function BreadcrumbSegment({
   onSelect,
 }: BreadcrumbSegmentProps) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const optionRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [triggerNode, setTriggerNode] = useState<HTMLButtonElement | null>(null);
 
   const openPicker = useCallback(() => {
     onOpen();
     focusEngine.getState().setMode('INSERT');
   }, [onOpen]);
 
-  const { ref, isSelected } = useFocusable<HTMLButtonElement>({
+  const { ref: focusableRef, isSelected } = useFocusable<HTMLButtonElement>({
     pane: 'context',
     region,
     index,
@@ -62,6 +62,18 @@ function BreadcrumbSegment({
     const current = options.find((option) => option.id === selectedId);
     return current?.id ?? options[0]?.id ?? null;
   }, [options, selectedId]);
+
+  // Sync triggerNode to focusable ref and triggerRef
+  // eslint-disable-next-line react-hooks/immutability -- ref assignment in effect closure is safe
+  useEffect(() => {
+    triggerRef.current = triggerNode;
+    // eslint-disable-next-line react-hooks/immutability -- ref.current sync in effect is safe
+    (focusableRef as MutableRefObject<HTMLButtonElement | null>).current = triggerNode;
+    return () => {
+      triggerRef.current = null;
+      (focusableRef as MutableRefObject<HTMLButtonElement | null>).current = null;
+    };
+  }, [triggerNode, focusableRef]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -76,7 +88,7 @@ function BreadcrumbSegment({
 
     requestAnimationFrame(() => {
       if (nextId) {
-        optionRefs.current.get(nextId)?.focus();
+        (document.querySelector(`[data-option-id="${nextId}"]`) as HTMLButtonElement | null)?.focus();
       } else {
         triggerRef.current?.focus();
       }
@@ -98,7 +110,7 @@ function BreadcrumbSegment({
     const nextId = options[nextIndex]?.id ?? null;
     setHighlightedId(nextId);
     if (nextId) {
-      requestAnimationFrame(() => optionRefs.current.get(nextId)?.focus());
+      requestAnimationFrame(() => (document.querySelector(`[data-option-id="${nextId}"]`) as HTMLButtonElement | null)?.focus());
     }
   }, [activeOptionId, highlightedId, options]);
 
@@ -145,10 +157,7 @@ function BreadcrumbSegment({
   return (
     <div className="relative">
       <button
-        ref={(node) => {
-          triggerRef.current = node;
-          (ref as MutableRefObject<HTMLButtonElement | null>).current = node;
-        }}
+        ref={setTriggerNode}
         type="button"
         tabIndex={-1}
         onClick={() => {
@@ -177,13 +186,7 @@ function BreadcrumbSegment({
               return (
                 <button
                   key={option.id}
-                  ref={(node) => {
-                    if (node) {
-                      optionRefs.current.set(option.id, node);
-                    } else {
-                      optionRefs.current.delete(option.id);
-                    }
-                  }}
+                  data-option-id={option.id}
                   type="button"
                   onClick={() => confirmSelection(option.id)}
                   onMouseEnter={() => setHighlightedId(option.id)}

@@ -323,6 +323,8 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     void updateTask(task.id, { checklists: updated });
   };
 
+  const [subtaskTasks, setSubtaskTasks] = useState<YougileTask[]>([]);
+
   const refreshSubtasks = useCallback(() => {
     void useYougileStore.getState().fetchTasks();
     const currentSubtaskIds = useYougileStore.getState().tasks.find(
@@ -333,7 +335,7 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     } else {
       setSubtaskTasks([]);
     }
-  }, [task.id, fetchSubtaskTasks]);
+  }, [fetchSubtaskTasks, setSubtaskTasks, task.id]);
 
   const handleAddSubtask = useCallback(async (title: string) => {
     const trimmed = title.trim();
@@ -485,8 +487,6 @@ function YougileTaskEditorInner({ task, onClose, embedded, parentTask, onNavigat
     {}
   ), [stickerDefinitions]);
 
-  // Fetch and resolve subtask IDs to actual task objects
-  const [subtaskTasks, setSubtaskTasks] = useState<YougileTask[]>([]);
   const subtaskIds = task.subtasks ?? [];
 
   useEffect(() => {

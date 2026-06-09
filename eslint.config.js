@@ -26,7 +26,6 @@ export default tseslint.config(
       // - Accessing refs during render to keep callback refs current is intentional
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/refs': 'off',
-      'react-hooks/immutability': 'off',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },

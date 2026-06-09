@@ -213,14 +213,39 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   createTask: async (input) => {
     if (!isTauriAvailable()) return null;
-    set({ isLoading: true, error: null });
+    // Optimistic: add temp task immediately
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticTask: Task = {
+      id: tempId,
+      title: input.title ?? '',
+      description: input.description ?? '',
+      priority: input.priority ?? 'none',
+      status: 'todo',
+      tags: input.tags ?? [],
+      dueDate: input.dueDate ?? null,
+      linkedNotePath: null,
+      color: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      parentId: null,
+      timeEstimated: null,
+      timeSpent: null,
+      columnId: input.columnId ?? undefined,
+    };
+    set((state) => ({ tasks: [optimisticTask, ...state.tasks], error: null }));
+    notifyTasksChanged();
     try {
       const task = await invoke<Task>('create_task', { input });
-      set((state) => ({ tasks: [task, ...state.tasks], isLoading: false }));
-      notifyTasksChanged();
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === tempId ? task : t)),
+      }));
       return task;
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to create task', isLoading: false });
+      // Rollback on failure
+      set((state) => ({
+        tasks: state.tasks.filter((t) => t.id !== tempId),
+        error: error instanceof Error ? error.message : 'Failed to create task',
+      }));
       return null;
     }
   },
