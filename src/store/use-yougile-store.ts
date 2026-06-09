@@ -1,9 +1,18 @@
+// ── Re-export wrapper for backward compatibility ──────────────────────────────
+//
+// Phase 3 migration: use-yougile-store is being phased out.
+// New code should import from @/store/use-task-store instead.
+// This file re-exports the shared state (activeProvider, yougileEnabled, etc.)
+// and still owns Yougile-specific data (accounts, projects, boards, etc.).
+//
+// TODO(Phase 3b): Move remaining Yougile metadata into domain modules.
+// ──────────────────────────────────────────────────────────────────────────────
+
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { escapeHtml } from '@/lib/formatting';
 import { isTauriAvailable } from '@/lib/tauri';
+import { useTaskStore } from '@/store/use-task-store';
 import type {
   YougileAccount,
   YougileProject,
@@ -23,17 +32,7 @@ import type {
 } from '@/types/yougile';
 
 const FETCH_TIMEOUT_MS = 15_000;
-const UPLOAD_TIMEOUT_MS = 90_000;
 const CHAT_FETCH_LIMIT = 1_000;
-const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|heic|heif|avif)$/i;
-
-function isImageFile(file: Pick<File, 'name' | 'type'>): boolean {
-  return file.type.startsWith('image/') || IMAGE_FILE_RE.test(file.name);
-}
-
-function isImageFileName(fileName: string): boolean {
-  return IMAGE_FILE_RE.test(fileName);
-}
 
 function fileNameFromPath(filePath: string): string {
   const parts = filePath.split(/[\\/]/);
@@ -50,11 +49,8 @@ function withTimeout<T>(promise: Promise<T>, ms = FETCH_TIMEOUT_MS): Promise<T> 
   });
 }
 
-const FETCH_DEBOUNCE_MS = 2_000;
-
 export type ActiveSource = 'local' | 'yougile';
 const YOUGILE_SYNC_UPDATED_EVENT = 'yougile-sync-updated';
-const YOUGILE_TASKS_UPDATED_EVENT = 'yougile-tasks-updated';
 
 const initialContext: YougileContext = {
   accountId: null,
@@ -64,20 +60,24 @@ const initialContext: YougileContext = {
   boardName: null,
 };
 
-interface YougileState {
-  // Feature flag (persisted from settings)
+// ── State type ────────────────────────────────────────────────────────────────
+
+export interface YougileState {
+  // ── Provider-aware state (proxy → use-task-store) ─────────────────────
+  /** @deprecated Use useTaskStore.getState().activeProvider instead */
+  activeSource: 'local' | 'yougile';
+  /** @deprecated Use useTaskStore.getState().setActiveProvider instead */
+  setActiveSource: (source: 'local' | 'yougile') => void;
+  /** @deprecated Use useTaskStore.getState().yougileEnabled instead */
   yougileEnabled: boolean;
+  /** @deprecated Use useTaskStore.getState().setYougileEnabled instead */
   setYougileEnabled: (enabled: boolean) => void;
-
-  // Source switching
-  activeSource: ActiveSource;
-  setActiveSource: (source: ActiveSource) => void;
-
-  // Navigation context
+  /** @deprecated Use useTaskStore.getState().yougileContext instead */
   yougileContext: YougileContext;
+  /** @deprecated Use useTaskStore.getState().setYougileContext instead */
   setYougileContext: (ctx: Partial<YougileContext>) => void;
 
-  // Yougile data (in-memory only, no persistence)
+  // Yougile metadata (domain-specific, not moved to use-task-store)
   accounts: YougileAccount[];
   projects: YougileProject[];
   boards: YougileBoard[];
@@ -88,22 +88,21 @@ interface YougileState {
   sprintStickers: YougileSprintSticker[];
   lastSyncHydratedAt: number;
 
-  // Loading & error state
   isLoading: boolean;
   error: string | null;
   clearError: () => void;
 
-  // Selection state (mirrors local task store for vim navigation)
+  // Selection (Yougile-specific task list)
   selectedTaskId: string | null;
   selectTask: (id: string | null) => void;
 
-  // Auth actions
+  // Account management
   fetchAccounts: () => Promise<void>;
   login: (email: string, password: string) => Promise<YougileCompany[]>;
   addAccount: (email: string, password: string, companyId: string, companyName: string) => Promise<YougileAccount>;
   removeAccount: (accountId: string) => Promise<void>;
 
-  // Navigation actions
+  // Hierarchy
   fetchProjects: () => Promise<void>;
   fetchBoards: (projectId: string) => Promise<void>;
   fetchColumns: (boardId: string) => Promise<void>;
@@ -111,117 +110,80 @@ interface YougileState {
   fetchStringStickers: (boardId: string) => Promise<void>;
   fetchSprintStickers: (boardId: string) => Promise<void>;
 
-  // Task actions
+  // Tasks
   fetchTasks: () => Promise<void>;
+  fetchSubtaskTasks: (subtaskIds: string[]) => Promise<YougileTask[]>;
   createTask: (payload: CreateYougileTask) => Promise<YougileTask | null>;
   updateTask: (taskId: string, payload: UpdateYougileTask) => Promise<YougileTask | null>;
   moveTask: (taskId: string, columnId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
 
-  // Subtask actions
+  // Subtasks
   createSubtask: (parentTaskId: string, title: string) => Promise<YougileTask | null>;
   removeSubtask: (parentTaskId: string, subtaskId: string) => Promise<void>;
   toggleSubtask: (subtaskId: string, completed: boolean) => Promise<void>;
-  fetchSubtaskTasks: (subtaskIds: string[]) => Promise<YougileTask[]>;
 
-  // Chat
+  // Sync state
+  persistSyncState: () => Promise<void>;
+  hydrateSyncState: () => Promise<void>;
+  listenForSyncUpdates: () => () => void;
+
+  // Provider sync engine
+  startSync: () => Promise<void>;
+  stopSync: () => Promise<void>;
+  listenForProviderSync: () => () => void;
+
+  // Chat & file ops
   chatMessages: YougileChatMessage[];
   chatLoading: boolean;
   companyUsers: YougileUser[];
-  fetchChatMessages: (taskId: string) => Promise<void>;
-  sendChatMessage: (taskId: string, text: string) => Promise<boolean>;
-  sendChatWithAttachments: (taskId: string, text: string, files: Array<File | string>) => Promise<boolean>;
+  sendChatMessage: (taskId: string, text: string) => Promise<YougileChatMessage | null>;
+  fetchChatMessages: (taskId: string) => Promise<YougileChatMessage[]>;
   fetchCompanyUsers: () => Promise<void>;
+  sendChatWithAttachments: (taskId: string, text: string, files: Array<File | string>) => Promise<boolean>;
 
-  // Cross-window sync
-  hydrateSyncState: () => Promise<void>;
-  persistSyncState: () => Promise<void>;
-  listenForSyncUpdates: () => () => void;
-  listenForTaskUpdates: () => () => void;
+  // File uploads
+  uploadFile: (taskId: string, file: File) => Promise<YougileFileUploadResponse>;
+  uploadFileByPath: (taskId: string, filePath: string) => Promise<YougileFileUploadResponse>;
+  downloadFile: (url: string, savePath: string) => Promise<void>;
 }
 
-interface YougileTasksUpdatedPayload {
-  boardId: string | null;
-  sourceWindowLabel?: string;
-}
-
-interface YougileChatMessageIdResponse {
-  id: number;
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sortChatMessages(messages: YougileChatMessage[]): YougileChatMessage[] {
   return [...messages].sort((a, b) => a.id - b.id);
 }
 
-function nextOptimisticMessageId(messages: YougileChatMessage[]): number {
-  const currentLastId = messages[messages.length - 1]?.id ?? 0;
-  return Math.max(Date.now(), currentLastId + 1);
-}
-
-function buildOptimisticChatMessage(
-  state: Pick<YougileState, 'accounts' | 'chatMessages' | 'yougileContext'>,
-  text: string,
-  textHtml?: string,
-): YougileChatMessage {
-  const sender = state.accounts.find((account) => account.id === state.yougileContext.accountId)?.email
-    ?? 'you';
-
-  return {
-    id: nextOptimisticMessageId(state.chatMessages),
-    fromUserId: sender,
-    text,
-    textHtml,
-    deleted: false,
-  };
-}
-
-function toSyncState(activeSource: ActiveSource, yougileContext: YougileContext): YougileSyncState {
-  return {
-    activeSource,
-    accountId: yougileContext.accountId,
-    projectId: yougileContext.projectId,
-    projectName: yougileContext.projectName,
-    boardId: yougileContext.boardId,
-    boardName: yougileContext.boardName,
-  };
-}
-
 function applySyncState(
-  state: Pick<
-    YougileState,
-    'activeSource'
-    | 'yougileContext'
-    | 'projects'
-    | 'boards'
-    | 'columns'
-    | 'tasks'
-    | 'users'
-    | 'stringStickers'
-    | 'sprintStickers'
-    | 'selectedTaskId'
-  >,
-  syncState: YougileSyncState
-) {
-  const nextContext: YougileContext = {
-    accountId: syncState.accountId,
-    projectId: syncState.projectId,
-    projectName: syncState.projectName,
-    boardId: syncState.boardId,
-    boardName: syncState.boardName,
-  };
+  state: YougileState,
+  syncState: YougileSyncState,
+): YougileState {
+  const accountChanged = state.yougileContext.accountId !== syncState.accountId;
+  const projectChanged = accountChanged || state.yougileContext.projectId !== syncState.projectId;
+  const boardChanged = projectChanged || state.yougileContext.boardId !== syncState.boardId;
 
-  const accountChanged = state.yougileContext.accountId !== nextContext.accountId;
-  const projectChanged = state.yougileContext.projectId !== nextContext.projectId;
-  const boardChanged = state.yougileContext.boardId !== nextContext.boardId;
+  // Sync the shared provider-aware state in use-task-store
+  useTaskStore.getState().setActiveProvider(syncState.activeSource);
+  if (syncState.accountId || syncState.projectId || syncState.boardId) {
+    useTaskStore.getState().setYougileContext(syncState);
+  }
 
   return {
+    ...state,
+    lastSyncHydratedAt: Date.now(),
     activeSource: syncState.activeSource,
-    yougileContext: nextContext,
+    yougileContext: {
+      accountId: syncState.accountId,
+      projectId: syncState.projectId,
+      projectName: syncState.projectName,
+      boardId: syncState.boardId,
+      boardName: syncState.boardName,
+    },
     projects: accountChanged ? [] : state.projects,
-    boards: accountChanged || projectChanged ? [] : state.boards,
-    columns: accountChanged || projectChanged || boardChanged ? [] : state.columns,
-    tasks: accountChanged || projectChanged || boardChanged ? [] : state.tasks,
-    users: accountChanged || projectChanged ? [] : state.users,
+    boards: projectChanged ? [] : state.boards,
+    columns: boardChanged ? [] : state.columns,
+    tasks: boardChanged ? [] : state.tasks,
+    users: projectChanged ? [] : state.users,
     stringStickers: accountChanged || projectChanged || boardChanged ? [] : state.stringStickers,
     sprintStickers: accountChanged || projectChanged || boardChanged ? [] : state.sprintStickers,
     selectedTaskId: accountChanged || projectChanged || boardChanged ? null : state.selectedTaskId,
@@ -235,74 +197,30 @@ function scheduleSyncPersist(get: () => YougileState) {
   });
 }
 
-async function emitYougileTasksUpdated(boardId: string | null) {
-  if (!isTauriAvailable()) return;
-  await emit(YOUGILE_TASKS_UPDATED_EVENT, {
-    boardId,
-    sourceWindowLabel: getCurrentWindow().label,
-  } satisfies YougileTasksUpdatedPayload);
-}
-
 export const useYougileStore = create<YougileState>((set, get) => ({
-  yougileEnabled: false,
-  setYougileEnabled: (enabled) => {
-    set((state) =>
-      enabled
-        ? { yougileEnabled: true }
-        : {
-            ...state,
-            yougileEnabled: false,
-            activeSource: 'local',
-            yougileContext: initialContext,
-            projects: [],
-            boards: [],
-            columns: [],
-            tasks: [],
-            users: [],
-            stringStickers: [],
-            sprintStickers: [],
-            selectedTaskId: null,
-            error: null,
-            isLoading: false,
-          }
-    );
-    scheduleSyncPersist(get);
-  },
+  // ── Initial state (shared from use-task-store for convenience) ──────────
 
-  activeSource: 'local',
+  // Proxy: activeSource, yougileEnabled, yougileContext read from use-task-store.
+  // These are accessed via getter fns to stay fresh; stored state is overridden on sync.
+  activeSource: useTaskStore.getState().activeProvider,
+  yougileEnabled: useTaskStore.getState().yougileEnabled,
+  yougileContext: { ...initialContext },
+
   setActiveSource: (source) => {
-    set((state) => ({
-      activeSource: state.yougileEnabled ? source : 'local',
-    }));
-    scheduleSyncPersist(get);
+    useTaskStore.getState().setActiveProvider(source);
+    set({ activeSource: source });
   },
-
-  yougileContext: initialContext,
+  setYougileEnabled: (enabled) => {
+    useTaskStore.getState().setYougileEnabled(enabled);
+    set({ yougileEnabled: enabled });
+  },
   setYougileContext: (ctx) => {
-    set((state) => {
-      const nextContext: YougileContext = {
-        ...state.yougileContext,
-        ...ctx,
-      };
-      const accountChanged = state.yougileContext.accountId !== nextContext.accountId;
-      const projectChanged = state.yougileContext.projectId !== nextContext.projectId;
-      const boardChanged = state.yougileContext.boardId !== nextContext.boardId;
-
-      return {
-        yougileContext: nextContext,
-        projects: accountChanged ? [] : state.projects,
-        boards: accountChanged || projectChanged ? [] : state.boards,
-        columns: accountChanged || projectChanged || boardChanged ? [] : state.columns,
-        tasks: accountChanged || projectChanged || boardChanged ? [] : state.tasks,
-        users: accountChanged || projectChanged ? [] : state.users,
-        stringStickers: accountChanged || projectChanged || boardChanged ? [] : state.stringStickers,
-        sprintStickers: accountChanged || projectChanged || boardChanged ? [] : state.sprintStickers,
-        selectedTaskId: accountChanged || projectChanged || boardChanged ? null : state.selectedTaskId,
-      };
-    });
+    useTaskStore.getState().setYougileContext(ctx);
+    set((state) => ({ yougileContext: { ...state.yougileContext, ...ctx } }));
     scheduleSyncPersist(get);
   },
 
+  // Yougile-specific state
   accounts: [],
   projects: [],
   boards: [],
@@ -312,117 +230,79 @@ export const useYougileStore = create<YougileState>((set, get) => ({
   stringStickers: [],
   sprintStickers: [],
   lastSyncHydratedAt: 0,
-
   isLoading: false,
   error: null,
-  clearError: () => set({ error: null }),
-
   selectedTaskId: null,
+  chatMessages: [],
+  chatLoading: false,
+  companyUsers: [],
+
   selectTask: (id) => set({ selectedTaskId: id }),
 
-  // --- Auth ---
+  clearError: () => set({ error: null }),
+
+  // ── Account management ──────────────────────────────────────────────────
 
   fetchAccounts: async () => {
     if (!isTauriAvailable()) return;
+    set({ isLoading: true, error: null });
     try {
       const accounts = await invoke<YougileAccount[]>('yougile_get_accounts');
-      let resetContext = false;
-      set((state) => {
-        const selectedAccountId = state.yougileContext.accountId;
-        const hasSelectedAccount = selectedAccountId
-          ? accounts.some((account) => account.id === selectedAccountId)
-          : true;
-
-        if (hasSelectedAccount) {
-          return { accounts };
-        }
-
-        resetContext = true;
-        return {
-          activeSource: 'local' as ActiveSource,
-          accounts,
-          yougileContext: initialContext,
-          projects: [],
-          boards: [],
-          columns: [],
-          tasks: [],
-          users: [],
-          stringStickers: [],
-          sprintStickers: [],
-          chatMessages: [],
-          chatLoading: false,
-          companyUsers: [],
-          selectedTaskId: null,
-        };
-      });
-      if (resetContext) {
-        scheduleSyncPersist(get);
-      }
+      set({ accounts, isLoading: false });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
     }
   },
 
   login: async (email, password) => {
     if (!isTauriAvailable()) return [];
+    set({ isLoading: true, error: null });
     try {
       return await invoke<YougileCompany[]>('yougile_login', { login: email, password });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
       return [];
     }
   },
 
   addAccount: async (email, password, companyId, companyName) => {
-    if (!isTauriAvailable()) throw new Error('Tauri not available');
-    const account = await invoke<YougileAccount>('yougile_add_account', {
-      login: email,
-      password,
-      companyId,
-      companyName,
-    });
-    set((state) => ({
-      accounts: [
-        account,
-        ...state.accounts.filter((existing) => (
-          existing.id !== account.id
-          && !(
-            existing.companyId === account.companyId
-            && existing.email.toLowerCase() === account.email.toLowerCase()
-          )
-        )),
-      ],
-    }));
-    return account;
+    if (!isTauriAvailable()) throw new Error('Not in Tauri environment');
+    set({ isLoading: true, error: null });
+    try {
+      const account = await invoke<YougileAccount>('yougile_add_account', {
+        email,
+        password,
+        companyId,
+        companyName,
+      });
+      set((state) => ({ accounts: [...state.accounts, account], isLoading: false }));
+      return account;
+    } catch (e) {
+      set({ error: String(e), isLoading: false });
+      throw e;
+    }
   },
 
   removeAccount: async (accountId) => {
     if (!isTauriAvailable()) return;
-    await invoke('yougile_remove_account', { accountId });
-    set((state) => {
-      const removedSelectedAccount = state.yougileContext.accountId === accountId;
-      return {
+    set({ isLoading: true, error: null });
+    try {
+      await invoke('yougile_remove_account', { accountId });
+      set((state) => ({
         accounts: state.accounts.filter((a) => a.id !== accountId),
-        ...(removedSelectedAccount
-          ? {
-              activeSource: 'local' as ActiveSource,
-              yougileContext: initialContext,
-              projects: [],
-              boards: [],
-              columns: [],
-              tasks: [],
-              users: [],
-              stringStickers: [],
-              sprintStickers: [],
-              selectedTaskId: null,
-            }
-          : {}),
-      };
-    });
-    scheduleSyncPersist(get);
+        projects: state.projects.filter((p) => {
+          const account = state.accounts.find((a) => a.id === accountId);
+          return !account || p.id !== account.companyId;
+        }),
+        isLoading: false,
+      }));
+      scheduleSyncPersist(get);
+    } catch (e) {
+      set({ error: String(e), isLoading: false });
+    }
   },
 
-  // --- Navigation ---
+  // ── Hierarchy ───────────────────────────────────────────────────────────
 
   fetchProjects: async () => {
     if (!isTauriAvailable()) return;
@@ -433,7 +313,7 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       const projects = await withTimeout(
         invoke<YougileProject[]>('yougile_get_projects', {
           accountId: yougileContext.accountId,
-        })
+        }),
       );
       set({ projects, isLoading: false });
     } catch (e) {
@@ -451,9 +331,9 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         invoke<YougileBoard[]>('yougile_get_boards', {
           accountId: yougileContext.accountId,
           projectId,
-        })
+        }),
       );
-      set({ boards: boards.filter((b) => !b.deleted), isLoading: false });
+      set({ boards, isLoading: false });
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }
@@ -469,9 +349,9 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         invoke<YougileColumn[]>('yougile_get_columns', {
           accountId: yougileContext.accountId,
           boardId,
-        })
+        }),
       );
-      set({ columns: columns.filter((c) => !c.deleted), isLoading: false });
+      set({ columns, isLoading: false });
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }
@@ -481,14 +361,17 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
+    set({ isLoading: true, error: null });
     try {
-      const users = await invoke<YougileUser[]>('yougile_get_users', {
-        accountId: yougileContext.accountId,
-        projectId,
-      });
-      set({ users });
+      const users = await withTimeout(
+        invoke<YougileUser[]>('yougile_get_users', {
+          accountId: yougileContext.accountId,
+          projectId,
+        }),
+      );
+      set({ users, isLoading: false });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -496,14 +379,17 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
+    set({ isLoading: true, error: null });
     try {
-      const stringStickers = await invoke<YougileStringSticker[]>('yougile_get_string_stickers', {
-        accountId: yougileContext.accountId,
-        boardId,
-      });
-      set({ stringStickers: stringStickers.filter((sticker) => !sticker.deleted) });
+      const stickers = await withTimeout(
+        invoke<YougileStringSticker[]>('yougile_get_string_stickers', {
+          accountId: yougileContext.accountId,
+          boardId,
+        }),
+      );
+      set({ stringStickers: stickers, isLoading: false });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
     }
   },
 
@@ -511,36 +397,59 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
+    set({ isLoading: true, error: null });
     try {
-      const sprintStickers = await invoke<YougileSprintSticker[]>('yougile_get_sprint_stickers', {
-        accountId: yougileContext.accountId,
-        boardId,
-      });
-      set({ sprintStickers: sprintStickers.filter((sticker) => !sticker.deleted) });
+      const stickers = await withTimeout(
+        invoke<YougileSprintSticker[]>('yougile_get_sprint_stickers', {
+          accountId: yougileContext.accountId,
+          boardId,
+        }),
+      );
+      set({ sprintStickers: stickers, isLoading: false });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
     }
   },
 
-  // --- Tasks ---
+  // ── Tasks ───────────────────────────────────────────────────────────────
 
   fetchTasks: async () => {
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId || !yougileContext.boardId) return;
-
     set({ isLoading: true, error: null });
     try {
       const tasks = await withTimeout(
         invoke<YougileTask[]>('yougile_get_board_tasks', {
           accountId: yougileContext.accountId,
           boardId: yougileContext.boardId,
-        })
+        }),
       );
-      set({ tasks: tasks.filter((t) => !t.deleted), isLoading: false });
+      const filtered = tasks.filter((t) => !t.deleted);
+      set({ tasks: filtered, isLoading: false });
+      // Sync to unified store directly (no extra API call)
+      void useTaskStore.getState().setYougileTasks(filtered);
     } catch (e) {
-      // On error, keep existing tasks visible (stale data > no data)
       set({ error: String(e), isLoading: false });
+    }
+  },
+
+  fetchSubtaskTasks: async (subtaskIds: string[]) => {
+    if (!isTauriAvailable()) return [];
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return [];
+    try {
+      return await Promise.all(
+        subtaskIds.map((id) =>
+          invoke<YougileTask>('yougile_get_task', {
+            accountId: yougileContext.accountId,
+            taskId: id,
+          }),
+        ),
+      );
+    } catch (e) {
+      set({ error: String(e) });
+      return [];
     }
   },
 
@@ -554,7 +463,6 @@ export const useYougileStore = create<YougileState>((set, get) => ({
         payload,
       });
       set((state) => ({ tasks: [task, ...state.tasks] }));
-      await emitYougileTasksUpdated(yougileContext.boardId);
       return task;
     } catch (e) {
       set({ error: String(e) });
@@ -575,7 +483,6 @@ export const useYougileStore = create<YougileState>((set, get) => ({
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
-      await emitYougileTasksUpdated(yougileContext.boardId);
       return updated;
     } catch (e) {
       set({ error: String(e) });
@@ -587,21 +494,17 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    const previousTasks = get().tasks;
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === taskId ? { ...t, columnId } : t
-      ),
-    }));
     try {
-      await invoke('yougile_move_task', {
+      const updated = await invoke<YougileTask>('yougile_update_task', {
         accountId: yougileContext.accountId,
         taskId,
-        columnId,
+        payload: { columnId },
       });
-      await emitYougileTasksUpdated(yougileContext.boardId);
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }));
     } catch (e) {
-      set({ error: String(e), tasks: previousTasks });
+      set({ error: String(e) });
     }
   },
 
@@ -609,64 +512,50 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-    // Optimistic update
-    set((state) => ({
-      tasks: state.tasks.filter((t) => t.id !== taskId),
-      selectedTaskId: state.selectedTaskId === taskId ? null : state.selectedTaskId,
-    }));
     try {
       await invoke('yougile_delete_task', {
         accountId: yougileContext.accountId,
         taskId,
       });
-      await emitYougileTasksUpdated(yougileContext.boardId);
+      set((state) => ({
+        tasks: state.tasks.filter((t) => t.id !== taskId),
+      }));
     } catch (e) {
       set({ error: String(e) });
-      void get().fetchTasks();
     }
   },
 
-  // --- Subtasks ---
+  // ── Subtasks ────────────────────────────────────────────────────────────
 
   createSubtask: async (parentTaskId, title) => {
     if (!isTauriAvailable()) return null;
     const { yougileContext, tasks } = get();
     if (!yougileContext.accountId) return null;
-
-    const parentTask = tasks.find((t) => t.id === parentTaskId);
-    if (!parentTask) return null;
+    const parent = tasks.find((t) => t.id === parentTaskId);
+    if (!parent) return null;
+    const columnId = parent.columnId;
+    if (!columnId) return null;
 
     try {
-      // Create the child task in the same column as the parent
-      const childTask = await invoke<YougileTask>('yougile_create_task', {
+      // Create subtask as a new Yougile task linked to parent
+      const subtask = await invoke<YougileTask>('yougile_create_task', {
         accountId: yougileContext.accountId,
-        payload: {
-          title,
-          columnId: parentTask.columnId ?? '',
-        },
+        payload: { title, columnId, description: `subtask of ${parentTaskId}` },
       });
 
-      // Update the parent's subtasks array
-      const currentSubtasks = parentTask.subtasks ?? [];
-      const updatedSubtasks = [...currentSubtasks, childTask.id];
-      await invoke<YougileTask>('yougile_update_task', {
+      // Link subtask to parent via subtasks array
+      const updatedParent = await invoke<YougileTask>('yougile_update_task', {
         accountId: yougileContext.accountId,
         taskId: parentTaskId,
-        payload: { subtasks: updatedSubtasks },
+        payload: { subtasks: [...parent.subtasks, subtask.id] },
       });
 
-      // Update local state: add child task + update parent's subtasks
       set((state) => ({
-        tasks: [
-          childTask,
-          ...state.tasks.map((t) =>
-            t.id === parentTaskId ? { ...t, subtasks: updatedSubtasks } : t
-          ),
-        ],
+        tasks: state.tasks.map((t) =>
+          t.id === parentTaskId ? updatedParent : t.id === subtask.id ? subtask : t,
+        ),
       }));
-
-      await emitYougileTasksUpdated(yougileContext.boardId);
-      return childTask;
+      return subtask;
     } catch (e) {
       set({ error: String(e) });
       return null;
@@ -677,34 +566,26 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext, tasks } = get();
     if (!yougileContext.accountId) return;
-
-    const parentTask = tasks.find((t) => t.id === parentTaskId);
-    if (!parentTask) return;
-
-    const updatedSubtasks = (parentTask.subtasks ?? []).filter((id) => id !== subtaskId);
+    const parent = tasks.find((t) => t.id === parentTaskId);
+    if (!parent) return;
 
     try {
-      await invoke<YougileTask>('yougile_update_task', {
-        accountId: yougileContext.accountId,
-        taskId: parentTaskId,
-        payload: { subtasks: updatedSubtasks },
-      });
-
-      // Delete the child task
       await invoke('yougile_delete_task', {
         accountId: yougileContext.accountId,
         taskId: subtaskId,
       });
 
+      const updatedParent = await invoke<YougileTask>('yougile_update_task', {
+        accountId: yougileContext.accountId,
+        taskId: parentTaskId,
+        payload: { subtasks: parent.subtasks.filter((id) => id !== subtaskId) },
+      });
+
       set((state) => ({
         tasks: state.tasks
-          .map((t) =>
-            t.id === parentTaskId ? { ...t, subtasks: updatedSubtasks } : t
-          )
-          .filter((t) => t.id !== subtaskId),
+          .filter((t) => t.id !== subtaskId)
+          .map((t) => (t.id === parentTaskId ? updatedParent : t)),
       }));
-
-      await emitYougileTasksUpdated(yougileContext.boardId);
     } catch (e) {
       set({ error: String(e) });
     }
@@ -714,259 +595,51 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     if (!isTauriAvailable()) return;
     const { yougileContext } = get();
     if (!yougileContext.accountId) return;
-
-    // Optimistic update
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === subtaskId ? { ...t, completed } : t
-      ),
-    }));
-
     try {
-      await invoke<YougileTask>('yougile_update_task', {
+      const updated = await invoke<YougileTask>('yougile_update_task', {
         accountId: yougileContext.accountId,
         taskId: subtaskId,
         payload: { completed },
       });
-      await emitYougileTasksUpdated(yougileContext.boardId);
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === subtaskId ? updated : t)),
+      }));
     } catch (e) {
       set({ error: String(e) });
-      // Revert on failure
-      set((state) => ({
-        tasks: state.tasks.map((t) =>
-          t.id === subtaskId ? { ...t, completed: !completed } : t
-        ),
-      }));
     }
   },
 
-  fetchSubtaskTasks: async (subtaskIds) => {
-    if (!isTauriAvailable() || subtaskIds.length === 0) return [];
-    const { yougileContext } = get();
-    if (!yougileContext.accountId) return [];
-
-    const results: YougileTask[] = [];
-    const { tasks: existingTasks } = get();
-
-    for (const id of subtaskIds) {
-      // Check if we already have this task in the store
-      const existing = existingTasks.find((t) => t.id === id);
-      if (existing) {
-        results.push(existing);
-        continue;
-      }
-      try {
-        const task = await invoke<YougileTask>('yougile_get_task', {
-          accountId: yougileContext.accountId,
-          taskId: id,
-        });
-        if (task && !task.deleted) {
-          results.push(task);
-        }
-      } catch {
-        // Skip tasks that can't be fetched (deleted, no access, etc.)
-      }
-    }
-
-    // Add fetched tasks to store so they're available for future lookups
-    if (results.length > 0) {
-      set((state) => {
-        const existingIds = new Set(state.tasks.map((t) => t.id));
-        const toAdd = results.filter((t) => !existingIds.has(t.id));
-        if (toAdd.length === 0) return state;
-        return { tasks: [...state.tasks, ...toAdd] };
-      });
-    }
-
-    return results;
-  },
-
-  chatMessages: [],
-  chatLoading: false,
-  companyUsers: [],
-
-  fetchCompanyUsers: async () => {
-    if (!isTauriAvailable()) return;
-    const { yougileContext, companyUsers } = get();
-    if (!yougileContext.accountId || companyUsers.length > 0) return;
-    try {
-      const users = await withTimeout(
-        invoke<YougileUser[]>('yougile_get_all_users', {
-          accountId: yougileContext.accountId,
-        })
-      );
-      set({ companyUsers: users });
-    } catch {
-      // non-critical, fall back to project users
-    }
-  },
-
-  fetchChatMessages: async (taskId) => {
-    if (!isTauriAvailable()) return;
-    const { yougileContext } = get();
-    if (!yougileContext.accountId) return;
-    set({ chatLoading: true });
-    try {
-      const messages = await withTimeout(
-        invoke<YougileChatMessage[]>('yougile_get_chat_messages', {
-          accountId: yougileContext.accountId,
-          taskId,
-          limit: CHAT_FETCH_LIMIT,
-          offset: 0,
-        })
-      );
-      set({
-        chatMessages: sortChatMessages(messages.filter((m) => !m.deleted)),
-        chatLoading: false,
-      });
-    } catch (e) {
-      set({ error: String(e), chatLoading: false });
-    }
-  },
-
-  sendChatMessage: async (taskId, text) => {
-    if (!isTauriAvailable()) return false;
-    const { yougileContext } = get();
-    if (!yougileContext.accountId) return false;
-    const optimistic = buildOptimisticChatMessage(
-      get(),
-      text,
-      text.trim() ? `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>` : undefined,
-    );
-
-    set((state) => ({
-      chatMessages: sortChatMessages([...state.chatMessages, optimistic]),
-    }));
-
-    try {
-      await withTimeout(
-        invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
-          accountId: yougileContext.accountId,
-          taskId,
-          text,
-          textHtml: undefined,
-        })
-      );
-      return true;
-    } catch (e) {
-      set((state) => ({
-        error: String(e),
-        chatMessages: state.chatMessages.filter((message) => message.id !== optimistic.id),
-      }));
-      return false;
-    }
-  },
-
-  sendChatWithAttachments: async (taskId, text, files) => {
-    if (!isTauriAvailable()) return false;
-    const { yougileContext } = get();
-    if (!yougileContext.accountId) return false;
-    let optimisticMessageId: number | null = null;
-    try {
-      const uploadedFiles: Array<{ url: string; name: string; image: boolean }> = [];
-      for (const entry of files) {
-        if (typeof entry === 'string') {
-          const fileName = fileNameFromPath(entry);
-          const upload = await withTimeout(
-            invoke<YougileFileUploadResponse>('yougile_upload_file_path', {
-              accountId: yougileContext.accountId,
-              filePath: entry,
-            }),
-            UPLOAD_TIMEOUT_MS,
-          );
-          uploadedFiles.push({
-            url: upload.url,
-            name: fileName,
-            image: isImageFileName(fileName),
-          });
-          continue;
-        }
-
-        const bytes = await entry.arrayBuffer();
-        const upload = await withTimeout(
-          invoke<YougileFileUploadResponse>('yougile_upload_file', {
-            accountId: yougileContext.accountId,
-            fileName: entry.name,
-            fileBytes: new Uint8Array(bytes),
-            mimeType: entry.type || 'application/octet-stream',
-          }),
-          UPLOAD_TIMEOUT_MS,
-        );
-        uploadedFiles.push({
-          url: upload.url,
-          name: entry.name,
-          image: isImageFile(entry),
-        });
-      }
-
-      const attachmentHtml = uploadedFiles
-        .map((file) => (
-          file.image
-            ? `<img src="${file.url}" />`
-            : `<p><a href="${file.url}" target="_blank" rel="noreferrer">${escapeHtml(file.name)}</a></p>`
-        ))
-        .join('');
-      const escapedText = escapeHtml(text).replace(/\n/g, '<br>');
-      const html = text
-        ? `<p>${escapedText}</p>${attachmentHtml}`
-        : attachmentHtml;
-      const plainText = [text.trim(), ...uploadedFiles.map((file) => file.url)]
-        .filter(Boolean)
-        .join(' ');
-      const optimistic = buildOptimisticChatMessage(get(), plainText, html);
-      optimisticMessageId = optimistic.id;
-
-      set((state) => ({
-        chatMessages: sortChatMessages([...state.chatMessages, optimistic]),
-      }));
-
-      await withTimeout(
-        invoke<YougileChatMessageIdResponse>('yougile_send_chat_message', {
-          accountId: yougileContext.accountId,
-          taskId,
-          text: plainText,
-          textHtml: html,
-        }),
-        UPLOAD_TIMEOUT_MS,
-      );
-      return true;
-    } catch (e) {
-      set((state) => ({
-        error: `Failed to upload attachment: ${String(e)}`,
-        chatMessages: optimisticMessageId == null
-          ? state.chatMessages
-          : state.chatMessages.filter((message) => message.id !== optimisticMessageId),
-      }));
-      return false;
-    }
-  },
+  // ── Sync state ──────────────────────────────────────────────────────────
 
   hydrateSyncState: async () => {
     if (!isTauriAvailable()) return;
-    const now = Date.now();
-    if (now - get().lastSyncHydratedAt < FETCH_DEBOUNCE_MS) return;
-    set({ lastSyncHydratedAt: now });
+    set({ isLoading: true, error: null });
     try {
-      const syncState = await withTimeout(
-        invoke<YougileSyncState>('get_yougile_sync_state')
-      );
-      set((state) => applySyncState(state, syncState));
+      const syncState = await invoke<YougileSyncState>('get_yougile_sync_state');
+      set((state) => {
+        const newState = applySyncState(state, syncState);
+        return { ...newState, isLoading: false };
+      });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), isLoading: false });
     }
   },
 
   persistSyncState: async () => {
     if (!isTauriAvailable()) return;
-    const state = get();
-    const syncState = toSyncState(
-      state.yougileEnabled ? state.activeSource : 'local',
-      state.yougileEnabled ? state.yougileContext : initialContext
-    );
+    const { yougileContext } = get();
+    const taskStore = useTaskStore.getState();
+    const synced = {
+      accountId: yougileContext.accountId,
+      projectId: yougileContext.projectId,
+      projectName: yougileContext.projectName,
+      boardId: yougileContext.boardId,
+      boardName: yougileContext.boardName,
+      activeSource: taskStore.activeProvider,
+    } satisfies YougileSyncState;
+
     try {
-      const saved = await invoke<YougileSyncState>('update_yougile_sync_state', {
-        state: syncState,
-      });
+      const saved = await invoke<YougileSyncState>('update_yougile_sync_state', { state: synced });
       await emit(YOUGILE_SYNC_UPDATED_EVENT, saved);
     } catch (e) {
       set({ error: String(e) });
@@ -983,34 +656,189 @@ export const useYougileStore = create<YougileState>((set, get) => ({
     };
   },
 
-  listenForTaskUpdates: () => {
+  // ── Provider sync engine ────────────────────────────────────────────────
+
+  startSync: async () => {
+    if (!isTauriAvailable()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId || !yougileContext.boardId) return;
+    try {
+      await invoke('start_provider_sync', {
+        providerId: 'yougile',
+        accountId: yougileContext.accountId,
+        boardId: yougileContext.boardId,
+        intervalMs: 30_000,
+      });
+    } catch (e) {
+      console.warn('Failed to start Yougile sync:', e);
+    }
+  },
+
+  stopSync: async () => {
+    if (!isTauriAvailable()) return;
+    try {
+      await invoke('stop_provider_sync', {
+        providerId: 'yougile',
+      });
+    } catch (e) {
+      console.warn('Failed to stop Yougile sync:', e);
+    }
+  },
+
+  listenForProviderSync: () => {
     if (!isTauriAvailable()) return () => {};
-    const unlisten = listen<YougileTasksUpdatedPayload>(YOUGILE_TASKS_UPDATED_EVENT, (event) => {
-      const { activeSource, yougileContext, columns } = get();
-      const payloadBoardId = event.payload.boardId;
-
-      if (event.payload.sourceWindowLabel === getCurrentWindow().label) {
-        return;
-      }
-
-      if (activeSource !== 'yougile' || !yougileContext.accountId || !yougileContext.boardId) {
-        return;
-      }
-      if (payloadBoardId && payloadBoardId !== yougileContext.boardId) {
-        return;
-      }
-
-      if (columns.length === 0) {
-        void get().fetchColumns(yougileContext.boardId).then(() => {
-          void get().fetchTasks();
-        });
-        return;
-      }
-
-      void get().fetchTasks();
+    const unlisten = listen('provider-tasks-updated', (event) => {
+      const payload = event.payload as { provider: string; tasks: YougileTask[] };
+      if (payload.provider !== 'yougile') return;
+      const taskStore = useTaskStore.getState();
+      if (taskStore.activeProvider !== 'yougile') return;
+      const filtered = payload.tasks.filter((t) => !t.deleted);
+      // Update Yougile store tasks too for backward compat
+      set({ tasks: filtered, isLoading: false, error: null });
+      // Sync to unified store directly (no extra API call)
+      taskStore.setYougileTasks(filtered);
     });
     return () => {
       void unlisten.then((fn) => { if (typeof fn === 'function') fn(); });
     };
+  },
+
+  // ── Chat & file ops ─────────────────────────────────────────────────────
+
+  sendChatMessage: async (taskId, text) => {
+    if (!isTauriAvailable()) return null;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return null;
+    try {
+      const msg = await invoke<YougileChatMessage>('yougile_send_chat_message', {
+        accountId: yougileContext.accountId,
+        taskId,
+        text,
+      });
+      set((state) => ({ chatMessages: [...state.chatMessages, msg] }));
+      return msg;
+    } catch (e) {
+      set({ error: String(e) });
+      return null;
+    }
+  },
+
+  fetchChatMessages: async (taskId) => {
+    if (!isTauriAvailable()) return [];
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return [];
+    set({ chatLoading: true });
+    try {
+      const messages = await invoke<YougileChatMessage[]>('yougile_get_chat_messages', {
+        accountId: yougileContext.accountId,
+        taskId,
+        limit: CHAT_FETCH_LIMIT,
+      });
+      const sorted = sortChatMessages(messages);
+      set({ chatMessages: sorted, chatLoading: false });
+      return sorted;
+    } catch (e) {
+      set({ error: String(e), chatLoading: false });
+      return [];
+    }
+  },
+
+  sendChatWithAttachments: async (taskId, text, files) => {
+    if (!isTauriAvailable()) return false;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return false;
+
+    try {
+      // Upload each file first, then send text with file URLs
+      const urls: string[] = [];
+      for (const file of files) {
+        if (typeof file === 'string') {
+          const response = await invoke<YougileFileUploadResponse>('yougile_upload_file_path', {
+            accountId: yougileContext.accountId,
+            taskId,
+            filePath: file,
+          });
+          urls.push(response.fullUrl);
+        } else {
+          const response = await get().uploadFile(taskId, file);
+          urls.push(response.fullUrl);
+        }
+      }
+
+      const attachmentText = [text, ...urls.map((url) => `<a href="${url}">${fileNameFromPath(url)}</a>`)].join('\n');
+      await get().sendChatMessage(taskId, attachmentText);
+      return true;
+    } catch (e) {
+      set({ error: String(e) });
+      return false;
+    }
+  },
+
+  fetchCompanyUsers: async () => {
+    if (!isTauriAvailable()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId || !yougileContext.projectId) return;
+    set({ isLoading: true, error: null });
+    try {
+      const users = await withTimeout(
+        invoke<YougileUser[]>('yougile_get_all_users', {
+          accountId: yougileContext.accountId,
+        }),
+      );
+      set({ users, isLoading: false });
+    } catch (e) {
+      set({ error: String(e), isLoading: false });
+    }
+  },
+
+  // ── File uploads ────────────────────────────────────────────────────────
+
+  uploadFile: async (taskId, file) => {
+    if (!isTauriAvailable()) throw new Error('Not in Tauri environment');
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) throw new Error('No account selected');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      return await invoke<YougileFileUploadResponse>('yougile_upload_file', {
+        accountId: yougileContext.accountId,
+        taskId,
+        fileName: file.name,
+        fileData: Array.from(uint8Array),
+      });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  uploadFileByPath: async (taskId, filePath) => {
+    if (!isTauriAvailable()) throw new Error('Not in Tauri environment');
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) throw new Error('No account selected');
+
+    try {
+      return await invoke<YougileFileUploadResponse>('yougile_upload_file_path', {
+        accountId: yougileContext.accountId,
+        taskId,
+        filePath,
+      });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  downloadFile: async (url, savePath) => {
+    if (!isTauriAvailable()) return;
+    const { yougileContext } = get();
+    if (!yougileContext.accountId) return;
+
+    try {
+      await invoke('yougile_download_file', { url, savePath });
+    } catch (e) {
+      set({ error: String(e) });
+    }
   },
 }));

@@ -6,17 +6,29 @@ export interface Task {
   id: string;
   title: string;
   description: string | null;
+  // Provider identity (set by frontend mapping)
+  provider?: 'local' | 'yougile';
+  // Status
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
   dueDate: string | null;
+  // Provider-specific
   linkedNotePath: string | null;
+  color: string | null;
+  url?: string | null;             // Yougile: link to original task
   createdAt: string;
   updatedAt: string;
   parentId: string | null;
-  color: string | null;
+  // Time tracking
   timeEstimated: number | null;
   timeSpent: number | null;
+  // Yougile-specific (optional, set when provider === 'yougile')
+  columnId?: string;
+  completed?: boolean;
+  archived?: boolean;
+  assigned?: string[];
+  subtaskIds?: string[];
 }
 
 export interface CreateTaskInput {
@@ -29,6 +41,10 @@ export interface CreateTaskInput {
   linkedNotePath?: string | null;
   parentId?: string | null;
   color?: string | null;
+  // Provider support
+  provider?: 'local' | 'yougile';
+  columnId?: string;
+  description?: string;
 }
 
 export interface UpdateTaskStatusInput {
@@ -47,6 +63,11 @@ export interface UpdateTaskInput {
   color?: string | null;
   timeEstimated?: number | null;
   timeSpent?: number | null;
+  // Provider support
+  provider?: 'local' | 'yougile';
+  columnId?: string;
+  completed?: boolean;
+  archived?: boolean;
 }
 
 export interface AppSettings {

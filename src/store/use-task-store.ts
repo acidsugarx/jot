@@ -15,6 +15,8 @@ import type {
   UpdateTaskInput,
   UpdateTaskStatusInput,
 } from '@/types';
+import type { YougileContext, YougileTask } from '@/types/yougile';
+import type { ActiveSource } from '@/store/use-yougile-store';
 
 const TASKS_UPDATED_EVENT = 'tasks-updated';
 const THEME_CHANGED_EVENT = 'theme-changed';
@@ -39,6 +41,44 @@ function applyTheme(theme: string) {
   }
 }
 
+/// Add `provider: 'local'` to tasks returned from IPC
+function tagLocalTasks(tasks: Task[]): Task[] {
+  return tasks.map((t) => ({ ...t, provider: 'local' as const }));
+}
+
+/// Map YougileTask → Task (adds `provider: 'yougile'` and flattens fields)
+function yougileToTask(yt: YougileTask): Task {
+  const deadlineTs = yt.deadline?.deadline ?? null;
+  const dueDate = (deadlineTs ? new Date(deadlineTs).toISOString().split('T')[0] : null) as string | null;
+  return {
+    id: yt.id,
+    title: yt.title,
+    description: yt.description ?? null,
+    provider: 'yougile',
+    status: yt.archived ? 'archived' : yt.completed ? 'done' : 'todo',
+    priority: 'none',
+    tags: yt.assigned.map((a) => `@${a}`),
+    dueDate,
+    linkedNotePath: null,
+    color: yt.color ?? null,
+    url: `https://yougile.com/#/task/${yt.id}`,
+    createdAt: yt.timestamp ? new Date(yt.timestamp).toISOString() : '',
+    updatedAt: yt.timestamp ? new Date(yt.timestamp).toISOString() : '',
+    parentId: null,
+    timeEstimated: null,
+    timeSpent: null,
+    columnId: yt.columnId,
+    completed: yt.completed,
+    archived: yt.archived,
+    assigned: yt.assigned,
+    subtaskIds: yt.subtasks,
+  };
+}
+
+function yougileTasksToTasks(ytList: YougileTask[]): Task[] {
+  return ytList.filter((t) => !t.deleted).map(yougileToTask);
+}
+
 interface TaskState {
   tasks: Task[];
   columns: KanbanColumn[];
@@ -49,12 +89,25 @@ interface TaskState {
   isEditorOpen: boolean;
   isQuickAddOpen: boolean;
 
+  // Provider-aware state
+  activeProvider: ActiveSource;
+  yougileEnabled: boolean;
+  yougileContext: YougileContext;
+
   fetchTasks: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<Task | null>;
   updateTask: (input: UpdateTaskInput) => Promise<Task | null>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   openLinkedNote: (path: string) => Promise<void>;
+
+  // Provider-aware methods
+  setActiveProvider: (source: ActiveSource) => void;
+  setYougileEnabled: (enabled: boolean) => void;
+  setYougileContext: (ctx: Partial<YougileContext>) => void;
+  fetchYougileTasks: () => Promise<void>;
+  /** Set Yougile tasks in the unified store (bypasses API call — data already fetched). */
+  setYougileTasks: (tasks: import('@/types/yougile').YougileTask[]) => void;
 
   fetchColumns: () => Promise<void>;
   createColumn: (name: string) => Promise<KanbanColumn | null>;
@@ -102,16 +155,61 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   isQuickAddOpen: false,
   tags: [],
 
+  // Provider-aware state
+  activeProvider: 'local',
+  yougileEnabled: false,
+  yougileContext: {
+    accountId: null,
+    projectId: null,
+    projectName: null,
+    boardId: null,
+    boardName: null,
+  },
+
   fetchTasks: async () => {
     if (!isTauriAvailable()) return;
+    const state = get();
+    // If active provider is yougile, fetch Yougile tasks instead of local
+    if (state.activeProvider === 'yougile') {
+      return get().fetchYougileTasks();
+    }
     set({ isLoading: true, error: null });
     try {
       const tasks = await invoke<Task[]>('get_tasks');
-      set({ tasks, isLoading: false });
+      set({ tasks: tagLocalTasks(tasks), isLoading: false });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to fetch tasks', isLoading: false });
     }
   },
+
+  // ── Yougile-aware fetch ────────────────────────────────────────────────
+
+  fetchYougileTasks: async () => {
+    if (!isTauriAvailable()) return;
+    const ctx = get().yougileContext;
+    if (!ctx.accountId || !ctx.boardId) return;
+    set({ isLoading: true, error: null });
+    try {
+      const ytTasks = await invoke<YougileTask[]>('yougile_get_board_tasks', {
+        accountId: ctx.accountId,
+        boardId: ctx.boardId,
+      });
+      set({ tasks: yougileTasksToTasks(ytTasks), isLoading: false });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to fetch Yougile tasks', isLoading: false });
+    }
+  },
+
+  setYougileTasks: (ytTasks) => {
+    set({ tasks: yougileTasksToTasks(ytTasks), isLoading: false });
+  },
+
+  setActiveProvider: (source) => set({ activeProvider: source }),
+  setYougileEnabled: (enabled) => set({ yougileEnabled: enabled }),
+  setYougileContext: (ctx) =>
+    set((state) => ({
+      yougileContext: { ...state.yougileContext, ...ctx },
+    })),
 
   createTask: async (input) => {
     if (!isTauriAvailable()) return null;

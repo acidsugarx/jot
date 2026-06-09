@@ -13,7 +13,7 @@ import { useFocusable } from '@/hooks/use-focusable';
 export type CardTask = Task | YougileTask;
 
 function isYougile(task: CardTask): task is YougileTask {
-  return 'columnId' in task && (task as YougileTask).columnId !== undefined;
+  return ('provider' in task && task.provider === 'yougile') || ('columnId' in task && (task as YougileTask).columnId !== undefined && (task as YougileTask).completed !== undefined);
 }
 
 interface TaskCardProps {

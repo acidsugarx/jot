@@ -32,11 +32,11 @@ export function formatYougileTrackedHours(hours: number | null | undefined): str
 }
 
 /**
- * Type guard: true when the task comes from Yougile (has `columnId`).
- * Works with both `Task | YougileTask` and `CardTask` union types.
+ * Type guard: true when the task comes from Yougile.
+ * Checks either the `provider` field (unified Task) or `columnId` + `completed` (legacy YougileTask).
  */
 export function isYougileTask(task: Record<string, unknown>): boolean {
-  return 'columnId' in task && task.columnId !== undefined;
+  return task.provider === 'yougile' || ('columnId' in task && task.columnId !== undefined && 'completed' in task);
 }
 
 export const PRIORITY_DOT_CLASS: Record<string, string> = {

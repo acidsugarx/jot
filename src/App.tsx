@@ -56,7 +56,7 @@ const MAX_VISIBLE_TASKS = 6;
 const EDITOR_HEIGHT = 340;
 
 function isYougileTask(task: Task | YougileTask): task is YougileTask {
-  return 'columnId' in task && (task as YougileTask).columnId !== undefined;
+  return ('provider' in task && task.provider === 'yougile') || ('columnId' in task && (task as YougileTask).columnId !== undefined && (task as YougileTask).completed !== undefined);
 }
 
 /** Module-level flag to block FocusProvider from dispatching keys when capture overlay

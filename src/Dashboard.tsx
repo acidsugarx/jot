@@ -445,6 +445,9 @@ export default function Dashboard() {
       updateTask: s.updateTask,
       deleteTask: s.deleteTask,
       clearError: s.clearError,
+      startSync: s.startSync,
+      stopSync: s.stopSync,
+      listenForProviderSync: s.listenForProviderSync,
     }))
   );
   const setYougileEnabled = yougileStore.setYougileEnabled;
@@ -752,21 +755,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!isYougile || !yougileStore.yougileContext.boardId) return;
-
-    const intervalId = window.setInterval(() => {
-      const state = useYougileStore.getState();
-      if (document.visibilityState !== 'visible') return;
-      if (state.columns.length === 0) {
-        void state.fetchColumns(state.yougileContext.boardId!).then(() => {
-          void state.fetchTasks();
-        });
-        return;
-      }
-      void state.fetchTasks();
-    }, 30000);
-
-    return () => window.clearInterval(intervalId);
+    void yougileStore.startSync();
+    return () => {
+      void yougileStore.stopSync();
+    };
   }, [isYougile, yougileStore.yougileContext.boardId]);
+
+  // Listen for sync engine events
+  useEffect(() => {
+    return yougileStore.listenForProviderSync();
+  }, []);
 
   const lastDashFocusRef = useRef(0);
   useEffect(() => {
