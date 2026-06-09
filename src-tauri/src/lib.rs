@@ -1,6 +1,7 @@
 mod db;
 mod models;
 mod parser;
+mod provider;
 mod yougile;
 
 use std::process::Command as StdCommand;
@@ -23,6 +24,8 @@ use crate::db::{
     update_settings, update_tag, update_task, update_task_status, update_task_template,
     update_theme, update_yougile_enabled, update_yougile_sync_state, DatabaseState,
 };
+use crate::provider::{DbBoundLocalProvider, DbBoundYougileProvider, ProviderInfo, TaskProvider, UnifiedTask, YougileProviderContext};
+use crate::provider::sync::SyncManager;
 
 fn to_tauri_error(message: impl Into<String>) -> tauri::Error {
     tauri::Error::from(std::io::Error::other(message.into()))
@@ -400,6 +403,204 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Provider commands ────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn task_provider_list(
+    db: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<ProviderInfo>, String> {
+    let local = crate::provider::local::DbBoundLocalProvider::new(db.inner());
+    let yougile_accounts = crate::db::get_yougile_accounts_impl(&db)?;
+    let yougile_connected = !yougile_accounts.is_empty();
+
+    let mut providers = vec![ProviderInfo {
+        id: "local".to_string(),
+        name: local.name().to_string(),
+        connected: local.connected(),
+        capabilities: local.capabilities(),
+    }];
+
+    providers.push(ProviderInfo {
+        id: "yougile".to_string(),
+        name: "Yougile".to_string(),
+        connected: yougile_connected,
+        capabilities: vec![
+            "crud".to_string(),
+            "columns".to_string(),
+            "assignees".to_string(),
+            "chat".to_string(),
+            "stickers".to_string(),
+            "time_tracking".to_string(),
+        ],
+    });
+
+    Ok(providers)
+}
+
+#[tauri::command]
+async fn task_provider_list_tasks(
+    provider_id: String,
+    db: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<UnifiedTask>, String> {
+    match provider_id.as_str() {
+        "local" => {
+            let provider = DbBoundLocalProvider::new(db.inner());
+            provider
+                .list_tasks(None)
+                .await
+                .map_err(|e| e.message)
+        }
+        "yougile" => {
+            let sync_state = crate::db::get_yougile_sync_state_impl(&db)?;
+            let account_id = sync_state
+                .account_id
+                .ok_or_else(|| "No Yougile account selected. Add an account in Settings first.".to_string())?;
+            let ctx = YougileProviderContext {
+                db: db.inner(),
+                account_id,
+                board_id: sync_state.board_id,
+            };
+            let provider = DbBoundYougileProvider::new(ctx);
+            provider
+                .list_tasks(None)
+                .await
+                .map_err(|e| e.message)
+        }
+        _ => Err(format!("Unknown provider: {provider_id}")),
+    }
+}
+
+#[tauri::command]
+async fn task_provider_create_task(
+    provider_id: String,
+    input: crate::provider::CreateUnifiedTask,
+    db: tauri::State<'_, DatabaseState>,
+) -> Result<UnifiedTask, String> {
+    match provider_id.as_str() {
+        "local" => {
+            let provider = DbBoundLocalProvider::new(db.inner());
+            provider.create_task(input).await.map_err(|e| e.message)
+        }
+        "yougile" => {
+            let sync_state = crate::db::get_yougile_sync_state_impl(&db)?;
+            let account_id = sync_state
+                .account_id
+                .ok_or_else(|| "No Yougile account selected.".to_string())?;
+            let ctx = YougileProviderContext {
+                db: db.inner(),
+                account_id,
+                board_id: sync_state.board_id,
+            };
+            let provider = DbBoundYougileProvider::new(ctx);
+            provider.create_task(input).await.map_err(|e| e.message)
+        }
+        _ => Err(format!("Unknown provider: {provider_id}")),
+    }
+}
+
+#[tauri::command]
+async fn task_provider_update_task(
+    provider_id: String,
+    task_id: String,
+    input: crate::provider::UpdateUnifiedTask,
+    db: tauri::State<'_, DatabaseState>,
+) -> Result<UnifiedTask, String> {
+    match provider_id.as_str() {
+        "local" => {
+            let provider = DbBoundLocalProvider::new(db.inner());
+            provider
+                .update_task(&task_id, input)
+                .await
+                .map_err(|e| e.message)
+        }
+        "yougile" => {
+            let sync_state = crate::db::get_yougile_sync_state_impl(&db)?;
+            let account_id = sync_state
+                .account_id
+                .ok_or_else(|| "No Yougile account selected.".to_string())?;
+            let ctx = YougileProviderContext {
+                db: db.inner(),
+                account_id,
+                board_id: sync_state.board_id,
+            };
+            let provider = DbBoundYougileProvider::new(ctx);
+            provider
+                .update_task(&task_id, input)
+                .await
+                .map_err(|e| e.message)
+        }
+        _ => Err(format!("Unknown provider: {provider_id}")),
+    }
+}
+
+#[tauri::command]
+async fn task_provider_delete_task(
+    provider_id: String,
+    task_id: String,
+    db: tauri::State<'_, DatabaseState>,
+) -> Result<(), String> {
+    match provider_id.as_str() {
+        "local" => {
+            let provider = DbBoundLocalProvider::new(db.inner());
+            provider.delete_task(&task_id).await.map_err(|e| e.message)
+        }
+        "yougile" => {
+            let sync_state = crate::db::get_yougile_sync_state_impl(&db)?;
+            let account_id = sync_state
+                .account_id
+                .ok_or_else(|| "No Yougile account selected.".to_string())?;
+            let ctx = YougileProviderContext {
+                db: db.inner(),
+                account_id,
+                board_id: sync_state.board_id,
+            };
+            let provider = DbBoundYougileProvider::new(ctx);
+            provider.delete_task(&task_id).await.map_err(|e| e.message)
+        }
+        _ => Err(format!("Unknown provider: {provider_id}")),
+    }
+}
+
+// ── Sync commands ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn start_provider_sync(
+    provider_id: String,
+    account_id: String,
+    board_id: String,
+    interval_ms: Option<u64>,
+    app: tauri::AppHandle,
+    sync_mgr: tauri::State<'_, SyncManager>,
+) -> Result<(), String> {
+    if provider_id != "yougile" {
+        return Err(format!("Sync not supported for provider: {provider_id}"));
+    }
+
+    let interval = interval_ms.unwrap_or(30_000);
+
+    sync_mgr
+        .start_yougile(app, account_id, board_id, interval)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_provider_sync(
+    provider_id: String,
+    sync_mgr: tauri::State<'_, SyncManager>,
+) -> Result<(), String> {
+    sync_mgr.stop(&provider_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn is_provider_sync_running(
+    provider_id: String,
+    sync_mgr: tauri::State<'_, SyncManager>,
+) -> Result<bool, String> {
+    Ok(sync_mgr.is_running(&provider_id).await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -440,6 +641,9 @@ pub fn run() {
             init_database(app.handle()).map_err(to_tauri_error)?;
             setup_main_window_behavior(app.handle())?;
 
+            // Register sync manager
+            app.manage(SyncManager::new());
+
             #[cfg(target_os = "macos")]
             if let Err(e) = setup_capture_panel(app.handle()) {
                 log::warn!("NSPanel setup failed, using normal window: {e}");
@@ -469,6 +673,17 @@ pub fn run() {
             open_url,
             open_settings_window,
             open_dashboard_window,
+            // New provider-based commands
+            task_provider_list,
+            task_provider_list_tasks,
+            task_provider_create_task,
+            task_provider_update_task,
+            task_provider_delete_task,
+            // Sync commands
+            start_provider_sync,
+            stop_provider_sync,
+            is_provider_sync_running,
+            // Legacy commands (kept for frontend compatibility)
             create_task,
             get_tasks,
             get_settings,
@@ -530,3 +745,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

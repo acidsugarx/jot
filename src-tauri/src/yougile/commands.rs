@@ -12,6 +12,15 @@ fn require_non_empty(value: &str, field: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Inner helper — fetches board tasks from an already-authenticated client.
+/// Used by both the Tauri command and the sync engine.
+pub async fn fetch_board_tasks_inner(
+    client: &crate::yougile::client::YougileClient,
+    board_id: &str,
+) -> Result<Vec<YougileTask>, String> {
+    client.get_board_tasks(board_id).await
+}
+
 fn apply_raw_input(payload: CreateYougileTask) -> CreateYougileTask {
     let Some(raw_input) = payload.raw_input.as_deref() else {
         return payload;

@@ -1,19 +1,19 @@
-mod checklists;
-mod columns;
+pub(crate) mod checklists;
+pub(crate) mod columns;
 mod migrations;
 mod notes;
 mod settings;
-mod tags;
-mod tasks;
+pub(crate) mod tags;
+pub(crate) mod tasks;
 mod templates;
-mod utils;
-mod yougile_accounts;
+pub(crate) mod utils;
+pub(crate) mod yougile_accounts;
 
 use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use rusqlite::{params, Connection};
@@ -30,14 +30,35 @@ use crate::parser::parse_task_input;
 use utils::{require_non_empty_id, timestamp};
 
 pub struct DatabaseState {
-    connection: Mutex<Connection>,
+    connection: Arc<Mutex<Connection>>,
+}
+
+impl Clone for DatabaseState {
+    fn clone(&self) -> Self {
+        Self {
+            connection: Arc::clone(&self.connection),
+        }
+    }
 }
 
 impl DatabaseState {
     pub fn new(connection: Connection) -> Self {
         Self {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
         }
+    }
+
+    /// Run a closure with a reference to the SQLite connection.
+    /// This is the canonical way for non-command code (e.g. providers) to access the database.
+    pub fn with_connection<F, T>(&self, f: F) -> Result<T, String>
+    where
+        F: FnOnce(&Connection) -> Result<T, String>,
+    {
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+        f(&conn)
     }
 
     pub fn current_theme(&self) -> Option<tauri::Theme> {
@@ -268,6 +289,16 @@ pub fn update_yougile_enabled(
 
 #[tauri::command]
 pub fn get_yougile_sync_state(db: State<'_, DatabaseState>) -> Result<YougileSyncState, String> {
+    let connection = db
+        .connection
+        .lock()
+        .map_err(|error| format!("Failed to lock SQLite connection: {error}"))?;
+
+    settings::load_yougile_sync_state(&connection)
+}
+
+/// Inner version of get_yougile_sync_state for use by providers (no State required).
+pub fn get_yougile_sync_state_impl(db: &DatabaseState) -> Result<YougileSyncState, String> {
     let connection = db
         .connection
         .lock()
@@ -1492,7 +1523,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_yougile_key_recovers_from_related_account() {
+    fn missing_yougile_key_returns_error_without_recovery() {
         let db = DatabaseState::new(test_connection());
         {
             let conn = db.connection.lock().expect("db lock should succeed");
@@ -1510,19 +1541,12 @@ mod tests {
             .expect("fresh account should insert");
         }
 
-        let api_key = yougile_accounts::get_yougile_account_api_key_impl(&db, "stale")
-            .expect("stale account should recover key from related account");
-        assert_eq!(api_key, "fresh-key");
-
-        let conn = db.connection.lock().expect("db lock should succeed");
-        let stale_key: String = conn
-            .query_row(
-                "SELECT api_key FROM yougile_accounts WHERE id = 'stale'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("should read stale account api key");
-        assert_eq!(stale_key, "fresh-key");
+        let err = yougile_accounts::get_yougile_account_api_key_impl(&db, "stale")
+            .expect_err("stale account should fail without keychain entry or SQLite key");
+        assert!(
+            err.contains("missing its API key"),
+            "error should mention missing API key: {err}"
+        );
     }
 
     #[test]
