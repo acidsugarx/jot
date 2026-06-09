@@ -27,6 +27,7 @@ export interface NormalKeyActions {
   onRefresh?: () => void;
   onToggleHelp?: () => void;
   onSourceToggle?: () => void;
+  onChat?: () => void;
   onSwitchView?: (view: 'list' | 'kanban' | 'calendar' | 'templates') => void;
   onEscape?: () => void;
 }
@@ -575,6 +576,9 @@ export function dispatchFocusKey(
       return { handled: true };
     case 'r':
       actions.onRefresh?.();
+      return { handled: true };
+    case 'c':
+      actions.onChat?.();
       return { handled: true };
     case '?':
       event.preventDefault();
