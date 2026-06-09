@@ -6,6 +6,7 @@
 import { useEffect, useRef } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 interface ImagePreviewOverlayProps {
   src: string | null;
@@ -14,6 +15,20 @@ interface ImagePreviewOverlayProps {
 
 export function ImagePreviewOverlay({ src, onClose }: ImagePreviewOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const wasFullscreen = useRef(false);
+
+  // Enter/exit native fullscreen when overlay opens/closes
+  useEffect(() => {
+    if (!src) return;
+    const win = getCurrentWindow();
+    win.setFullscreen(true).then(() => { wasFullscreen.current = true; }).catch(() => {});
+    return () => {
+      if (wasFullscreen.current) {
+        wasFullscreen.current = false;
+        win.setFullscreen(false).catch(() => {});
+      }
+    };
+  }, [src]);
 
   useEffect(() => {
     if (src) {
