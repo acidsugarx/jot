@@ -1,29 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { sanitizeHtml } from '@/lib/sanitize';
 import {
-  Bold,
   Check,
   CheckSquare,
   ChevronRight,
-  Code,
   FileText,
-  Indent,
-  Italic,
-  Link,
-  List,
-  ListOrdered,
   Loader2,
-  Outdent,
   Plus,
   Square,
-  Strikethrough,
-  Underline,
   Trash2,
   X,
 } from 'lucide-react';
 import { consumeTemplateIntent } from '@/lib/settings-navigation';
 import { YOUGILE_TASK_COLOR_OPTIONS, getYougileTaskColorValue } from '@/lib/yougile';
-import { ToolbarBtn, useRichTextEditor } from '@/hooks/use-rich-text-editor';
+import { TipTapEditor } from '@/components/editors/TipTapEditor';
 import { useTemplateStore } from '@/store/use-template-store';
 import { focusEngine } from '@/lib/focus-engine';
 import { useYougileStore } from '@/store/use-yougile-store';
@@ -220,38 +210,6 @@ export function TaskTemplatesSettings() {
   );
   const isSaveDisabled = draft.title.trim().length === 0 || isLoading;
   const draftColorValue = getYougileTaskColorValue(draft.color);
-
-  const {
-    descEditorRef,
-    setDescHtml,
-    descSanitizedHtml,
-    execFormatCommand,
-    insertCheckbox,
-    openLinkInput,
-    handleDescriptionBlur,
-    handleDescriptionFocus,
-    handleDescriptionKeyDown,
-    handleSmartPaste,
-    handleContentClick,
-    linkInputJSX,
-  } = useRichTextEditor({
-    onBlur: useCallback((html: string) => {
-      setDraft((current) => ({ ...current, description: html }));
-    }, []),
-    onFocus: useCallback(() => {
-      focusEngine.getState().setMode('INSERT');
-    }, []),
-  });
-
-  // Sync descHtml when draft.description changes externally (template selection, intent)
-  useEffect(() => {
-    const editor = descEditorRef.current;
-    const isFocused = editor?.contains(document.activeElement) ?? false;
-    if (!isFocused) {
-      setDescHtml(draft.description);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to external draft changes
-  }, [draft.description]);
 
   const selectTemplate = useCallback((template: TaskTemplate) => {
     setIsCreatingNew(false);
@@ -541,43 +499,11 @@ export function TaskTemplatesSettings() {
             </section>
 
             <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
-                  Description
-                </span>
-                <div className="flex items-center gap-px rounded-md border border-zinc-800/50 bg-zinc-900/40 px-1.5 py-0.5">
-                  <ToolbarBtn icon={Bold} title="Bold (Ctrl+B)" onMouseDown={() => execFormatCommand('bold')} />
-                  <ToolbarBtn icon={Italic} title="Italic (Ctrl+I)" onMouseDown={() => execFormatCommand('italic')} />
-                  <ToolbarBtn icon={Underline} title="Underline (Ctrl+U)" onMouseDown={() => execFormatCommand('underline')} />
-                  <ToolbarBtn icon={Strikethrough} title="Strikethrough (Ctrl+Shift+S)" onMouseDown={() => execFormatCommand('strikeThrough')} />
-                  <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
-                  <ToolbarBtn icon={Link} title="Link (Ctrl+K)" onMouseDown={() => openLinkInput()} />
-                  <ToolbarBtn icon={List} title="Bullet list" onMouseDown={() => execFormatCommand('insertUnorderedList')} />
-                  <ToolbarBtn icon={ListOrdered} title="Numbered list" onMouseDown={() => execFormatCommand('insertOrderedList')} />
-                  <ToolbarBtn icon={Outdent} title="Outdent (Shift+Tab)" onMouseDown={() => execFormatCommand('outdent')} />
-                  <ToolbarBtn icon={Indent} title="Indent (Tab)" onMouseDown={() => execFormatCommand('indent')} />
-                  <div className="mx-0.5 h-3 w-px border-l border-zinc-800/40" />
-                  <ToolbarBtn icon={Code} title="Code block" onMouseDown={() => execFormatCommand('formatBlock', 'pre')} />
-                  <ToolbarBtn icon={CheckSquare} title="Checkbox (Ctrl+Shift+C)" onMouseDown={() => insertCheckbox()} />
-                </div>
-              </div>
-
-              {/* Link input popover */}
-              {linkInputJSX}
-
-              <div
-                ref={descEditorRef}
-                contentEditable
-                suppressContentEditableWarning
-                dangerouslySetInnerHTML={{ __html: descSanitizedHtml }}
-                onBlur={handleDescriptionBlur}
-                onFocus={handleDescriptionFocus}
-                onKeyDown={handleDescriptionKeyDown}
-                onPaste={handleSmartPaste}
-                onClick={handleContentClick}
-                className="prose-jot prose-jot-yougile prose-jot-editor min-h-[140px] rounded-xl border border-zinc-800 bg-[#111111] px-3 py-2 text-sm text-zinc-200 outline-none"
-                data-placeholder="Add a description…"
-                spellCheck={false}
+              <TipTapEditor
+                content={draft.description}
+                onSave={(html) => setDraft((current) => ({ ...current, description: html }))}
+                onFocus={() => focusEngine.getState().setMode('INSERT')}
+                placeholder="Add a description…"
               />
             </section>
 
